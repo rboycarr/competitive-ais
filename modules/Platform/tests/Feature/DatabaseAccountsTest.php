@@ -160,6 +160,38 @@ class DatabaseAccountsTest extends TestCase
         $this->test_app_cannot_update_or_delete_append_only_tables();
     }
 
+    public function test_grants_are_checked_against_the_policy_table_by_table(): void
+    {
+        $tables = $this->app->make(TableGrants::class);
+        $this->assertSame([], $tables->verify());
+
+        // Out-of-band grants of the kind the MySQL init script used to accept (TASK-0005 #1).
+        $app = config('database.grants.app_user');
+        $migrator = DB::connection('migrator');
+        $migrator->unprepared("GRANT DELETE ON `migrations` TO '$app'@'%'"); // @phpstan-ignore argument.type (configured account name)
+        $migrator->unprepared('GRANT UPDATE ON `'.self::APPEND_ONLY_PROBE."` TO '$app'@'%'"); // @phpstan-ignore argument.type (constant table, configured account)
+
+        $problems = implode("\n", $tables->verify());
+        $this->assertStringContainsString('app on [migrations] has DELETE; the policy is nothing', $problems);
+        $this->assertStringContainsString('app on ['.self::APPEND_ONLY_PROBE.'] has INSERT, SELECT, UPDATE; the policy is INSERT, SELECT', $problems);
+
+        $tables->apply(); // restores the policy, and would throw if it could not
+        $this->assertSame([], $tables->verify());
+    }
+
+    public function test_grants_on_a_dropped_table_are_removed_before_it_can_be_recreated(): void
+    {
+        $migrator = DB::connection('migrator');
+        $migrator->statement('drop table `'.self::MUTABLE_PROBE.'`'); // MySQL keeps its grants
+        $this->assertStringContainsString('app on ['.self::MUTABLE_PROBE.'] has DELETE, INSERT, SELECT, UPDATE; the policy is nothing',
+            implode("\n", $this->app->make(TableGrants::class)->verify()));
+
+        $this->app->make(TableGrants::class)->apply();
+
+        $migrator->statement('create table `'.self::MUTABLE_PROBE.'` (id bigint unsigned primary key)');
+        $this->assertDenied(fn () => DB::table(self::MUTABLE_PROBE)->count());
+    }
+
     public function test_unclassified_table_gets_no_access_and_fails_the_grant_run(): void
     {
         DB::connection('migrator')->statement('create table `'.self::UNCLASSIFIED_PROBE.'` (id bigint unsigned primary key)');

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Account-hardening test (TASK-0004 N1). Seeds privileges the managed accounts must never keep, reruns the
-# account init script, and fails if any survive. Cleans up its probe database and role. Runnable locally:
+# Account-hardening test (TASK-0004 N1, TASK-0005 #1). Seeds privileges the managed accounts must never keep
+# (including table grants on the main schema), reruns the account init script, and fails if any survive. Cleans
+# up its probe database, table and role. App table grants return with the next migrate. Runnable locally:
 #   bash scripts/ci/accounts-test.sh        (needs `docker compose up -d --wait mysql`)
 set -euo pipefail
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)   # set -e stops here if git cannot read the repo
@@ -8,9 +9,10 @@ cd "$ROOT"
 
 val() { grep -m1 "^$2=" "$1" | cut -d= -f2-; }
 APP=$(val .env DB_USERNAME); RET=$(val .env DB_RETENTION_USERNAME); MIG=$(val .secrets/migrator.env DB_MIGRATOR_USERNAME); RO=cais_readonly
+MAIN=$(val .env DB_DATABASE)
 root() { docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N -B'; }
 
-cleanup() { printf 'DROP DATABASE IF EXISTS zz_probe_other;\nDROP ROLE IF EXISTS zz_probe_role;\n' | root >/dev/null 2>&1 || true; }
+cleanup() { printf 'DROP DATABASE IF EXISTS zz_probe_other;\nDROP ROLE IF EXISTS zz_probe_role;\nDROP TABLE IF EXISTS `%s`.zz_probe_t;\n' "$MAIN" | root >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 echo "=== Seeding unexpected privileges"
@@ -26,6 +28,9 @@ GRANT PROCESS ON *.* TO '$RET'@'%';
 GRANT XA_RECOVER_ADMIN ON *.* TO '$RO'@'%';
 GRANT SELECT ON zz_probe_other.t TO '$MIG'@'%';
 GRANT PROXY ON '$RO'@'%' TO '$RET'@'%';
+CREATE TABLE IF NOT EXISTS \`$MAIN\`.zz_probe_t (id INT PRIMARY KEY);
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MAIN\`.zz_probe_t TO '$APP'@'%';
+GRANT DELETE ON \`$MAIN\`.zz_probe_t TO '$RET'@'%';
 SQL
 
 echo "=== Rerunning the account init script"

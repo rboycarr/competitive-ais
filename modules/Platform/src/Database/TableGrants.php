@@ -15,7 +15,8 @@ use RuntimeException;
  * a privilege the app needs is missing. Schema- and global-level privileges are owned by the MySQL init script.
  *
  * Fails closed (TASK-0003 #2, #3): every table must be classified; an unclassified table gets no app access and
- * apply() throws after revoking. Views are not permitted at all.
+ * apply() throws after revoking. Views are not permitted at all. After applying, each account's own SHOW GRANTS
+ * must equal the plan table by table (TASK-0005 #1), so privileges this class cannot revoke are caught too.
  */
 class TableGrants
 {
@@ -70,7 +71,8 @@ class TableGrants
      *
      * @return array<string, array{class: string, app: list<string>, retention: list<string>}>
      *
-     * @throws RuntimeException when a table is unclassified or a view exists (after revoking their access)
+     * @throws RuntimeException when a table is unclassified, a view exists (after revoking their access), or the
+     *                          resulting grants differ from the plan
      */
     public function apply(string $connection = 'migrator'): array
     {
@@ -88,8 +90,14 @@ class TableGrants
 
         // GRANT/REVOKE cannot take bound parameters. Every interpolated part is either a validated identifier
         // (identifier(), account()) or a privilege name from the constants above, so the raw SQL is safe.
+        // Views, and tables that were dropped but whose grants MySQL keeps (a re-created table would inherit them),
+        // are revoked completely.
         $targets = array_map(fn (array $t): array => [$t['app'], $t['retention']], $plan)
             + array_fill_keys($views, [[], []]);
+        foreach (['app', 'retention'] as $role) {
+            $ignored = [];
+            $targets += array_fill_keys(array_keys($this->granted($conn->getDatabaseName(), $role, $ignored) ?? []), [[], []]);
+        }
         foreach ($targets as $object => [$appWanted, $retentionWanted]) {
             $qualified = $schema.'.'.$this->identifier($object);
             foreach ([[$app, $appWanted], [$retention, $retentionWanted]] as [$account, $wanted]) {
@@ -109,7 +117,107 @@ class TableGrants
             ));
         }
 
+        $problems = $this->verify($connection);
+        if ($problems !== []) {
+            throw new RuntimeException('Table grants differ from the policy after applying: '.implode('; ', $problems));
+        }
+
         return $plan;
+    }
+
+    /**
+     * Compare the app and retention accounts' actual grants, read through their own connections with SHOW GRANTS,
+     * with the plan for this schema. Any extra, missing, column-level or WITH GRANT OPTION privilege on this schema
+     * is a problem; on other schemas only plain table-level DML is tolerated (those schemas are checked when their
+     * own grants are applied, and the MySQL init script removes all table grants).
+     *
+     * @return list<string> problems; empty when the grants match the plan exactly
+     */
+    public function verify(string $connection = 'migrator'): array
+    {
+        $schema = $this->db->connection($connection)->getDatabaseName();
+        $plan = $this->plan($connection);
+        $problems = [];
+
+        foreach (['app', 'retention'] as $role) {
+            $have = $this->granted($schema, $role, $problems);
+            if ($have === null) {
+                continue;
+            }
+
+            $want = [];
+            foreach ($plan as $table => $target) {
+                if ($target[$role] !== []) {
+                    $want[$table] = $this->sorted($target[$role]);
+                }
+            }
+
+            foreach (array_keys($want + $have) as $table) {
+                if (($want[$table] ?? []) !== ($have[$table] ?? [])) {
+                    $problems[] = sprintf('%s on [%s] has %s; the policy is %s', $role, $table,
+                        implode(', ', $have[$table] ?? []) ?: 'nothing', implode(', ', $want[$table] ?? []) ?: 'nothing');
+                }
+            }
+        }
+
+        return $problems;
+    }
+
+    /**
+     * Table => sorted privileges the account holds in $schema, from its own SHOW GRANTS; null when its connection
+     * points at another database. Lines that are not plain table-level grants are added to $problems.
+     *
+     * @param  list<string>  $problems
+     * @return array<string, list<string>>|null
+     */
+    private function granted(string $schema, string $role, array &$problems): ?array
+    {
+        $name = (string) $this->config->get("database.grants.{$role}_connection");
+        $config = (array) $this->config->get("database.connections.$name");
+        if (($config['database'] ?? null) !== $schema) {
+            $problems[] = "$role connection [$name] does not use database [$schema]";
+
+            return null;
+        }
+
+        // Without a default database: an account with no table in this schema cannot select it (error 1044).
+        $conn = $this->db->connectUsing("grants-check-$role", ['database' => ''] + $config, true);
+
+        $have = [];
+        foreach ($conn->select('SHOW GRANTS') as $row) {
+            $line = (string) array_values((array) $row)[0];
+            if (str_starts_with($line, 'GRANT USAGE ON *.* TO ')) {
+                continue;
+            }
+            if (! preg_match('/^GRANT ([A-Z, ]+) ON `((?:[^`]|``)+)`\.`((?:[^`]|``)+)` TO \S+$/', $line, $m)) {
+                $problems[] = "$role has an unexpected grant: $line";
+
+                continue;
+            }
+            $privileges = $this->sorted(explode(', ', $m[1]));
+            if (str_replace('``', '`', $m[2]) !== $schema) {
+                if (array_diff($privileges, self::MUTABLE) !== []) {
+                    $problems[] = "$role has an unexpected grant: $line";
+                }
+
+                continue;
+            }
+            $have[str_replace('``', '`', $m[3])] = $privileges;
+        }
+        $this->db->purge("grants-check-$role");
+
+        return $have;
+    }
+
+    /**
+     * @param  list<string>  $privileges
+     * @return list<string>
+     */
+    private function sorted(array $privileges): array
+    {
+        sort($privileges);
+
+        return $privileges;
     }
 
     /**

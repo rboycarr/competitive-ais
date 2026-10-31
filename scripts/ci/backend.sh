@@ -8,19 +8,23 @@ set -euo pipefail
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)   # set -e stops here if git cannot read the repo
 cd "$ROOT"
 
+. scripts/ci/lib.sh
+mask_secrets .env .secrets/*.env
+
 php() { docker compose run --rm --no-deps -T php "$@"; }
 migrator() { docker compose run --rm --no-deps -T "$@"; }
 CURRENT="setup"
 LOG=$(mktemp)
 step() { CURRENT="$*"; : > "$LOG"; echo; echo "=== $*"; }
 # In GitHub Actions, report the failing step and the tail of its output as a public annotation (job logs need a
-# login to read). Steps print file names, rule names and test names only; no step prints secrets.
+# login to read). The output is redacted (env-file secret values, DSN passwords, key=value secrets) and the
+# runner also masks every registered secret (TASK-0005 #2).
 annotate() {
   local rc=$? tail
   if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
     tail=$( { sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -iE 'exception|error|denied|cannot|failed|⨯' | grep -v ' at ' | head -6
               sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -v '^\s*$' | grep -v ' at \|^phar:' | tail -6; } \
-            | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            | redact .env .secrets/*.env | sed':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
     echo "::error title=backend::failed at step: $CURRENT (exit $rc)%0A$tail"
   fi
   rm -f "$LOG"
@@ -51,6 +55,7 @@ unhidden=$(docker compose --profile tools config --format json | jq -r --arg roo
 echo "ok: schema commands refused; no secret files or variables in runtime containers; every repo mount hides .secrets"
 
 step "init-env scenarios";          bash scripts/ci/init-env-test.sh
+step "Annotation redaction";        bash scripts/ci/redact-test.sh
 step "Account hardening (seeded privileges are removed)"; bash scripts/ci/accounts-test.sh
 
 step "Migrations: migrate -> rollback all -> migrate (test database)"

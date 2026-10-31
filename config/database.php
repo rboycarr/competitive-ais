@@ -195,6 +195,10 @@ return [
         'app_user' => env('DB_USERNAME', 'cais_app'),
         'retention_user' => env('DB_RETENTION_USERNAME', 'cais_retention'),
 
+        // Connections that log in as those accounts; used to read back their own grants after applying.
+        'app_connection' => 'mysql',
+        'retention_connection' => 'retention',
+
         // SELECT, INSERT, UPDATE, DELETE for the app account.
         'mutable' => [
             'cache',

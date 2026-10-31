@@ -6,6 +6,9 @@ set -euo pipefail
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)   # set -e stops here if git cannot read the repo
 cd "$ROOT"
 
+. scripts/ci/lib.sh
+mask_secrets .env .secrets/*.env
+
 node() { docker compose run --rm --no-deps -T node "$@"; }
 CURRENT="setup"
 step() { CURRENT="$*"; echo; echo "=== $*"; }
