@@ -1,0 +1,66 @@
+# Continuous integration (P1-07, docs/09). Runs the same Docker images as local development.
+# Third-party actions are pinned to a commit SHA; the token is read-only.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (Pint, Larastan, Pest on MySQL 8.4, migrations, audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Environment files (random throwaway secrets)
+        run: bash scripts/dev/init-env.sh
+      - name: Build PHP image
+        run: DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose build php
+      - name: Start MySQL (runs the account init script on a fresh volume)
+        run: docker compose up -d --wait mysql
+      - name: Composer install
+        run: docker compose run --rm --no-deps -T php composer install --no-interaction --no-progress
+      - name: App key
+        run: docker compose run --rm --no-deps -T php php artisan key:generate --no-interaction
+      - name: Checks
+        run: bash scripts/ci/backend.sh
+
+  frontend:
+    name: frontend (Vitest, build, audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Environment files
+        run: bash scripts/dev/init-env.sh
+      - name: Build Node image
+        run: docker compose build node
+      - name: npm ci
+        run: docker compose run --rm --no-deps -T node npm ci
+      - name: Checks
+        run: bash scripts/ci/frontend.sh
+
+  secrets:
+    name: secrets (gitleaks, full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        run: bash scripts/ci/secrets.sh

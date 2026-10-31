@@ -39,13 +39,13 @@ class TableGrants
         $policy = $this->config->get('database.grants');
         $conn = $this->db->connection($connection);
 
-        $tables = array_map(
-            fn (object $row): string => $row->name,
-            $conn->select(
-                'select TABLE_NAME as name from information_schema.TABLES where TABLE_SCHEMA = ? and TABLE_TYPE = ? order by TABLE_NAME',
-                [$conn->getDatabaseName(), 'BASE TABLE'],
-            ),
-        );
+        $tables = $conn->table('information_schema.TABLES')
+            ->where('TABLE_SCHEMA', $conn->getDatabaseName())
+            ->where('TABLE_TYPE', 'BASE TABLE')
+            ->orderBy('TABLE_NAME')
+            ->pluck('TABLE_NAME')
+            ->map(fn (mixed $name): string => (string) $name)
+            ->all();
 
         $plan = [];
         foreach ($tables as $table) {
@@ -84,14 +84,16 @@ class TableGrants
         $retention = $this->account($policy['retention_user'], $policy['host']);
 
         $plan = $this->plan($connection);
+        // GRANT/REVOKE cannot take bound parameters. Every interpolated part is either a validated identifier
+        // (identifier(), account()) or a privilege name from the constants above, so the raw SQL is safe.
         foreach ($plan as $table => $target) {
             $object = $schema.'.'.$this->identifier($table);
             foreach ([[$app, $target['app']], [$retention, $target['retention']]] as [$account, $wanted]) {
                 if ($wanted !== []) {
-                    $conn->unprepared('GRANT '.implode(', ', $wanted)." ON $object TO $account");
+                    $conn->unprepared('GRANT '.implode(', ', $wanted)." ON $object TO $account"); // @phpstan-ignore argument.type
                 }
                 $unwanted = array_diff(self::TABLE_PRIVILEGES, $wanted);
-                $conn->unprepared('REVOKE IF EXISTS '.implode(', ', $unwanted)." ON $object FROM $account IGNORE UNKNOWN USER");
+                $conn->unprepared('REVOKE IF EXISTS '.implode(', ', $unwanted)." ON $object FROM $account IGNORE UNKNOWN USER"); // @phpstan-ignore argument.type
             }
         }
 

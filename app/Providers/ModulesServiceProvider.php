@@ -37,6 +37,9 @@ class ModulesServiceProvider extends ServiceProvider
             if (! class_exists($provider)) {
                 throw new RuntimeException("Module [$name] has no $provider. Check modules/$name/src and the composer.json autoload entry.");
             }
+            if (! is_subclass_of($provider, ServiceProvider::class)) {
+                throw new RuntimeException("$provider must be a service provider.");
+            }
 
             $providers[] = $provider;
         }

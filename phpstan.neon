@@ -1,0 +1,17 @@
+# Static analysis (docs/09: Larastan, level 8 target). Run: docker compose exec php vendor/bin/phpstan analyse
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+    paths:
+        - app
+        - modules
+        - config
+        - database
+        - routes
+        - tests
+    excludePaths:
+        # Pest arch() chains are resolved at runtime; PHPStan cannot follow them.
+        - tests/Architecture
+    tmpDir: storage/framework/cache/phpstan

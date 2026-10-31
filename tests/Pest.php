@@ -27,5 +27,5 @@ pest()->extend(TestCase::class)->in('Feature', '../modules/*/tests/Feature');
  */
 function modules(): array
 {
-    return array_values(array_map('basename', glob(dirname(__DIR__).'/modules/*', GLOB_ONLYDIR) ?: []));
+    return array_map('basename', glob(dirname(__DIR__).'/modules/*', GLOB_ONLYDIR) ?: []);
 }

@@ -1,0 +1,7 @@
+# gitleaks configuration (P1-07). Default rules plus one narrow exemption.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Env example files hold empty placeholders only. The generic-api-key rule matches across the line break of an empty KEY= into the next line. scripts/ci/secrets.sh separately fails if any secret-like key in these files has a value."
+paths = ['''^\.env(\.services)?\.example$''']

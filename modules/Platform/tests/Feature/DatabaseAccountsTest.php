@@ -46,7 +46,7 @@ class DatabaseAccountsTest extends TestCase
         $migrator = DB::connection('migrator');
         foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE] as $table) {
             foreach ([config('database.grants.app_user'), config('database.grants.retention_user')] as $user) {
-                $migrator->unprepared('REVOKE IF EXISTS '.implode(', ', TableGrants::TABLE_PRIVILEGES)." ON `$table` FROM '$user'@'%' IGNORE UNKNOWN USER");
+                $migrator->unprepared('REVOKE IF EXISTS '.implode(', ', TableGrants::TABLE_PRIVILEGES)." ON `$table` FROM '$user'@'%' IGNORE UNKNOWN USER"); // @phpstan-ignore argument.type (constant table names, configured account names)
             }
             $migrator->statement("drop table if exists `$table`");
         }

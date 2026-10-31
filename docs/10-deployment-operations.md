@@ -62,6 +62,7 @@ Inside WSL, from the repository root:
 | Stop | `docker compose stop` | Keeps containers and data |
 | Object-store key check | `bash scripts/dev/verify-object-store.sh` | 19 checks of the per-purpose keys (ADR-0007); cleans up its test objects |
 | Tests | `docker compose exec php php artisan test` | |
+| All CI checks locally | `bash scripts/ci/backend.sh`, `bash scripts/ci/frontend.sh`, `bash scripts/ci/secrets.sh` | Same scripts as CI (§1.4) |
 
 The first start downloads the ClamAV signature database and can take several minutes. Only `docker compose down -v` deletes data volumes; do not run it without meaning to.
 
@@ -71,6 +72,17 @@ The first start downloads the ClamAV signature database and can take several min
 `nginx` (serves only `public/`, read-only), `php` (PHP-FPM, pinned version per ADR-0003, runs as the developer's uid), `horizon`, `scheduler`, `node` (Vite dev server, polling file watcher), `mysql` (8.4; utf8mb4 / `utf8mb4_0900_ai_ci`; UTC), `valkey`, `seaweedfs` (`-master.telemetry=false`; identities and per-bucket permissions rendered at start from `docker/seaweedfs/s3-identities.template.json`) + `seaweedfs-init` (one-shot; creates the `evidence-quarantine`, `evidence`, `exports`, and `audit-anchor` buckets, object lock on `evidence` and `audit-anchor`; ADR-0007), `clamav`, `mailpit`. Healthchecks on every service. Named volumes for data, `vendor`, and `node_modules`. Networks `edge`, `app`, `data` as in `docs/07`; `data` is not internal locally because ClamAV needs egress for signature updates. MySQL runs with least-privilege accounts (`cais_app`, `cais_migrator`, `cais_retention`, `cais_readonly`; `docs/02` §6) created by `docker/mysql/init/10-accounts.sh`; tests use the `cais_test` database.
 
 **Performance note:** bind mounts from the Windows drive into WSL2 can be slow for PHP. Measured in Sprint 1.0 (ADR-0003): median 0.15 s per page with `vendor` and `node_modules` in named volumes, which is acceptable. If it becomes slow, move the working copy into the WSL filesystem (`\\wsl$\Ubuntu-24.04\home\<user>\competitive-ais`) and open it with VS Code Remote-WSL.
+
+### 1.4 Continuous integration (P1-07, O1: GitHub Actions)
+`.github/workflows/ci.yml` runs on every push to `main` and on every pull request. It builds the **same Docker images** as local development and runs the scripts in `scripts/ci/`, so a local run and a CI run check the same things. Each job gets throwaway secrets from `scripts/dev/init-env.sh`. The token is read-only (`contents: read`), and `actions/checkout` is pinned to a commit SHA.
+
+| Job | Checks |
+|---|---|
+| `backend` | Pint (format) · Larastan level 8 (`phpstan.neon`) · Pest on MySQL 8.4 as the real least-privilege accounts, on a fresh volume, so the account init script is exercised · migrate → rollback all → migrate on `cais_test` · `composer audit` |
+| `frontend` | Vitest (`--passWithNoTests` until the Vue pages arrive in Sprint 1.1) · production build · `npm audit` |
+| `secrets` | Secret-like keys in `.env*.example` must be empty · gitleaks v8.30.1 over the full history (`.gitleaks.toml`: default rules; only the example files are exempt, covered by the first check) |
+
+Branch protection on `main` should require all three jobs to pass (Product Owner action, after the first green run). Not yet in CI: ESLint + vue-tsc (with the Vue/TypeScript setup in Sprint 1.1), Playwright E2E (P1-47), OpenAPI contract checks (with the first `/api/v1` endpoint).
 
 ## 2. Environments and configuration
 

@@ -13,7 +13,7 @@ class ApplyDatabaseGrants extends Command
 
     public function handle(TableGrants $grants): int
     {
-        $plan = $grants->apply($this->option('connection'));
+        $plan = $grants->apply((string) $this->option('connection'));
 
         if ($plan === []) {
             $this->components->warn('Nothing to apply (no tables, or not a MySQL connection).');

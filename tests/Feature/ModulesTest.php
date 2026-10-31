@@ -16,7 +16,7 @@ it('registers a provider for every module, Platform first', function () {
 });
 
 it('maps every module directory in composer.json autoload', function () {
-    $composer = json_decode(file_get_contents(base_path('composer.json')), true, flags: JSON_THROW_ON_ERROR);
+    $composer = json_decode((string) file_get_contents(base_path('composer.json')), true, flags: JSON_THROW_ON_ERROR);
 
     foreach (modules() as $module) {
         expect($composer['autoload']['psr-4']["Modules\\$module\\"] ?? null)->toBe("modules/$module/src/")

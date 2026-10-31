@@ -4,7 +4,6 @@ namespace Tests;
 
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Application;
-use Illuminate\Foundation\Console\Kernel as FoundationConsoleKernel;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use RuntimeException;
 
@@ -27,11 +26,7 @@ abstract class TestCase extends BaseTestCase
 
         // Laravel skips console command events in unit tests. Schema commands rely on them to run as the
         // migrator account (AppServiceProvider), so tests use the same path as the real CLI.
-        $kernel = $app->make(ConsoleKernel::class);
-        if (! $kernel instanceof FoundationConsoleKernel) {
-            throw new RuntimeException('Unexpected console kernel; cannot enable command events for tests.');
-        }
-        $kernel->rerouteSymfonyCommandEvents();
+        $app->make(ConsoleKernel::class)->rerouteSymfonyCommandEvents();
 
         return $app;
     }
