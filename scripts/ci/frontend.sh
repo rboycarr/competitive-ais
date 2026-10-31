@@ -7,7 +7,9 @@ ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)   # set -e stops here
 cd "$ROOT"
 
 node() { docker compose run --rm --no-deps -T node "$@"; }
-step() { echo; echo "=== $*"; }
+CURRENT="setup"
+step() { CURRENT="$*"; echo; echo "=== $*"; }
+trap 'rc=$?; if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::error title=frontend::failed at step: $CURRENT (exit $rc)"; fi' EXIT
 
 step "Vitest";                  node npm test
 step "Production build";        node npx vite build --outDir /tmp/ci-build --emptyOutDir
