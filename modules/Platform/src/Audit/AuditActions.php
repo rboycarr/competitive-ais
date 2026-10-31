@@ -13,6 +13,7 @@ use InvalidArgumentException;
  * Types (append [] for a list of at most 100):
  *   ulid  a ULID                      id    a positive integer        int   an integer
  *   bool  true or false               code  lower-case identifier, e.g. an enum value (max 64)
+ *   sha256  a lower-case hex SHA-256 digest, e.g. an evidence fingerprint (TASK-0011)
  *   text  short free text (max 500); refused if it looks like a credential (AuditLogger). Never pass user input,
  *         request bodies, prompts or document content: record IDs and codes instead (TASK-0010 #1).
  *
@@ -21,7 +22,7 @@ use InvalidArgumentException;
  */
 class AuditActions
 {
-    public const TYPES = ['ulid', 'id', 'int', 'bool', 'code', 'text'];
+    public const TYPES = ['ulid', 'id', 'int', 'bool', 'code', 'sha256', 'text'];
 
     private const ACTION = '/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/';
 
@@ -47,7 +48,7 @@ class AuditActions
             if (preg_match(self::FORBIDDEN_KEY, $key)) {
                 throw new InvalidArgumentException("Audit context key [$key] for [$action] looks like a secret or prompt; these are never stored.");
             }
-            if (! in_array(rtrim($type, '[]'), self::TYPES, true) || ! preg_match('/^[a-z]+(\[\])?$/', $type)) {
+            if (! in_array(rtrim($type, '[]'), self::TYPES, true) || ! preg_match('/^[a-z0-9]+(\[\])?$/', $type)) {
                 throw new InvalidArgumentException("Unknown type [$type] for audit context key [$key] of [$action]; use one of ".implode(', ', self::TYPES).' (optionally with []).');
             }
         }

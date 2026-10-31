@@ -53,6 +53,9 @@ class AuditLogger
      */
     public function on(string $connection): static
     {
+        if (! is_array($this->container->make('config')->get("database.connections.$connection"))) {
+            throw new InvalidArgumentException("Database connection [$connection] is not configured.");
+        }
         $logger = clone $this;
         $logger->connectionName = $connection;
 
@@ -132,6 +135,7 @@ class AuditLogger
     {
         return match ($type) {
             'ulid' => is_string($value) && Str::isUlid($value),
+            'sha256' => is_string($value) && preg_match('/^[0-9a-f]{64}$/', $value) === 1,
             'id' => is_int($value) && $value > 0,
             'int' => is_int($value),
             'bool' => is_bool($value),

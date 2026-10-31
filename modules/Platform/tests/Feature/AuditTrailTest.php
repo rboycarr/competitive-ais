@@ -41,7 +41,7 @@ class AuditTrailTest extends TestCase
         parent::setUp();
 
         $actions = $this->app->make(AuditActions::class);
-        $actions->define('probe.recorded', ['note' => 'text', 'items' => 'code[]', 'count' => 'int', 'asset' => 'ulid']);
+        $actions->define('probe.recorded', ['note' => 'text', 'items' => 'code[]', 'count' => 'int', 'asset' => 'ulid', 'digest' => 'sha256']);
         $actions->define('probe.http');
     }
 
@@ -128,8 +128,12 @@ class AuditTrailTest extends TestCase
             }
         }
 
-        DB::transaction(fn () => $this->logger()->record('probe.recorded', null, ['note' => 'Approved after a second review.']));
+        // Fingerprints are recorded as typed values, not as text (TASK-0011).
+        DB::transaction(fn () => $this->logger()->record('probe.recorded', null, ['note' => 'Approved after a second review.', 'digest' => hash('sha256', 'evidence')]));
         $this->assertSame(1, DB::table('audit_events')->count());
+
+        $this->expectException(InvalidArgumentException::class);
+        DB::transaction(fn () => $this->logger()->record('probe.recorded', null, ['digest' => strtoupper(hash('sha256', 'evidence'))]));
     }
 
     public function test_the_transaction_must_be_on_the_loggers_connection(): void
@@ -143,6 +147,9 @@ class AuditTrailTest extends TestCase
 
         DB::connection('migrator')->transaction(fn () => $this->logger()->on('migrator')->record('probe.recorded'));
         $this->assertSame(1, DB::table('audit_events')->count());
+
+        $this->expectExceptionMessage('Database connection [migrat0r] is not configured.');
+        $this->logger()->on('migrat0r');
     }
 
     public function test_secret_like_context_keys_and_unknown_types_cannot_be_defined(): void
