@@ -11,11 +11,22 @@ cd "$ROOT"
 php() { docker compose run --rm --no-deps -T php "$@"; }
 migrator() { docker compose run --rm --no-deps -T "$@"; }
 CURRENT="setup"
-step() { CURRENT="$*"; echo; echo "=== $*"; }
-# In GitHub Actions, name the failing step in a public annotation (job logs need a login to read).
-trap 'rc=$?; if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::error title=backend::failed at step: $CURRENT (exit $rc)"; fi' EXIT
+LOG=$(mktemp)
+step() { CURRENT="$*"; : > "$LOG"; echo; echo "=== $*"; }
+# In GitHub Actions, report the failing step and the tail of its output as a public annotation (job logs need a
+# login to read). Steps print file names, rule names and test names only; no step prints secrets.
+annotate() {
+  local rc=$? tail
+  if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    tail=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -v '^\s*$' | tail -12 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+    echo "::error title=backend::failed at step: $CURRENT (exit $rc)%0A$tail"
+  fi
+  rm -f "$LOG"
+}
+trap annotate EXIT
+logged() { "$@" 2>&1 | tee -a "$LOG"; }
 
-step "Pint (format)";               php vendor/bin/pint --test
+step "Pint (format)";               logged php vendor/bin/pint --test -v
 step "Larastan (level 8)";          php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 step "Pest (MySQL 8.4, real accounts)"; migrator migrator php artisan test
 
