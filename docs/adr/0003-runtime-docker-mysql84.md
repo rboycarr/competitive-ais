@@ -3,8 +3,8 @@
 - **Status:** Accepted, 2026-10-31 (Product Owner decision D2). Version pins to be completed in Sprint 1.0.
 
 ## Context
-Environment audit (2026-10-31) of the development PC, `LAPTOP-RBT` (Windows 11 25H2, build 26200):
-- XAMPP Lite 8.3 with **MariaDB 10.6.5** on port 3306, serving other projects in `D:\xampp_lite_8_3\www`.
+Environment audit (2026-10-31) of the development PC (Windows 11 25H2):
+- An existing XAMPP install with **MariaDB 10.6** on port 3306, serving other projects.
 - Windows PATH: PHP 8.3.31 CLI, Composer 2.10.1, Node 24.15.0, Git 2.54. They are not used to run the application, which runs in containers.
 - No Docker, WSL, Redis, Meilisearch, or MinIO before setup.
 - `CLAUDE.md` and `skills/02` require **MySQL 8.4 LTS**. MariaDB differs in JSON handling, CHECK behavior, functional indexes, and replication, so testing on MariaDB would not reflect production.
@@ -24,7 +24,7 @@ Environment audit (2026-10-31) of the development PC, `LAPTOP-RBT` (Windows 11 2
 | Nginx | _proposed:_ 1.30.6 stable (`nginx:1.30.6-alpine`) | |
 | ClamAV | _proposed:_ 1.5.4 (`clamav/clamav:1.5.4`) | |
 | Mailpit | _proposed:_ v1.33.0 (`axllent/mailpit:v1.33.0`) | |
-| Object storage | _open: O17_ (MinIO archived) | |
+| Object storage | _proposed:_ SeaweedFS 4.51 (`chrislusf/seaweedfs:4.51`; O17, passed the conformance spike 2026-10-31; run with `-master.telemetry=false`) | |
 
 "Proposed" versions are the latest stable releases found on 2026-10-31. A version moves to "pinned" only after `composer install`/`npm ci`, the test suite, and the stack healthchecks pass on it; the date goes in "Verified on". PHP 8.4 rather than 8.5: Pest 5 and symfony/html-sanitizer need ≥ 8.4, and 8.4 has the longer track record with extensions; 8.5 remains an option.
 

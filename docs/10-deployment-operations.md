@@ -8,7 +8,7 @@
 
 ## 1. Local development environment (Windows 11 + WSL2 + Docker Engine)
 
-Development PC: `LAPTOP-RBT`, Windows 11 25H2 (build 26200), set up 2026-10-31 (`session-history/103126.md`).
+Development PC: Windows 11 (25H2), set up 2026-10-31 (`session-history/103126.md`).
 
 ### 1.1 One-time setup (Docker Engine inside WSL2; decided 2026-10-31, ADR-0003)
 We use the free, open-source **Docker Engine inside an Ubuntu 24.04 WSL2 distro**, not Docker Desktop. Docker Desktop requires a paid subscription above its small-business threshold. Docker Engine is also what the Linux server runs.
@@ -34,25 +34,25 @@ processors=6
 ```
 Containers publish ports to WSL. With WSL's default localhost forwarding they are reachable from Windows at `localhost:<port>`.
 
-**Working copy:** run `docker compose` from inside WSL. The repo can stay on the Windows drive at first (`/mnt/d/xampp_lite_8_3/www/competitive-ais`); move it into the Linux filesystem if bind-mount performance is poor (ADR-0003).
+**Working copy:** run `docker compose` from inside WSL. The repo can stay on the Windows drive at first (`/mnt/<drive>/<path>/competitive-ais`); move it into the Linux filesystem if bind-mount performance is poor (ADR-0003).
 
-Optional: set `git config --global core.autocrlf input` so shell scripts keep LF endings. VMware Workstation 17.6.2 is installed on this PC; versions 15.5 and later coexist with the Windows hypervisor that WSL2 enables.
+Optional: set `git config --global core.autocrlf input` so shell scripts keep LF endings. If VMware Workstation is installed, versions 15.5 and later coexist with the Windows hypervisor that WSL2 enables.
 
-XAMPP Lite 8.3 (Apache, MariaDB 10.6.5) keeps running unchanged. Competitive-AIS uses its own ports:
+An existing XAMPP install (Apache, MariaDB) keeps running unchanged. Competitive-AIS uses its own ports:
 
 | Service | Host port | Notes |
 |---|---|---|
 | Nginx (app) | 8080 | http://localhost:8080 |
 | MySQL 8.4 | 3307 | XAMPP MariaDB stays on 3306 |
 | Redis | 6380 | |
-| MinIO API / console | 9000 / 9001 | |
+| SeaweedFS S3 API | 9000 | container port 8333; no console (O17) |
 | Mailpit UI | 8025 | |
 | Reverb | 8081 | when enabled |
 | Meilisearch | 7700 | Phase 2 |
 | ClamAV | not published | internal network only |
 
 ### 1.2 Compose services (Phase 1)
-`nginx`, `php` (PHP-FPM, pinned version per ADR-0003), `horizon`, `scheduler`, `node` (Vite dev server), `mysql` (8.4), `redis`, `minio` + `minio-init` (creates the `evidence-quarantine`, `evidence`, `exports`, and `audit-anchor` buckets; enables versioning and object lock; creates a separate access key for the audit-anchor writer), `clamav`, `mailpit`. Healthchecks on every service. Named volumes for data. The repository is bind-mounted.
+`nginx`, `php` (PHP-FPM, pinned version per ADR-0003), `horizon`, `scheduler`, `node` (Vite dev server), `mysql` (8.4), `redis`, `seaweedfs` (`-master.telemetry=false`; identities and per-bucket permissions from a mounted S3 identity config, keys from `.env`) + `seaweedfs-init` (creates the `evidence-quarantine`, `evidence`, `exports`, and `audit-anchor` buckets; enables versioning and object lock; ADR-0007), `clamav`, `mailpit`. Healthchecks on every service. Named volumes for data. The repository is bind-mounted.
 
 **Performance note:** bind mounts from `C:\` into WSL2 can be slow for PHP. If page loads are slow, move the working copy into the WSL filesystem (`\\wsl$\Ubuntu\home\<user>\competitive-ais`) and open it with VS Code Remote-WSL. This is measured in Sprint 1.0 and recorded in ADR-0003.
 
@@ -62,7 +62,7 @@ XAMPP Lite 8.3 (Apache, MariaDB 10.6.5) keeps running unchanged. Competitive-AIS
 |---|---|---|
 | App (`APP_KEY`, `APP_URL`, `APP_TIMEZONE=UTC`) | `.env` (local), secret store (prod) | `.env` is gitignored; `.env.example` holds placeholders only |
 | DB (`DB_*` for the app user; `DB_MIGRATOR_*`) | same | separate users (`docs/02` §6) |
-| MinIO (`AWS_*`, bucket names) | same | separate keys per purpose |
+| Object store (`AWS_*`, bucket names) | same | separate keys per purpose |
 | ClamAV, Redis, Mail | same | |
 | Feature flags | DB (Pennant) | collection and AI default off |
 
@@ -77,7 +77,7 @@ Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates 
 | Data | Method | Frequency | Retention |
 |---|---|---|---|
 | MySQL | `mysqldump --single-transaction` (Phase 1); binary-log shipping for point-in-time recovery when RPO tightens | daily + binlogs | 30 daily, 12 monthly (proposal) |
-| MinIO evidence | bucket replication or `mc mirror` to offsite, encrypted | daily | per retention policy |
+| Object store evidence | versioned copy to offsite S3-compatible storage (method fixed in P1-51), encrypted | daily | per retention policy |
 | Config/secrets | secret store backup | on change | |
 
 Restore drills run monthly and before each release: restore into a scratch environment → run migrations status + smoke tests + evidence hash sample check → record results in the ops log.

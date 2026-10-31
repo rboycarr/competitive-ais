@@ -55,4 +55,4 @@ AI approval never replaces human approval.
 - [ ] PO answers to O10–O16
 - [x] O1 answered (GitHub + Actions, 2026-10-31)
 - [ ] O2 answered before Sprint 1.2
-- [ ] O17 (MinIO replacement) answered before P1-02
+- [x] O17 answered (SeaweedFS, 2026-10-31)

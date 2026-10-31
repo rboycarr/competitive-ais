@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; P1-02 waits for the evidence-storage decision (O17). |
+| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; O17 decided (SeaweedFS); P1-02 next. |
 | Owner | Product Owner (priorities, approvals); Claude Code (backlog maintenance) |
 | Related | `skills/10_ROADMAP_SKILLS.md`, `competitive-ais.md` §14, §17 |
 
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | P1-01 | As the team, we have the Phase 0 docs, ADRs, and handoff protocol in the repo | `docs/00–12`, `docs/adr/0001–0010`, `AGENTS.md`, `handoffs/` exist and are cross-checked | M | — (**done** 2026-10-31) |
 | P1-02 | As a developer, I can start the stack with one command | WSL2 + Docker installed (user); `compose.yaml` services healthy; app at :8080; no conflict with XAMPP | M | user setup, dependency approval |
-| P1-03 | As a developer, the repo is versioned with protected `main` | `git init`; `.gitignore` excludes `.env`, `vendor`, `node_modules`, storage; remote + branch protection per O1 | S | O1 (**in progress** 2026-10-31: local repo on `main`, `.gitignore` and `.gitattributes` added; no commit yet; GitHub repo to be created by the PO) |
+| P1-03 | As a developer, the repo is versioned with protected `main` | `git init`; `.gitignore` excludes `.env`, `vendor`, `node_modules`, storage; remote + branch protection per O1 | S | O1 (**in progress** 2026-10-31: GitHub repo `rboycarr/competitive-ais`, made **public** by PO decision after the initial commit `26eb6df` was pushed to `main`; branch protection still to do. Because the repo is public, every commit must contain synthetic data only and pass a secret/personal-data scan before push) |
 | P1-04 | As an architect, modules load automatically and boundaries are enforced | `modules/*` discovery; Pest arch tests fail on a forbidden cross-module import | M | P1-02 |
 | P1-05 | As an auditor, every sensitive action leaves a tamper-evident record | `audit_events`, `audit_checkpoints`, `AuditLogger`, checkpoint + verification jobs; grants test passes | M | P1-04 |
 | P1-06 | As the platform, domain events reach consumers reliably | `outbox_events`, `OutboxPublisher`, `RelayOutboxJob` with idempotent handler test | S | P1-04 |
@@ -116,7 +116,7 @@
 - **ClamAV client:** xenolope/quahog's last release is v3.0.0 (2020-11-25). Instead of a stale dependency, a small clamd `INSTREAM` client lives in `Modules\Platform` with its own tests (no new package).
 - **Headless components:** reka-ui (active). @headlessui/vue's last release was 2024-09.
 - **Redis:** valkey (BSD-3-Clause), compatible with Laravel's Redis driver and Horizon.
-- **MinIO:** the `minio/minio` GitHub repository is archived (last release 2025-10-15) and its Docker Hub images (`minio/minio`, `minio/mc`) are no longer published. It will not receive security fixes, so it is not used. Replacement: decision **O17**.
+- **MinIO:** the `minio/minio` GitHub repository is archived (last release 2025-10-15) and its Docker Hub images (`minio/minio`, `minio/mc`) are no longer published. It will not receive security fixes, so it is not used. Replacement: **SeaweedFS** (O17, decided 2026-10-31).
 
 ## 3. Later-phase epics (stories written at each phase start)
 
@@ -137,7 +137,7 @@ Requirements and threat model updated · schema reviewed (Codex review mandatory
 
 | ID | Question | Needed by | Working assumption |
 |---|---|---|---|
-| O1 | Git remote and CI host (GitHub? self-hosted?) | Sprint 1.0 (P1-03, P1-07) | **Decided 2026-10-31 (PO): GitHub + Actions.** Still needed: the PO creates a private repository and shares its URL; branch protection on `main` after the first push |
+| O1 | Git remote and CI host (GitHub? self-hosted?) | Sprint 1.0 (P1-03, P1-07) | **Decided 2026-10-31 (PO): GitHub + Actions.** Repository created and pushed; visibility set to public by the PO (2026-10-31). Still needed: branch protection on `main` |
 | O2 | Initial geography, industry, languages; applicable privacy law | Sprint 1.2 seeders | Philippines, PHP, en + fil/Taglish; configurable |
 | O3 | Production hosting and sizing | Before Phase 2 release | **Partly answered 2026-10-31:** an on-premises Ubuntu 22.04 server with a web root for this app has been provided. Its connection details are kept out of the repo. Still open: whether Docker can be installed there, CPU/RAM/disk/GPU sizing, and an upgrade plan to 24.04 LTS (22.04 standard support ends April 2027). |
 | O4 | GPU model/VRAM for local AI | Phase 4 start | Decided by the benchmark spike |
@@ -153,4 +153,4 @@ Requirements and threat model updated · schema reviewed (Codex review mandatory
 | O14 | Who may assign reviewers, override assignments, and set/release legal holds? (Q7) | Sprint 1.3 | CI Director (and the queue owner for assignment) |
 | O15 | Does "local AI" mean loopback only, or any approved host on the organization's private network? (Q8) | Phase 4 | Approved private-network hosts allowed, via the endpoint registry |
 | O16 | Is the 8–14 week Phase 1 estimate a target or a deadline? If a deadline, what may be deferred? (Q9) | Before Sprint 1.0 | Target; gates are never skipped |
-| O17 | Which S3-compatible store replaces MinIO (archived) for evidence, exports, and the audit anchor? It must support versioning and object lock in compliance mode (ADR-0007) | Sprint 1.0 (P1-02) | Spike: run the same conformance test (versioning, governance + compliance retention, legal hold, delete denied under lock, pre-signed GET) against RustFS 1.0.x and SeaweedFS; pick the one that passes, record in ADR-0007 |
+| O17 | Which S3-compatible store replaces MinIO (archived) for evidence, exports, and the audit anchor? It must support versioning and object lock in compliance mode (ADR-0007) | Sprint 1.0 (P1-02) | **Spike done 2026-10-31:** RustFS 1.0.4 and SeaweedFS 4.51 both passed 33/33 (`scripts/spikes/o17-object-store/`). Both Apache-2.0 and active. SeaweedFS reports telemetry by default (must run with `-master.telemetry=false`). Not yet tested: per-purpose keys that cannot bypass governance or reach other buckets. **Decided 2026-10-31 (PO): SeaweedFS 4.51**, run with `-master.telemetry=false`, identities and per-bucket permissions in a reviewed config file. The per-purpose key test becomes a P1-02 acceptance check |

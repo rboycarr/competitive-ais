@@ -20,7 +20,7 @@ Task numbers are sequential and never reused.
 # Locate the Codex binary bundled with the VS Code extension (not on PATH)
 $codex = (Get-ChildItem "$env:USERPROFILE\.vscode\extensions\openai.chatgpt-*\bin\windows-x86_64\codex.exe" |
           Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-$repo  = "D:\xampp_lite_8_3\www\competitive-ais"
+$repo  = (git rev-parse --show-toplevel)   # run from inside the working copy
 $task  = "TASK-0001"
 
 # Read-only sandbox; prompt from file via stdin; final message saved to the review file

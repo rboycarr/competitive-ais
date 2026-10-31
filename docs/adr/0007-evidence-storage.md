@@ -1,7 +1,12 @@
 # ADR-0007 — Evidence storage: quarantine, scan, content-addressed blobs, object lock
 
 - **Status:** Accepted, 2026-10-31
-- **Open (2026-10-31):** MinIO, named below as the object store, is archived and no longer publishes images. The design stays (S3 API, versioning, object lock); the product is chosen under O17 (`docs/11` §5) and recorded here. Read "MinIO" below as "the S3-compatible object store" until then.
+- **Amended 2026-10-31 (O17, Product Owner):** MinIO is archived and no longer publishes images, so the object store is **SeaweedFS** (S3 gateway). The design is unchanged (S3 API, versioning, object lock). Wherever this ADR or other docs say "MinIO", read "the S3-compatible object store (SeaweedFS)".
+
+### Amendment 2026-10-31 — SeaweedFS as the object store (O17)
+- Chosen after a conformance spike (`scripts/spikes/o17-object-store/`): versioning, delete markers, governance and compliance retention, legal hold, bucket default retention, server-side SHA-256 checksums, pre-signed URL expiry and tamper rejection, anonymous access denied, and locks persisting across restart. SeaweedFS 4.51 and RustFS 1.0.4 both passed 33/33; SeaweedFS was preferred for its longer production record and identities with per-bucket permissions declared in a config file that can be reviewed.
+- SeaweedFS reports usage telemetry by default. It always runs with `-master.telemetry=false`, and the data network has no internet egress.
+- Identities are declared in the S3 identity config: the application key gets read/write on `evidence-quarantine`, `evidence`, and `exports` only, without governance bypass; the audit-anchor writer gets its own key limited to `audit-anchor`; the admin identity that can bypass governance is not given to the application. P1-02 must prove this with tests (denied bypass, denied cross-bucket access) before the store is pinned.
 
 ## Context
 Evidence must be preserved with SHA-256 hashes, MIME, size, storage key, and chain of custody (`competitive-ais.md` §6). Uploads are untrusted (`docs/07` T7). The same file is often captured more than once from different sources.
