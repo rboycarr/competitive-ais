@@ -1,0 +1,25 @@
+{
+  "identities": [
+    {
+      "name": "admin",
+      "credentials": [{ "accessKey": "__S3_ADMIN_ACCESS_KEY__", "secretKey": "__S3_ADMIN_SECRET_KEY__" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    },
+    {
+      "name": "app",
+      "credentials": [{ "accessKey": "__S3_APP_ACCESS_KEY__", "secretKey": "__S3_APP_SECRET_KEY__" }],
+      "actions": [
+        "Read:evidence-quarantine", "Write:evidence-quarantine", "List:evidence-quarantine", "Tagging:evidence-quarantine",
+        "Read:evidence", "Write:evidence", "List:evidence", "Tagging:evidence",
+        "GetObjectRetention:evidence", "PutObjectRetention:evidence",
+        "GetObjectLegalHold:evidence", "PutObjectLegalHold:evidence",
+        "Read:exports", "Write:exports", "List:exports", "Tagging:exports"
+      ]
+    },
+    {
+      "name": "audit-anchor",
+      "credentials": [{ "accessKey": "__S3_ANCHOR_ACCESS_KEY__", "secretKey": "__S3_ANCHOR_SECRET_KEY__" }],
+      "actions": ["Read:audit-anchor", "Write:audit-anchor", "List:audit-anchor"]
+    }
+  ]
+}

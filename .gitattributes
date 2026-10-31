@@ -5,6 +5,12 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+*.blade.php diff=html
+*.css diff=css
+*.html diff=html
+*.md diff=markdown
+*.php diff=php
+
 *.png binary
 *.jpg binary
 *.jpeg binary

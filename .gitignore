@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.services.example
 *.pem
 *.key
 auth.json
@@ -13,16 +14,13 @@ auth.json
 /public/hot
 /public/storage
 
-# Laravel runtime
+# Laravel runtime (storage/ and bootstrap/cache/ keep their own .gitignore files)
 /storage/*.key
-/storage/logs/*
-/storage/framework/cache/data/*
-/storage/framework/sessions/*
-/storage/framework/views/*
-/storage/framework/testing/*
-/storage/app/private/*
-/storage/app/public/*
-/bootstrap/cache/*.php
+/storage/pail
+/public/fonts-manifest.dev.json
+*.log
+_ide_helper.php
+.phpactor.json
 
 # Tests and tooling
 .phpunit.result.cache
@@ -36,5 +34,9 @@ auth.json
 # Editors and OS
 /.idea/
 /.vscode/
+/.codex
+/.cursor/
+/.nova
+/.zed
 .DS_Store
 Thumbs.db

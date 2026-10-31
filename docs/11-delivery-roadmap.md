@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; O17 decided (SeaweedFS); P1-02 next. |
+| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; O17 decided (SeaweedFS); P1-02 done 2026-10-31. |
 | Owner | Product Owner (priorities, approvals); Claude Code (backlog maintenance) |
 | Related | `skills/10_ROADMAP_SKILLS.md`, `competitive-ais.md` §14, §17 |
 
@@ -38,7 +38,7 @@
 | ID | Story | Acceptance criteria | Size | Depends on |
 |---|---|---|---|---|
 | P1-01 | As the team, we have the Phase 0 docs, ADRs, and handoff protocol in the repo | `docs/00–12`, `docs/adr/0001–0010`, `AGENTS.md`, `handoffs/` exist and are cross-checked | M | — (**done** 2026-10-31) |
-| P1-02 | As a developer, I can start the stack with one command | WSL2 + Docker installed (user); `compose.yaml` services healthy; app at :8080; no conflict with XAMPP | M | user setup, dependency approval |
+| P1-02 | As a developer, I can start the stack with one command | WSL2 + Docker installed (user); `compose.yaml` services healthy; app at :8080; no conflict with XAMPP | M | user setup, dependency approval (**done** 2026-10-31: `bash scripts/dev/setup.sh` once, then `docker compose up -d --wait`; all 10 services healthy; app, Vite and Mailpit reachable from Windows; ports on 127.0.0.1 only; object-store key policy 19/19; versions pinned in ADR-0003) |
 | P1-03 | As a developer, the repo is versioned with protected `main` | `git init`; `.gitignore` excludes `.env`, `vendor`, `node_modules`, storage; remote + branch protection per O1 | S | O1 (**in progress** 2026-10-31: GitHub repo `rboycarr/competitive-ais`, made **public** by PO decision after the initial commit `26eb6df` was pushed to `main`; branch protection still to do. Because the repo is public, every commit must contain synthetic data only and pass a secret/personal-data scan before push) |
 | P1-04 | As an architect, modules load automatically and boundaries are enforced | `modules/*` discovery; Pest arch tests fail on a forbidden cross-module import | M | P1-02 |
 | P1-05 | As an auditor, every sensitive action leaves a tamper-evident record | `audit_events`, `audit_checkpoints`, `AuditLogger`, checkpoint + verification jobs; grants test passes | M | P1-04 |
