@@ -18,7 +18,9 @@ step() { CURRENT="$*"; : > "$LOG"; echo; echo "=== $*"; }
 annotate() {
   local rc=$? tail
   if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
-    tail=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -v '^\s*$' | tail -12 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+    tail=$( { sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -iE 'exception|error|denied|cannot|failed|⨯' | grep -v ' at ' | head -6
+              sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -v '^\s*$' | grep -v ' at \|^phar:' | tail -6; } \
+            | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
     echo "::error title=backend::failed at step: $CURRENT (exit $rc)%0A$tail"
   fi
   rm -f "$LOG"
