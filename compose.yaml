@@ -18,7 +18,7 @@ x-app: &app
   volumes:
     - .:/var/www/html
     - vendor:/var/www/html/vendor
-    - { type: tmpfs, target: /var/www/html/.secrets, read_only: true }
+    - { type: tmpfs, target: /var/www/html/.secrets, read_only: true, tmpfs: { mode: 0555 } }
   networks: [app, data]
   restart: unless-stopped
   depends_on:
@@ -103,7 +103,7 @@ services:
     volumes:
       - .:/app
       - node_modules:/app/node_modules
-      - { type: tmpfs, target: /app/.secrets, read_only: true }
+      - { type: tmpfs, target: /app/.secrets, read_only: true, tmpfs: { mode: 0555 } }
     networks: [edge]
     restart: unless-stopped
     healthcheck:
