@@ -37,7 +37,8 @@ redact() {
 # workflow-command line. Usage: annotation_body LOG ENV_FILE...
 annotation_body() {
   local log=$1; shift
-  { sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -iE 'exception|error|denied|cannot|failed|⨯' | grep -v ' at ' | head -6
-    sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -v '^\s*$' | grep -v ' at \|^phar:' | tail -6; } \
+  # `|| true`: a log without error lines, or an empty log, still yields the tail (TASK-0007 #3).
+  { sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -iE 'exception|error|denied|cannot|failed|⨯' | grep -v ' at ' | head -6 || true
+    sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -v '^\s*$' | grep -v ' at \|^phar:' | tail -6 || true; } \
     | redact "$@" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g'
 }

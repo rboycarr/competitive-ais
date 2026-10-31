@@ -15,6 +15,11 @@ x-app: &app
       UID: ${DEV_UID:-1000}
       GID: ${DEV_GID:-1000}
   image: competitive-ais/php:dev
+  environment:
+    # The databases whose table grants db:apply-grants manages: the same list the MySQL init script gets as
+    # CAIS_DATABASES, interpolated from .env on the host, so overriding DB_DATABASE in a container (tests, the CI
+    # migration round-trip) does not change it (TASK-0007 #1).
+    DB_GRANT_DATABASES: "${DB_DATABASE} ${DB_TEST_DATABASE:-cais_test}"
   volumes:
     - .:/var/www/html
     - vendor:/var/www/html/vendor

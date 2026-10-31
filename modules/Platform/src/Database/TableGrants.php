@@ -242,19 +242,32 @@ class TableGrants
     }
 
     /**
-     * Databases the migrator can see: exactly those it holds privileges on, which the MySQL init script limits to
-     * the configured ones (CAIS_DATABASES).
+     * The managed databases: the explicit list in database.grants.databases (TASK-0007 #1, #2). Each must exist
+     * and be visible to the migrator, and the connection's own database must be one of them; other databases are
+     * never changed.
      *
      * @return list<string>
      */
     private function schemas(string $connection): array
     {
-        return array_values($this->db->connection($connection)->table('information_schema.SCHEMATA')
-            ->whereNotIn('SCHEMA_NAME', ['information_schema', 'performance_schema', 'mysql', 'sys'])
-            ->orderBy('SCHEMA_NAME')
-            ->pluck('SCHEMA_NAME')
-            ->map(fn (mixed $name): string => (string) $name)
-            ->all());
+        $conn = $this->db->connection($connection);
+        $configured = array_values(array_unique(array_map('strval', (array) $this->config->get('database.grants.databases', []))));
+        foreach ($configured as $db) {
+            $this->identifier($db);
+        }
+        if (! in_array($conn->getDatabaseName(), $configured, true)) {
+            throw new RuntimeException("Database [{$conn->getDatabaseName()}] is not in database.grants.databases.");
+        }
+
+        $visible = $conn->table('information_schema.SCHEMATA')->whereIn('SCHEMA_NAME', $configured)
+            ->pluck('SCHEMA_NAME')->map(fn (mixed $name): string => (string) $name)->all();
+        $missing = array_diff($configured, $visible);
+        if ($missing !== []) {
+            throw new RuntimeException('Managed databases not found or not accessible to the migrator: '.implode(', ', $missing).'.');
+        }
+        sort($configured);
+
+        return $configured;
     }
 
     /**

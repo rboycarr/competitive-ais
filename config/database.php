@@ -195,6 +195,12 @@ return [
         'app_user' => env('DB_USERNAME', 'cais_app'),
         'retention_user' => env('DB_RETENTION_USERNAME', 'cais_retention'),
 
+        // Databases whose table grants are managed (all share this policy): set by compose from the same values
+        // as the MySQL init script's CAIS_DATABASES. Grants on any other database are a verification failure.
+        'databases' => array_values(array_filter(explode(' ', (string) env(
+            'DB_GRANT_DATABASES', env('DB_DATABASE', 'cais').' '.env('DB_TEST_DATABASE', 'cais_test')
+        )))),
+
         // Connections that log in as those accounts; used to read back their own grants after applying.
         'app_connection' => 'mysql',
         'retention_connection' => 'retention',

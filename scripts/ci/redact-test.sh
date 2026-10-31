@@ -39,4 +39,9 @@ done
 grep -qF 'demo-app kept' <<<"$out" || { echo "Redaction removed non-secret text" >&2; exit 1; }
 grep -qF '100%25 done' <<<"$out" || { echo "Annotation is not escaped" >&2; exit 1; }
 [ "$(wc -l <<<"$out")" -eq 1 ] || { echo "Annotation spans several lines" >&2; exit 1; }
+
+# A log without error lines still produces its tail, also under `set -euo pipefail` (TASK-0007 #3).
+printf 'step output line one\nlast line pppppppp-1\n' > "$T/quiet.log"
+out=$(annotation_body "$T/quiet.log" "$T/a.env")
+grep -qF 'step output line one%0Alast line ***' <<<"$out" || { echo "No-error-line log not annotated: $out" >&2; exit 1; }
 echo "Redaction test passed."
