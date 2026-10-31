@@ -4,18 +4,24 @@ namespace Modules\Platform;
 
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Database\Events\NoPendingMigrations;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
+use Modules\Platform\Console\CreateAuditCheckpoint;
+use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
+use Modules\Platform\Jobs\CreateAuditCheckpointJob;
+use Modules\Platform\Jobs\VerifyAuditChainJob;
 use Modules\Platform\Support\ModuleServiceProvider;
 use RuntimeException;
 
 /**
- * Shared kernel (docs/01 §3): database accounts and grants now; audit, outbox, AccessScope, and problem+json
- * errors in later stories.
+ * Shared kernel (docs/01 §3): database accounts and grants, and the audit trail (P1-05); outbox, AccessScope, and
+ * problem+json errors in later stories.
  */
 class PlatformServiceProvider extends ModuleServiceProvider
 {
@@ -32,6 +38,7 @@ class PlatformServiceProvider extends ModuleServiceProvider
     public function register(): void
     {
         $this->app->singleton(TableGrants::class);
+        $this->app->singleton(AuditActions::class);
     }
 
     public function boot(): void
@@ -41,10 +48,22 @@ class PlatformServiceProvider extends ModuleServiceProvider
         DB::prohibitDestructiveCommands($this->app->isProduction());
 
         if ($this->app->runningInConsole()) {
-            $this->commands([ApplyDatabaseGrants::class]);
+            $this->commands([ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class]);
         }
 
         $this->runSchemaCommandsAsMigrator();
+        $this->scheduleAudit();
+    }
+
+    /**
+     * Audit checkpoints and verification (P1-05, ADR-0006); the jobs run on the queue (Horizon).
+     */
+    private function scheduleAudit(): void
+    {
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            $schedule->job(new CreateAuditCheckpointJob)->everyFiveMinutes();
+            $schedule->job(new VerifyAuditChainJob)->hourly();
+        });
     }
 
     /**
