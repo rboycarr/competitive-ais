@@ -12,16 +12,19 @@ use Illuminate\Support\Facades\Event;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
 use Modules\Platform\Console\CreateAuditCheckpoint;
+use Modules\Platform\Console\RelayOutbox;
 use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
 use Modules\Platform\Jobs\CreateAuditCheckpointJob;
+use Modules\Platform\Jobs\RelayOutboxJob;
 use Modules\Platform\Jobs\VerifyAuditChainJob;
+use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Support\ModuleServiceProvider;
 use RuntimeException;
 
 /**
- * Shared kernel (docs/01 §3): database accounts and grants, and the audit trail (P1-05); outbox, AccessScope, and
- * problem+json errors in later stories.
+ * Shared kernel (docs/01 §3): database accounts and grants, the audit trail (P1-05), and the transactional outbox
+ * (P1-06); AccessScope and problem+json errors in later stories.
  */
 class PlatformServiceProvider extends ModuleServiceProvider
 {
@@ -39,6 +42,7 @@ class PlatformServiceProvider extends ModuleServiceProvider
     {
         $this->app->singleton(TableGrants::class);
         $this->app->singleton(AuditActions::class);
+        $this->app->singleton(OutboxEvents::class);
     }
 
     public function boot(): void
@@ -48,21 +52,22 @@ class PlatformServiceProvider extends ModuleServiceProvider
         DB::prohibitDestructiveCommands($this->app->isProduction());
 
         if ($this->app->runningInConsole()) {
-            $this->commands([ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class]);
+            $this->commands([ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, RelayOutbox::class]);
         }
 
         $this->runSchemaCommandsAsMigrator();
-        $this->scheduleAudit();
+        $this->scheduleJobs();
     }
 
     /**
-     * Audit checkpoints and verification (P1-05, ADR-0006); the jobs run on the queue (Horizon).
+     * Audit checkpoints and verification (P1-05, ADR-0006) and outbox delivery (P1-06); the jobs run on the queue.
      */
-    private function scheduleAudit(): void
+    private function scheduleJobs(): void
     {
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
             $schedule->job(new CreateAuditCheckpointJob)->everyFiveMinutes();
             $schedule->job(new VerifyAuditChainJob)->hourly();
+            $schedule->job(new RelayOutboxJob)->everyMinute();
         });
     }
 

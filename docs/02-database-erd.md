@@ -117,6 +117,14 @@ Indexes: (subject_type, subject_id, occurred_at), (actor_id, occurred_at), (acti
 
 **outbox_events**: id, ulid UNIQUE, aggregate_type VARCHAR(100), aggregate_id BIGINT UNSIGNED, event_type VARCHAR(100), payload JSON (IDs and minimal data, no classified content), available_at, dispatched_at NULL, attempts SMALLINT UNSIGNED, last_error TEXT NULL, created_at. Index: (dispatched_at, available_at).
 
+**Implementation (P1-06, 2026-11-01):**
+- Migration `modules/Platform/database/migrations/2026_11_01_110000_create_outbox_tables.php`. Additions to the spec: `claimed_until` (lease of the relay run that claimed the event), `failed_at` (dead letter after the last attempt; CHECK: not both dispatched and failed), `last_error` VARCHAR(1000), index (aggregate_type, aggregate_id). `outbox_events` is **mutable** for the app account (the relay updates delivery state).
+- **outbox_receipts** (append-only): id, outbox_event_id FK, handler VARCHAR(150), handled_at; UNIQUE(outbox_event_id, handler). Written in the same transaction as the handler's work, so each handler's database changes happen once per event, also when two relay runs race.
+- `OutboxPublisher::publish(aggregate, eventType, payload)` refuses to run outside a transaction. Event types and their payload schemas are registered with `OutboxEvents::define()`; payload types are `ulid`, `id`, `int`, `bool`, `code`, `sha256` (no free text). Handlers implement `OutboxHandler` and are registered with `OutboxEvents::subscribe()`.
+- `RelayOutboxJob` every minute and `php artisan outbox:relay`: claims up to 100 due events with `FOR UPDATE SKIP LOCKED` in a short transaction and stamps a 5-minute lease; handlers then run outside that transaction. Failure → retry with exponential backoff and jitter (10 s doubling, capped at 1 h); after 10 attempts → `failed_at`, logged, not retried automatically (`config/outbox.php`).
+- Not yet: deleting dispatched events after a retention period, and an admin screen for dead letters (with the Phase 1 admin pages).
+- Tests: `modules/Platform/tests/Feature/OutboxTest.php` (MySQL 8.4, real app account).
+
 **features** (Laravel Pennant), **jobs/failed_jobs/job_batches**, **cache**, and **sessions** use framework defaults.
 
 ### 3.2 Identity
@@ -249,7 +257,7 @@ Each Phase 1 list query is checked with `EXPLAIN` against seeded volume (10k ite
 | User | Privileges |
 |---|---|
 | `cais_migrator` | DDL on schema (no views); used only by migrations and `db:apply-grants` in the `migrator` service |
-| `cais_app` | SELECT, INSERT, UPDATE, DELETE on mutable tables; **SELECT, INSERT only** on `audit_events`, `audit_event_network`, `audit_checkpoints`, `evidence_custody_events`, `source_policies`, `verification_reviews` (and later `price_observations` and others) |
+| `cais_app` | SELECT, INSERT, UPDATE, DELETE on mutable tables; **SELECT, INSERT only** on `audit_events`, `audit_event_network`, `audit_checkpoints`, `evidence_custody_events`, `outbox_receipts`, `source_policies`, `verification_reviews` (and later `price_observations` and others) |
 | `cais_readonly` | SELECT for backups and reporting |
 | `cais_retention` | SELECT, DELETE on `audit_event_network` only; used only by the scheduled retention job (§8). **No** UPDATE or DELETE on any hashed audit table. |
 
