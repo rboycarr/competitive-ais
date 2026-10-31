@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Database;
+namespace Modules\Platform\Database;
 
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Database\DatabaseManager;
@@ -12,8 +12,6 @@ use InvalidArgumentException;
  * Runs as the migrator (which holds these privileges WITH GRANT OPTION, docs/02 §6). Each table is brought to
  * its target by GRANTing the wanted privileges and REVOKE IF EXISTS on the rest, so there is no window in which
  * a privilege the app needs is missing. Schema- and global-level privileges are owned by the MySQL init script.
- *
- * Will move to Modules\Platform with the module layout (P1-04).
  */
 class TableGrants
 {

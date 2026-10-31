@@ -248,10 +248,10 @@ A migration-adjacent artisan command `db:apply-grants` keeps the grants in code.
 
 **Implementation (P1-09, 2026-10-31):**
 - Accounts and schema-level privileges: `docker/mysql/init/10-accounts.sh` (idempotent; runs at first volume init and from `scripts/dev/setup.sh`). Each account's global and schema privileges are reset and set exactly. `cais_migrator` holds its schema privileges `WITH GRANT OPTION` so that `db:apply-grants` can manage table grants without root. `cais_app` and `cais_retention` have **no** schema-level privileges. `cais_readonly` has `SELECT, SHOW VIEW` on the main schema only.
-- Table grants: policy in `config/database.php` → `grants` (append-only list, tables without app access such as `migrations`, retention tables). `App\Database\TableGrants` grants the target privileges and `REVOKE IF EXISTS` the rest per table, so a needed privilege is never briefly missing. It runs after every migration (also when nothing was pending) and on demand with `php artisan db:apply-grants -v`.
+- Table grants: policy in `config/database.php` → `grants` (append-only list, tables without app access such as `migrations`, retention tables). `Modules\Platform\Database\TableGrants` grants the target privileges and `REVOKE IF EXISTS` the rest per table, so a needed privilege is never briefly missing. It runs after every migration (also when nothing was pending) and on demand with `php artisan db:apply-grants -v`.
 - Migration commands (`migrate*`, `schema:dump`) switch to the migrator connection automatically unless `--database` is given; as the app account they fail closed.
 - `cais_test` is created alongside the main schema for automated tests; the migrator has the same rights there.
-- Tests: `tests/Feature/Database/DatabaseAccountsTest.php` (MySQL 8.4, real accounts) proves the mechanism on probe tables and compares the app account's actual grants on every real table with the policy.
+- Tests: `modules/Platform/tests/Feature/DatabaseAccountsTest.php` (MySQL 8.4, real accounts) proves the mechanism on probe tables and compares the app account's actual grants on every real table with the policy.
 - Rollback: revert the commit; then, only with explicit authorization, `DROP USER cais_app, cais_retention, cais_readonly` as root and point `DB_USERNAME` back at the migrator. Data is not affected.
 
 ## 7. Migration discipline

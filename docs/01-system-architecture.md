@@ -46,18 +46,19 @@ Observability: structured JSON logs, Horizon metrics, health endpoints, backup c
 
 ```
 modules/<Module>/
-  src/  Models, Actions, Policies, Http/{Controllers,Requests,Resources},
+  src/  <Module>ServiceProvider.php (extends Modules\Platform\Support\ModuleServiceProvider),
+        Models, Actions, Policies, Http/{Controllers,Requests,Resources},
         Events, Listeners, Jobs, Enums, Data, Contracts
   database/ migrations, factories, seeders
-  routes/   web.php, api.php
+  routes/   web.php, api.php (api.php is served under /api/v1)
   resources/js/Pages/<Module>/
   tests/    Unit, Feature
-  <Module>ServiceProvider.php
 ```
 
-- PSR-4 maps `Modules\<Module>\` to `modules/<Module>/src`.
-- Pest discovers tests under `modules/*/tests`.
-- A module may depend on `Modules\Platform` and on other modules' `Contracts` and `Events` only. Pest `arch()` tests enforce this.
+- PSR-4 maps `Modules\<Module>\` to `modules/<Module>/src` and `Modules\<Module>\Tests\` to `modules/<Module>/tests`. Composer has no wildcard, so each module adds both lines to `composer.json`; a test fails if a module directory is missing them.
+- `App\Providers\ModulesServiceProvider` registers every `modules/*` provider (Platform first, then alphabetically) and fails loudly for a module directory without one. The base provider loads the module's migrations and routes by convention.
+- PHPUnit/Pest discover tests under `modules/*/tests/{Unit,Feature}`; architecture tests live in `tests/Architecture`.
+- A module may depend on `Modules\Platform` and on other modules' `Contracts` and `Events` only. Platform depends on no other module. Modules do not use `App\`. Pest `arch()` tests enforce this (`tests/Architecture/ModuleBoundariesTest.php`; proven on 2026-10-31 with temporary modules: importing another module's `Models`, importing `App\`, or Platform importing any module each fail the suite, while importing `Contracts` passes).
 - **Shared kernel `Modules\Platform`:** `Classification`, `HasPublicUlid`, `AccessScope`, `AuditLogger`, `OutboxPublisher`, Money/Quantity value objects, problem+json errors, feature flags (Pennant).
 
 | Module | Phase | Catalog |

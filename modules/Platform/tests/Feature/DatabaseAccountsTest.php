@@ -1,12 +1,12 @@
 <?php
 
-namespace Tests\Feature\Database;
+namespace Modules\Platform\Tests\Feature;
 
-use App\Database\TableGrants;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Modules\Platform\Database\TableGrants;
 use Tests\TestCase;
 
 /**

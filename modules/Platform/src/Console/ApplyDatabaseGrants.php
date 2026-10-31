@@ -1,9 +1,9 @@
 <?php
 
-namespace App\Console\Commands;
+namespace Modules\Platform\Console;
 
-use App\Database\TableGrants;
 use Illuminate\Console\Command;
+use Modules\Platform\Database\TableGrants;
 
 class ApplyDatabaseGrants extends Command
 {
