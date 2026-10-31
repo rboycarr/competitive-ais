@@ -128,7 +128,7 @@ Restore drills run monthly and before each release: restore into a scratch envir
 | p95 latency (ordinary routes) | > 500 ms over 15 min |
 | Queue wait (Horizon) | > 5 min on `default`/`evidence` |
 | Failed jobs | any new failure in `evidence` queue; > 10/h elsewhere |
-| Audit checkpoint verification | any mismatch → critical |
+| Audit checkpoint verification (`VerifyAuditChainJob` hourly; `php artisan audit:verify` on demand, exit 1 on any issue) | any issue → critical; `late_commit` → high (P1-05) |
 | Evidence integrity sample | any hash mismatch → critical |
 | Backup job | missing or failed → critical |
 | Disk (MySQL, MinIO volumes) | > 80% |

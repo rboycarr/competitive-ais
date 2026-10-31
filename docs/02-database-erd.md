@@ -94,7 +94,7 @@ erDiagram
 | classification | VARCHAR(12) | of the subject at event time |
 | request_id | CHAR(26) NULL | correlates with logs |
 | context | JSON NULL | allowlisted keys only; secrets and prompts redacted |
-| row_hash | CHAR(64) | SHA-256 of the canonical serialization of **all columns above** (immutable fields only) |
+| row_hash | CHAR(64) | SHA-256 of the canonical serialization of **all columns above except `id`** (immutable fields only). `id` is assigned by MySQL at insert, so it is bound by the checkpoint's Merkle leaf instead (TASK-0010 #3). The hash is unkeyed: it detects accidental or naive edits; deliberate edits by someone with database write access are detected by checkpoints and, from P1-50, by the signed manifests |
 
 Indexes: (subject_type, subject_id, occurred_at), (actor_id, occurred_at), (action, occurred_at), (occurred_at).
 
@@ -105,6 +105,15 @@ Indexes: (subject_type, subject_id, occurred_at), (actor_id, occurred_at), (acti
 - The manifest (range, count, root, key ID, signature) is exported to the **audit-anchor** bucket (separate credentials, object lock in compliance mode; replicated offsite in production).
 - Verification compares the database against the **signed exported manifest**, not against the checkpoint row alone.
 - A row that commits late inside a closed range causes a count mismatch. Verification reports it as `late_commit` (high, investigated by runbook). It is re-anchored in a supplementary checkpoint of the same generation and never silently absorbed.
+
+**Implementation (P1-05, 2026-11-01):**
+- Migration `modules/Platform/database/migrations/2026_11_01_100000_create_audit_tables.php`; CHECK constraints on actor type, user actor ID, classification, subject pairing, hash format and checkpoint range; `UNIQUE(generation, from_audit_id)` in addition to `UNIQUE(to_audit_id)`, so two concurrent checkpoint runs cannot close overlapping ranges. Signing columns (`signing_key_id`, `signature`, `manifest_object_key`) are added with P1-50.
+- `Modules\Platform\Audit\AuditLogger::record(action, subject, context, actor, classification)` refuses to run unless a transaction is open on its connection (the default one, or the one named with `on()`). Actions and their **typed** context keys are registered with `AuditActions::define()` (`ulid`, `id`, `int`, `bool`, `code`, `sha256`, `text`, each optionally a list); secret-, token-, key- and prompt-like keys cannot be registered. `text` is limited to 500 characters and screened: values that look like credentials are refused. The screening is heuristic, so the guarantee is "typed and screened", not "no secret can ever be stored": callers record IDs, codes and digests, never user input, prompts or document content (TASK-0010 #1, TASK-0011). No floats or nested structures, so the hash survives MySQL's JSON round trip.
+- `row_hash` = SHA-256 of a versioned canonical JSON (`AuditHasher`, version 1). Merkle root: RFC 6962 tree over leaves `SHA-256(0x00 ‖ id ‖ row_hash)` in ID order.
+- `audit_event_network` is written only while a routed HTTP request is handled.
+- `CreateAuditCheckpointJob` every 5 minutes and `VerifyAuditChainJob` hourly (scheduler → queue); `php artisan audit:checkpoint` and `audit:verify` (exit 1 on any issue). Verification reports `row_tampered`, `rows_missing`, `late_commit`, `root_mismatch` and `chain_gap`, logs critically and raises `AuditVerificationFailed`.
+- **Limit until P1-50:** someone who can write to the database and also rewrite the checkpoint rows can hide a change. The signed manifests in the audit-anchor bucket close this.
+- Tests: `modules/Platform/tests/Feature/AuditTrailTest.php` (MySQL 8.4, real accounts).
 
 **outbox_events**: id, ulid UNIQUE, aggregate_type VARCHAR(100), aggregate_id BIGINT UNSIGNED, event_type VARCHAR(100), payload JSON (IDs and minimal data, no classified content), available_at, dispatched_at NULL, attempts SMALLINT UNSIGNED, last_error TEXT NULL, created_at. Index: (dispatched_at, available_at).
 
