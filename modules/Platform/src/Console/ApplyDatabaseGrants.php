@@ -23,23 +23,23 @@ class ApplyDatabaseGrants extends Command
 
         if ($this->output->isVerbose()) {
             $this->table(
-                ['Table', 'App', 'Retention'],
+                ['Table', 'Class', 'App', 'Retention'],
                 array_map(
-                    fn (string $table, array $t): array => [$table, implode(', ', $t['app']) ?: '-', implode(', ', $t['retention']) ?: '-'],
+                    fn (string $table, array $t): array => [$table, $t['class'], implode(', ', $t['app']) ?: '-', implode(', ', $t['retention']) ?: '-'],
                     array_keys($plan),
                     $plan,
                 ),
             );
         }
 
-        $count = fn (callable $filter): int => count(array_filter($plan, $filter));
+        $count = fn (string $class): int => count(array_filter($plan, fn (array $t): bool => $t['class'] === $class));
         $this->components->info(sprintf(
-            'Grants applied to %d tables: %d read/write, %d append-only, %d no app access, %d with retention access.',
+            'Grants applied to %d tables: %d mutable, %d append-only, %d no app access, %d with retention access.',
             count($plan),
-            $count(fn (array $t): bool => $t['app'] === TableGrants::MUTABLE),
-            $count(fn (array $t): bool => $t['app'] === TableGrants::APPEND_ONLY),
-            $count(fn (array $t): bool => $t['app'] === []),
-            $count(fn (array $t): bool => $t['retention'] !== []),
+            $count('mutable'),
+            $count('append_only'),
+            $count('app_excluded'),
+            count(array_filter($plan, fn (array $t): bool => $t['retention'] !== [])),
         ));
 
         return self::SUCCESS;

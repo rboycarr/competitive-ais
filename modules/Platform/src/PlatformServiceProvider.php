@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Event;
 use Modules\Platform\Console\ApplyDatabaseGrants;
 use Modules\Platform\Database\TableGrants;
 use Modules\Platform\Support\ModuleServiceProvider;
+use RuntimeException;
 
 /**
  * Shared kernel (docs/01 §3): database accounts and grants now; audit, outbox, AccessScope, and problem+json
@@ -48,13 +49,20 @@ class PlatformServiceProvider extends ModuleServiceProvider
 
     /**
      * The app account cannot run DDL, so schema commands switch the default connection to the migrator for
-     * their duration (unless --database is given) and restore it afterwards. After migrations, table grants
-     * are re-applied so new tables get the app account's privileges immediately.
+     * their duration (unless --database is given) and restore it afterwards. The migrator connection exists
+     * only in the `migrator` service (TASK-0003 #1); elsewhere these commands fail with instructions.
+     * After migrations, table grants are re-applied so new tables get the app account's privileges immediately.
      */
     private function runSchemaCommandsAsMigrator(): void
     {
         Event::listen(CommandStarting::class, function (CommandStarting $event): void {
             if (in_array($event->command, self::MIGRATOR_COMMANDS, true) && ! $event->input->hasParameterOption('--database')) {
+                if (config('database.connections.migrator') === null) {
+                    throw new RuntimeException(
+                        "[{$event->command}] needs the migrator account, which is only available in the migrator service: "
+                        ."docker compose run --rm migrator php artisan {$event->command}"
+                    );
+                }
                 $this->connectionBeforeMigratorCommand = DB::getDefaultConnection();
                 DB::setDefaultConnection('migrator');
             }

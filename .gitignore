@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 !.env.services.example
+!.env.migrator.example
+!.env.s3.example
+/.secrets/
 *.pem
 *.key
 auth.json

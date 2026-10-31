@@ -239,7 +239,7 @@ Each Phase 1 list query is checked with `EXPLAIN` against seeded volume (10k ite
 
 | User | Privileges |
 |---|---|
-| `cais_migrator` | DDL on schema; used only by `php artisan migrate` |
+| `cais_migrator` | DDL on schema (no views); used only by migrations and `db:apply-grants` in the `migrator` service |
 | `cais_app` | SELECT, INSERT, UPDATE, DELETE on mutable tables; **SELECT, INSERT only** on `audit_events`, `audit_event_network`, `audit_checkpoints`, `evidence_custody_events`, `source_policies`, `verification_reviews` (and later `price_observations` and others) |
 | `cais_readonly` | SELECT for backups and reporting |
 | `cais_retention` | SELECT, DELETE on `audit_event_network` only; used only by the scheduled retention job (§8). **No** UPDATE or DELETE on any hashed audit table. |
@@ -247,12 +247,18 @@ Each Phase 1 list query is checked with `EXPLAIN` against seeded volume (10k ite
 A migration-adjacent artisan command `db:apply-grants` keeps the grants in code. A test asserts that UPDATE and DELETE fail as `cais_app`.
 
 **Implementation (P1-09, 2026-10-31):**
-- Accounts and schema-level privileges: `docker/mysql/init/10-accounts.sh` (idempotent; runs at first volume init and from `scripts/dev/setup.sh`). Each account's global and schema privileges are reset and set exactly. `cais_migrator` holds its schema privileges `WITH GRANT OPTION` so that `db:apply-grants` can manage table grants without root. `cais_app` and `cais_retention` have **no** schema-level privileges. `cais_readonly` has `SELECT, SHOW VIEW` on the main schema only.
-- Table grants: policy in `config/database.php` → `grants` (append-only list, tables without app access such as `migrations`, retention tables). `Modules\Platform\Database\TableGrants` grants the target privileges and `REVOKE IF EXISTS` the rest per table, so a needed privilege is never briefly missing. It runs after every migration (also when nothing was pending) and on demand with `php artisan db:apply-grants -v`.
+- Accounts and schema-level privileges: `docker/mysql/init/10-accounts.sh` (idempotent; runs at first volume init and from `scripts/dev/setup.sh`). Each account's global and schema privileges are reset and set exactly. `cais_migrator` holds its schema privileges `WITH GRANT OPTION` so that `db:apply-grants` can manage table grants without root. `cais_app` and `cais_retention` have **no** schema-level privileges. `cais_readonly` has `SELECT, SHOW VIEW` on the main schema only. The script also removes every table grant of the managed accounts and then requires each `SHOW GRANTS` line to be exactly an expected one (TASK-0005 #1); app and retention table access returns with the next migrate.
+- Table grants: policy in `config/database.php` → `grants` (append-only list, tables without app access such as `migrations`, retention tables). `Modules\Platform\Database\TableGrants` grants the target privileges and `REVOKE IF EXISTS` the rest per table, so a needed privilege is never briefly missing. It runs after every migration (also when nothing was pending) and on demand with `php artisan db:apply-grants -v`. It changes only the database it runs against, revokes grants left on dropped tables, and then reads each account's own `SHOW GRANTS`: it fails unless the grants on that database equal the policy table by table, for the configured account only. Grants on the other managed database are checked when migrations run against it; a grant on any database outside `database.grants.databases` (set by compose from the same `.env` values as `CAIS_DATABASES`) fails (TASK-0005 to TASK-0008).
 - Migration commands (`migrate*`, `schema:dump`) switch to the migrator connection automatically unless `--database` is given; as the app account they fail closed.
 - `cais_test` is created alongside the main schema for automated tests; the migrator has the same rights there.
 - Tests: `modules/Platform/tests/Feature/DatabaseAccountsTest.php` (MySQL 8.4, real accounts) proves the mechanism on probe tables and compares the app account's actual grants on every real table with the policy.
 - Rollback: revert the commit; then, only with explicit authorization, `DROP USER cais_app, cais_retention, cais_readonly` as root and point `DB_USERNAME` back at the migrator. Data is not affected.
+
+**Hardening after Codex review TASK-0003 (2026-10-31; `handoffs/TASK-0003-review.md`):**
+- The migrator's credentials exist only in `.secrets/migrator.env`, given to the one-shot `migrator` compose service and to MySQL's account init; `.secrets/` is hidden inside every container that mounts the repository (TASK-0004). Web, Horizon and scheduler containers do not have them; the `migrator` connection is not even configured there, and schema commands fail with instructions. CI asserts this. A source scan allows the name `migrator` only in the Platform migration wiring.
+- Every table must be classified in `config/database.php` → `grants` as `mutable`, `append_only` or `app_excluded`. An unclassified table gets no app access and fails the grant run, and with it the migration. Views are not permitted: the migrator no longer holds `CREATE VIEW`, and any view fails the grant run.
+- The account init script also revokes granted roles, proxy privileges, schema privileges on any database, column grants, and table grants left on objects that no longer exist. It then requires every line of each managed account's `SHOW GRANTS` to be on an exact allowlist, which also catches dynamic global privileges. CI seeds such privileges and expects them gone (`scripts/ci/accounts-test.sh`).
+- A data-driven test checks every configured append-only table once it exists: `SELECT, INSERT` granted; `UPDATE`, `DELETE` and `TRUNCATE` denied.
 
 ## 7. Migration discipline
 

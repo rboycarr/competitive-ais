@@ -1,7 +1,13 @@
-# gitleaks configuration (P1-07). Default rules plus one narrow exemption.
+# gitleaks configuration (P1-07; narrowed after TASK-0003 #9). Default rules plus one narrow suppression.
 [extend]
 useDefault = true
 
+# An empty placeholder line (KEY=) is followed by a line break; the generic-api-key rule then reads the next
+# line's key name as the "secret". Suppress only findings whose match contains "=" directly followed by a line
+# break, i.e. where the "value" is not on the key's line. No file is exempt: real values are still found,
+# including in env example files (verified with a planted token). scripts/ci/secrets.sh additionally requires
+# secret-like keys in example files to be empty.
 [[allowlists]]
-description = "Env example files hold empty placeholders only. The generic-api-key rule matches across the line break of an empty KEY= into the next line. scripts/ci/secrets.sh separately fails if any secret-like key in these files has a value."
-paths = ['''^\.env(\.services)?\.example$''']
+description = "Empty KEY= placeholder followed by a line break"
+regexTarget = "match"
+regexes = ['''=[ \t]*\r?\n''']
