@@ -5,8 +5,13 @@ namespace Modules\Platform;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Database\Events\NoPendingMigrations;
+use Illuminate\Foundation\Exceptions\Handler;
+use Illuminate\Foundation\Http\Kernel;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Modules\Platform\Audit\AuditActions;
@@ -15,16 +20,20 @@ use Modules\Platform\Console\CreateAuditCheckpoint;
 use Modules\Platform\Console\RelayOutbox;
 use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
+use Modules\Platform\Http\Middleware\AssignRequestId;
+use Modules\Platform\Http\Middleware\SecurityHeaders;
+use Modules\Platform\Http\ProblemDetails;
 use Modules\Platform\Jobs\CreateAuditCheckpointJob;
 use Modules\Platform\Jobs\RelayOutboxJob;
 use Modules\Platform\Jobs\VerifyAuditChainJob;
 use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Support\ModuleServiceProvider;
 use RuntimeException;
+use Throwable;
 
 /**
- * Shared kernel (docs/01 §3): database accounts and grants, the audit trail (P1-05), and the transactional outbox
- * (P1-06); AccessScope and problem+json errors in later stories.
+ * Shared kernel (docs/01 §3): database accounts and grants, the audit trail (P1-05), the transactional outbox
+ * (P1-06), and secure HTTP defaults (P1-08); AccessScope in a later story.
  */
 class PlatformServiceProvider extends ModuleServiceProvider
 {
@@ -57,6 +66,25 @@ class PlatformServiceProvider extends ModuleServiceProvider
 
         $this->runSchemaCommandsAsMigrator();
         $this->scheduleJobs();
+        $this->secureHttpDefaults();
+    }
+
+    /**
+     * Request IDs, security headers and problem+json errors on every response (P1-08). The request-ID middleware runs
+     * first, so even error responses carry the ID.
+     */
+    private function secureHttpDefaults(): void
+    {
+        /** @var Kernel $kernel the application's bound HTTP kernel (resolving the concrete class would build a new one) */
+        $kernel = $this->app->make(HttpKernel::class);
+        $kernel->prependMiddleware(AssignRequestId::class);
+        $kernel->pushMiddleware(SecurityHeaders::class);
+
+        $this->callAfterResolving(ExceptionHandler::class, function (ExceptionHandler $handler): void {
+            if ($handler instanceof Handler) {
+                $handler->renderable(fn (Throwable $e, Request $request) => ProblemDetails::render($e, $request));
+            }
+        });
     }
 
     /**

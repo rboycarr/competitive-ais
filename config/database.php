@@ -56,6 +56,7 @@ return [
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
+            'timezone' => '+00:00', // store and compare in UTC regardless of the server default (P1-08)
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
@@ -79,6 +80,7 @@ return [
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
+            'timezone' => '+00:00', // store and compare in UTC regardless of the server default (P1-08)
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
@@ -100,6 +102,7 @@ return [
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
+            'timezone' => '+00:00', // store and compare in UTC regardless of the server default (P1-08)
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
