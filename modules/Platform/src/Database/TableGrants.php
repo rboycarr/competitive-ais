@@ -41,13 +41,13 @@ class TableGrants
      *
      * @return array<string, array{class: string, app: list<string>, retention: list<string>}>
      */
-    public function plan(string $connection = 'migrator'): array
+    public function plan(string $connection = 'migrator', ?string $schema = null): array
     {
         $classOf = $this->classes();
         $retentionPolicy = (array) $this->config->get('database.grants.retention_tables', []);
 
         $plan = [];
-        foreach ($this->objects($connection, 'BASE TABLE') as $table) {
+        foreach ($this->objects($connection, 'BASE TABLE', $schema) as $table) {
             $class = $classOf[$table] ?? 'unclassified';
             $app = match ($class) {
                 'mutable' => self::MUTABLE,
@@ -67,7 +67,8 @@ class TableGrants
     }
 
     /**
-     * Apply the plan. Returns it for reporting. No-op on non-MySQL connections.
+     * Apply the policy to every managed database (the main one and the test one share it, TASK-0006 #1), then
+     * verify. Returns the plan of the connection's own database for reporting. No-op on non-MySQL connections.
      *
      * @return array<string, array{class: string, app: list<string>, retention: list<string>}>
      *
@@ -81,35 +82,54 @@ class TableGrants
             return [];
         }
 
-        $schema = $this->identifier($conn->getDatabaseName());
+        $current = $conn->getDatabaseName();
         $app = $this->account((string) $this->config->get('database.grants.app_user'));
         $retention = $this->account((string) $this->config->get('database.grants.retention_user'));
+        $ignored = [];
+        $granted = [
+            'app' => $this->granted($current, 'app', $ignored) ?? [],
+            'retention' => $this->granted($current, 'retention', $ignored) ?? [],
+        ];
 
-        $plan = $this->plan($connection);
-        $views = $this->objects($connection, 'VIEW');
+        $result = [];
+        $unclassified = [];
+        $views = [];
+        foreach ($this->schemas($connection) as $db) {
+            $schema = $this->identifier($db);
+            $plan = $this->plan($connection, $db);
+            $dbViews = $this->objects($connection, 'VIEW', $db);
 
-        // GRANT/REVOKE cannot take bound parameters. Every interpolated part is either a validated identifier
-        // (identifier(), account()) or a privilege name from the constants above, so the raw SQL is safe.
-        // Views, and tables that were dropped but whose grants MySQL keeps (a re-created table would inherit them),
-        // are revoked completely.
-        $targets = array_map(fn (array $t): array => [$t['app'], $t['retention']], $plan)
-            + array_fill_keys($views, [[], []]);
-        foreach (['app', 'retention'] as $role) {
-            $ignored = [];
-            $targets += array_fill_keys(array_keys($this->granted($conn->getDatabaseName(), $role, $ignored) ?? []), [[], []]);
-        }
-        foreach ($targets as $object => [$appWanted, $retentionWanted]) {
-            $qualified = $schema.'.'.$this->identifier($object);
-            foreach ([[$app, $appWanted], [$retention, $retentionWanted]] as [$account, $wanted]) {
-                if ($wanted !== []) {
-                    $conn->unprepared('GRANT '.implode(', ', $wanted)." ON $qualified TO $account"); // @phpstan-ignore argument.type
+            // GRANT/REVOKE cannot take bound parameters. Every interpolated part is either a validated identifier
+            // (identifier(), account()) or a privilege name from the constants above, so the raw SQL is safe.
+            // Views, and tables that were dropped but whose grants MySQL keeps (a re-created table would inherit
+            // them), are revoked completely.
+            $targets = array_map(fn (array $t): array => [$t['app'], $t['retention']], $plan)
+                + array_fill_keys($dbViews, [[], []]);
+            foreach ($granted as $byDatabase) {
+                $targets += array_fill_keys(array_map('strval', array_keys($byDatabase[$db] ?? [])), [[], []]);
+            }
+            foreach ($targets as $object => [$appWanted, $retentionWanted]) {
+                $qualified = $schema.'.'.$this->identifier((string) $object);
+                foreach ([[$app, $appWanted], [$retention, $retentionWanted]] as [$account, $wanted]) {
+                    if ($wanted !== []) {
+                        $conn->unprepared('GRANT '.implode(', ', $wanted)." ON $qualified TO $account"); // @phpstan-ignore argument.type
+                    }
+                    $unwanted = array_diff(self::TABLE_PRIVILEGES, $wanted);
+                    $conn->unprepared('REVOKE IF EXISTS '.implode(', ', $unwanted)." ON $qualified FROM $account IGNORE UNKNOWN USER"); // @phpstan-ignore argument.type
                 }
-                $unwanted = array_diff(self::TABLE_PRIVILEGES, $wanted);
-                $conn->unprepared('REVOKE IF EXISTS '.implode(', ', $unwanted)." ON $qualified FROM $account IGNORE UNKNOWN USER"); // @phpstan-ignore argument.type
+            }
+
+            foreach (array_keys(array_filter($plan, fn (array $t): bool => $t['class'] === 'unclassified')) as $table) {
+                $unclassified[] = "$db.$table";
+            }
+            foreach ($dbViews as $view) {
+                $views[] = "$db.$view";
+            }
+            if ($db === $current) {
+                $result = $plan;
             }
         }
 
-        $unclassified = array_keys(array_filter($plan, fn (array $t): bool => $t['class'] === 'unclassified'));
         if ($unclassified !== [] || $views !== []) {
             throw new RuntimeException(trim(
                 ($unclassified !== [] ? 'Unclassified tables (no app access granted; add each to database.grants mutable, append_only or app_excluded): '.implode(', ', $unclassified).'. ' : '')
@@ -122,40 +142,50 @@ class TableGrants
             throw new RuntimeException('Table grants differ from the policy after applying: '.implode('; ', $problems));
         }
 
-        return $plan;
+        return $result;
     }
 
     /**
      * Compare the app and retention accounts' actual grants, read through their own connections with SHOW GRANTS,
-     * with the plan for this schema. Any extra, missing, column-level or WITH GRANT OPTION privilege on this schema
-     * is a problem; on other schemas only plain table-level DML is tolerated (those schemas are checked when their
-     * own grants are applied, and the MySQL init script removes all table grants).
+     * with the policy on every managed database (TASK-0005 #1, TASK-0006 #1). Any extra, missing, column-level or
+     * WITH GRANT OPTION privilege is a problem, and so is any grant on a database that is not managed.
      *
-     * @return list<string> problems; empty when the grants match the plan exactly
+     * @return list<string> problems; empty when the grants match the policy exactly
      */
     public function verify(string $connection = 'migrator'): array
     {
         $schema = $this->db->connection($connection)->getDatabaseName();
-        $plan = $this->plan($connection);
+        $managed = $this->schemas($connection);
+        $plans = [];
+        foreach ($managed as $db) {
+            $plans[$db] = $this->plan($connection, $db);
+        }
         $problems = [];
 
         foreach (['app', 'retention'] as $role) {
-            $have = $this->granted($schema, $role, $problems);
-            if ($have === null) {
+            $granted = $this->granted($schema, $role, $problems);
+            if ($granted === null) {
                 continue;
             }
 
-            $want = [];
-            foreach ($plan as $table => $target) {
-                if ($target[$role] !== []) {
-                    $want[$table] = $this->sorted($target[$role]);
-                }
+            foreach (array_diff(array_keys($granted), $managed) as $db) {
+                $problems[] = "$role has grants on [$db], which is not a managed database";
             }
 
-            foreach (array_keys($want + $have) as $table) {
-                if (($want[$table] ?? []) !== ($have[$table] ?? [])) {
-                    $problems[] = sprintf('%s on [%s] has %s; the policy is %s', $role, $table,
-                        implode(', ', $have[$table] ?? []) ?: 'nothing', implode(', ', $want[$table] ?? []) ?: 'nothing');
+            foreach ($plans as $db => $plan) {
+                $want = [];
+                foreach ($plan as $table => $target) {
+                    if ($target[$role] !== []) {
+                        $want[$table] = $this->sorted($target[$role]);
+                    }
+                }
+                $have = $granted[$db] ?? [];
+
+                foreach (array_keys($want + $have) as $table) {
+                    if (($want[$table] ?? []) !== ($have[$table] ?? [])) {
+                        $problems[] = sprintf('%s on [%s.%s] has %s; the policy is %s', $role, $db, $table,
+                            implode(', ', $have[$table] ?? []) ?: 'nothing', implode(', ', $want[$table] ?? []) ?: 'nothing');
+                    }
                 }
             }
         }
@@ -164,11 +194,12 @@ class TableGrants
     }
 
     /**
-     * Table => sorted privileges the account holds in $schema, from its own SHOW GRANTS; null when its connection
-     * points at another database. Lines that are not plain table-level grants are added to $problems.
+     * Database => table => sorted privileges the account holds, from its own SHOW GRANTS; null when its connection
+     * points at a database other than $schema. Every line must name the configured account (TASK-0006 #3); lines
+     * that are not plain table-level grants are added to $problems.
      *
      * @param  list<string>  $problems
-     * @return array<string, list<string>>|null
+     * @return array<string, array<string, list<string>>>|null
      */
     private function granted(string $schema, string $role, array &$problems): ?array
     {
@@ -180,33 +211,50 @@ class TableGrants
             return null;
         }
 
+        $user = (string) $this->config->get("database.grants.{$role}_user");
+        $this->account($user); // validates the name
+        $principal = ' TO `'.$user.'`@`'.$this->config->get('database.grants.host').'`';
+        $tableGrant = '/^GRANT ([A-Z, ]+) ON `((?:[^`]|``)+)`\.`((?:[^`]|``)+)`'.preg_quote($principal, '/').'$/';
+
         // Without a default database: an account with no table in this schema cannot select it (error 1044).
         $conn = $this->db->connectUsing("grants-check-$role", ['database' => ''] + $config, true);
+        try {
+            $rows = $conn->select('SHOW GRANTS');
+        } finally {
+            $this->db->purge("grants-check-$role");
+        }
 
-        $have = [];
-        foreach ($conn->select('SHOW GRANTS') as $row) {
+        $granted = [];
+        foreach ($rows as $row) {
             $line = (string) array_values((array) $row)[0];
-            if (str_starts_with($line, 'GRANT USAGE ON *.* TO ')) {
+            if ($line === 'GRANT USAGE ON *.*'.$principal) {
                 continue;
             }
-            if (! preg_match('/^GRANT ([A-Z, ]+) ON `((?:[^`]|``)+)`\.`((?:[^`]|``)+)` TO \S+$/', $line, $m)) {
+            if (! preg_match($tableGrant, $line, $m)) {
                 $problems[] = "$role has an unexpected grant: $line";
 
                 continue;
             }
-            $privileges = $this->sorted(explode(', ', $m[1]));
-            if (str_replace('``', '`', $m[2]) !== $schema) {
-                if (array_diff($privileges, self::MUTABLE) !== []) {
-                    $problems[] = "$role has an unexpected grant: $line";
-                }
-
-                continue;
-            }
-            $have[str_replace('``', '`', $m[3])] = $privileges;
+            $granted[str_replace('``', '`', $m[2])][str_replace('``', '`', $m[3])] = $this->sorted(explode(', ', $m[1]));
         }
-        $this->db->purge("grants-check-$role");
 
-        return $have;
+        return $granted;
+    }
+
+    /**
+     * Databases the migrator can see: exactly those it holds privileges on, which the MySQL init script limits to
+     * the configured ones (CAIS_DATABASES).
+     *
+     * @return list<string>
+     */
+    private function schemas(string $connection): array
+    {
+        return array_values($this->db->connection($connection)->table('information_schema.SCHEMATA')
+            ->whereNotIn('SCHEMA_NAME', ['information_schema', 'performance_schema', 'mysql', 'sys'])
+            ->orderBy('SCHEMA_NAME')
+            ->pluck('SCHEMA_NAME')
+            ->map(fn (mixed $name): string => (string) $name)
+            ->all());
     }
 
     /**
@@ -245,12 +293,12 @@ class TableGrants
     /**
      * @return list<string>
      */
-    private function objects(string $connection, string $type): array
+    private function objects(string $connection, string $type, ?string $schema = null): array
     {
         $conn = $this->db->connection($connection);
 
         return array_values($conn->table('information_schema.TABLES')
-            ->where('TABLE_SCHEMA', $conn->getDatabaseName())
+            ->where('TABLE_SCHEMA', $schema ?? $conn->getDatabaseName())
             ->where('TABLE_TYPE', $type)
             ->orderBy('TABLE_NAME')
             ->pluck('TABLE_NAME')

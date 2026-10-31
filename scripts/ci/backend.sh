@@ -18,14 +18,11 @@ LOG=$(mktemp)
 step() { CURRENT="$*"; : > "$LOG"; echo; echo "=== $*"; }
 # In GitHub Actions, report the failing step and the tail of its output as a public annotation (job logs need a
 # login to read). The output is redacted (env-file secret values, DSN passwords, key=value secrets) and the
-# runner also masks every registered secret (TASK-0005 #2).
+# runner also masks every registered secret (TASK-0005 #2). scripts/ci/redact-test.sh runs annotation_body.
 annotate() {
-  local rc=$? tail
+  local rc=$?
   if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
-    tail=$( { sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -iE 'exception|error|denied|cannot|failed|⨯' | grep -v ' at ' | head -6
-              sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -v '^\s*$' | grep -v ' at \|^phar:' | tail -6; } \
-            | redact .env .secrets/*.env | sed':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
-    echo "::error title=backend::failed at step: $CURRENT (exit $rc)%0A$tail"
+    echo "::error title=backend::failed at step: $CURRENT (exit $rc)%0A$(annotation_body "$LOG" .env .secrets/*.env)"
   fi
   rm -f "$LOG"
 }

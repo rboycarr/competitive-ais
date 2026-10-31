@@ -171,25 +171,56 @@ class DatabaseAccountsTest extends TestCase
         $migrator->unprepared("GRANT DELETE ON `migrations` TO '$app'@'%'"); // @phpstan-ignore argument.type (configured account name)
         $migrator->unprepared('GRANT UPDATE ON `'.self::APPEND_ONLY_PROBE."` TO '$app'@'%'"); // @phpstan-ignore argument.type (constant table, configured account)
 
+        $db = $migrator->getDatabaseName();
         $problems = implode("\n", $tables->verify());
-        $this->assertStringContainsString('app on [migrations] has DELETE; the policy is nothing', $problems);
-        $this->assertStringContainsString('app on ['.self::APPEND_ONLY_PROBE.'] has INSERT, SELECT, UPDATE; the policy is INSERT, SELECT', $problems);
+        $this->assertStringContainsString("app on [$db.migrations] has DELETE; the policy is nothing", $problems);
+        $this->assertStringContainsString("app on [$db.".self::APPEND_ONLY_PROBE.'] has INSERT, SELECT, UPDATE; the policy is INSERT, SELECT', $problems);
 
         $tables->apply(); // restores the policy, and would throw if it could not
         $this->assertSame([], $tables->verify());
     }
 
+    public function test_grants_on_the_other_managed_database_are_checked_too(): void
+    {
+        $migrator = DB::connection('migrator');
+        $other = $migrator->table('information_schema.SCHEMATA')
+            ->whereNotIn('SCHEMA_NAME', ['information_schema', 'performance_schema', 'mysql', 'sys', $migrator->getDatabaseName()])
+            ->value('SCHEMA_NAME');
+        $this->assertIsString($other, 'Expected the main database next to the test database.');
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9_]+$/', $other);
+
+        // A probe table there (an unclassified table must have no access), removed again with its grant.
+        $app = config('database.grants.app_user');
+        $table = "`$other`.`zz_probe_elsewhere`";
+        $migrator->statement("create table $table (id int primary key)");
+
+        try {
+            $migrator->unprepared("GRANT SELECT ON $table TO '$app'@'%'"); // @phpstan-ignore argument.type (validated name, configured account)
+            $problems = implode("\n", $this->app->make(TableGrants::class)->verify());
+            $this->assertStringContainsString("app on [$other.zz_probe_elsewhere] has SELECT; the policy is nothing", $problems);
+        } finally {
+            $migrator->unprepared("REVOKE IF EXISTS SELECT ON $table FROM '$app'@'%'"); // @phpstan-ignore argument.type
+            $migrator->statement("drop table if exists $table");
+        }
+    }
+
     public function test_grants_on_a_dropped_table_are_removed_before_it_can_be_recreated(): void
     {
         $migrator = DB::connection('migrator');
-        $migrator->statement('drop table `'.self::MUTABLE_PROBE.'`'); // MySQL keeps its grants
-        $this->assertStringContainsString('app on ['.self::MUTABLE_PROBE.'] has DELETE, INSERT, SELECT, UPDATE; the policy is nothing',
-            implode("\n", $this->app->make(TableGrants::class)->verify()));
+        $db = $migrator->getDatabaseName();
+        $migrator->statement('drop table `'.self::APPEND_ONLY_PROBE.'`'); // MySQL keeps the grants of both accounts
+        $problems = implode("\n", $this->app->make(TableGrants::class)->verify());
+        $this->assertStringContainsString("app on [$db.".self::APPEND_ONLY_PROBE.'] has INSERT, SELECT; the policy is nothing', $problems);
+        $this->assertStringContainsString("retention on [$db.".self::APPEND_ONLY_PROBE.'] has DELETE, SELECT; the policy is nothing', $problems);
 
         $this->app->make(TableGrants::class)->apply();
 
-        $migrator->statement('create table `'.self::MUTABLE_PROBE.'` (id bigint unsigned primary key)');
-        $this->assertDenied(fn () => DB::table(self::MUTABLE_PROBE)->count());
+        // Re-created: neither account inherited anything; access comes only from the next apply().
+        $migrator->statement('create table `'.self::APPEND_ONLY_PROBE.'` (id bigint unsigned primary key)');
+        $this->assertDenied(fn () => DB::table(self::APPEND_ONLY_PROBE)->count());
+        $problems = implode("\n", $this->app->make(TableGrants::class)->verify());
+        $this->assertStringContainsString("app on [$db.".self::APPEND_ONLY_PROBE.'] has nothing; the policy is INSERT, SELECT', $problems);
+        $this->assertStringContainsString("retention on [$db.".self::APPEND_ONLY_PROBE.'] has nothing; the policy is DELETE, SELECT', $problems);
     }
 
     public function test_unclassified_table_gets_no_access_and_fails_the_grant_run(): void
