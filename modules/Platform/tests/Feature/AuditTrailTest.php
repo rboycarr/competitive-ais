@@ -41,7 +41,7 @@ class AuditTrailTest extends TestCase
         parent::setUp();
 
         $actions = $this->app->make(AuditActions::class);
-        $actions->define('probe.recorded', ['note', 'items']);
+        $actions->define('probe.recorded', ['note' => 'text', 'items' => 'code[]', 'count' => 'int', 'asset' => 'ulid']);
         $actions->define('probe.http');
     }
 
@@ -54,7 +54,8 @@ class AuditTrailTest extends TestCase
 
     public function test_one_hashed_row_is_written_in_the_callers_transaction(): void
     {
-        $ulid = DB::transaction(fn () => $this->logger()->record('probe.recorded', null, ['note' => 'é/ü', 'items' => [1, 'two', true, null]]));
+        $context = ['note' => 'Geprüft — «ok» / 確認', 'items' => ['two', 'three.v2'], 'count' => PHP_INT_MAX, 'asset' => (string) Str::ulid()];
+        $ulid = DB::transaction(fn () => $this->logger()->record('probe.recorded', null, $context));
 
         $row = (array) DB::table('audit_events')->where('ulid', $ulid)->sole();
         $this->assertSame('system', $row['actor_type']);
@@ -89,9 +90,13 @@ class AuditTrailTest extends TestCase
             ['probe.undefined', []],
             ['probe.recorded', ['other' => 'x']],
             ['probe.recorded', ['note' => 1.5]],
-            ['probe.recorded', ['note' => ['nested' => 'map']]],
+            ['probe.recorded', ['note' => ['a list']]],
+            ['probe.recorded', ['note' => str_repeat('x ', 251)]],
+            ['probe.recorded', ['items' => 'not-a-list']],
             ['probe.recorded', ['items' => [['deep']]]],
-            ['probe.recorded', ['note' => str_repeat('x', 2001)]],
+            ['probe.recorded', ['items' => ['Not A Code']]],
+            ['probe.recorded', ['count' => '1']],
+            ['probe.recorded', ['asset' => 'not-a-ulid']],
         ];
         foreach ($cases as [$action, $context]) {
             try {
@@ -104,16 +109,55 @@ class AuditTrailTest extends TestCase
         $this->assertSame(0, DB::table('audit_events')->count());
     }
 
-    public function test_secret_like_context_keys_cannot_be_defined(): void
+    public function test_credential_shaped_text_is_refused_under_an_innocent_key(): void
     {
-        foreach (['password', 'api_token', 'secret_answer', 'prompt', 'session_cookie', 'signing_key'] as $key) {
+        // Synthetic, low-entropy shapes (TASK-0010 #1).
+        $values = [
+            'reason: password=hunter2',
+            'ghp_aaaaaaaaaaaaaaaa1',
+            'header Bearer aaaaaaaaaaaa',
+            'sk-aaaaaaaaaaaaaaaa',
+            '-----BEGIN OPENSSH PRIVATE KEY-----',
+            'blob '.str_repeat('a', 40),
+        ];
+        foreach ($values as $value) {
             try {
-                $this->app->make(AuditActions::class)->define('probe.secrets', [$key]);
+                DB::transaction(fn () => $this->logger()->record('probe.recorded', null, ['note' => $value]));
+                $this->fail("Expected [$value] to be refused.");
+            } catch (InvalidArgumentException) {
+            }
+        }
+
+        DB::transaction(fn () => $this->logger()->record('probe.recorded', null, ['note' => 'Approved after a second review.']));
+        $this->assertSame(1, DB::table('audit_events')->count());
+    }
+
+    public function test_the_transaction_must_be_on_the_loggers_connection(): void
+    {
+        try {
+            DB::connection('migrator')->transaction(fn () => $this->logger()->record('probe.recorded'));
+            $this->fail('Expected a transaction on another connection not to count.');
+        } catch (LogicException $e) {
+            $this->assertStringContainsString('[mysql]', $e->getMessage());
+        }
+
+        DB::connection('migrator')->transaction(fn () => $this->logger()->on('migrator')->record('probe.recorded'));
+        $this->assertSame(1, DB::table('audit_events')->count());
+    }
+
+    public function test_secret_like_context_keys_and_unknown_types_cannot_be_defined(): void
+    {
+        foreach (['password' => 'text', 'api_token' => 'code', 'secret_answer' => 'text', 'prompt' => 'text', 'session_cookie' => 'text', 'signing_key' => 'ulid'] as $key => $type) {
+            try {
+                $this->app->make(AuditActions::class)->define('probe.secrets', [$key => $type]);
                 $this->fail("Expected context key [$key] to be refused.");
             } catch (InvalidArgumentException $e) {
                 $this->assertStringContainsString('never stored', $e->getMessage());
             }
         }
+
+        $this->expectExceptionMessage('Unknown type [string]');
+        $this->app->make(AuditActions::class)->define('probe.untyped', ['note' => 'string']);
     }
 
     public function test_user_actor_subject_and_classification_are_recorded(): void

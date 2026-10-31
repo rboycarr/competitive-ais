@@ -100,7 +100,7 @@
 
 | ID | Story | Acceptance criteria | Size |
 |---|---|---|---|
-| P1-50 | As an auditor, audit tampering is detectable even by someone with DB access | Lag-windowed checkpoints; Ed25519-signed manifests exported to the audit-anchor bucket; verification against exported manifests; `late_commit` handling; key-rotation runbook | M |
+| P1-50 | As an auditor, audit tampering is detectable even by someone with DB access | Lag-windowed checkpoints; Ed25519-signed manifests exported to the audit-anchor bucket; verification against exported manifests; `late_commit` handling (supplementary checkpoints); business-transaction duration capped below the lag window and monitored, with an alert (TASK-0010 #4); key-rotation runbook | M |
 | P1-51 | As an operator, I can restore the whole system | Restore drill covering MySQL, DB grants, MinIO versions and object-lock metadata, evidence hash sample; result logged | M |
 | P1-46 | As any user, I see a dashboard of what I am allowed to see | Tiles per `docs/03`; definitions in tooltips; visibility-filtered | M |
 | P1-24 | (stretch) As a user, I can quickly find a competitor or product | Header quick search (MySQL FULLTEXT, visibility-filtered); moves to Phase 2 search if time is short | S |
