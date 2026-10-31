@@ -25,8 +25,8 @@ jobs:
           persist-credentials: false
       - name: Environment files (random throwaway secrets)
         run: bash scripts/dev/init-env.sh
-      - name: Build PHP image
-        run: DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose build php
+      - name: Build PHP image (runs as the runner's uid, from DEV_UID in .env)
+        run: docker compose build php
       - name: Start MySQL (runs the account init script on a fresh volume)
         run: docker compose up -d --wait mysql
       - name: Composer install
@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
       - name: Environment files
         run: bash scripts/dev/init-env.sh
-      - name: Build Node image
+      - name: Build Node image (runs as the runner's uid, from DEV_UID in .env)
         run: docker compose build node
       - name: npm ci
         run: docker compose run --rm --no-deps -T node npm ci

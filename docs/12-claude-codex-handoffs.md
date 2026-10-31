@@ -35,6 +35,7 @@ AI approval never replaces human approval.
 |---|---|---|---|---|---|---|
 | TASK-0001 | Phase 0 architecture and docs review | Claude Code | Reviewer (gpt-5.6-luna, read-only; invoked by Claude at the PO's request, 2026-10-31) | n/a (repo not yet in git) | **Reviewed; 13 accepted, 1 partially accepted; docs amended** | `handoffs/TASK-0001-review.md` |
 | TASK-0002 | Follow-up review of the TASK-0001 amendments | Claude Code | Reviewer | n/a | Proposed (not yet created) | — |
+| TASK-0003 | **Retrospective** review: DB grants (P1-09), object-store keys, CI | Claude Code | Reviewer (read-only) | `main` @ `8fdba15` | Brief ready; P1-09 was merged without the mandatory review (missed by Claude Code, flagged 2026-10-31); G1 not signed off until done | `handoffs/TASK-0003-review.md` (pending) |
 
 ## 4. Decision and disagreement log
 

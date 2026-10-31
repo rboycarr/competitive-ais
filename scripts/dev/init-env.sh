@@ -33,5 +33,6 @@ for f in .env .env.services; do
   chmod 600 "$f"
   add_missing_keys "$f"
 done
+sed -i "s/^DEV_UID=$/DEV_UID=$(id -u)/; s/^DEV_GID=$/DEV_GID=$(id -g)/" .env
 fill_secrets .env DB_PASSWORD DB_MIGRATOR_PASSWORD DB_RETENTION_PASSWORD REDIS_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 fill_secrets .env.services MYSQL_ROOT_PASSWORD DB_READONLY_PASSWORD S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY

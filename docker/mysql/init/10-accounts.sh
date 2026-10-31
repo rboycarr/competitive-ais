@@ -5,6 +5,14 @@
 #
 # Schema- and global-level privileges are set here. Table-level privileges for the app and retention accounts
 # are owned by `php artisan db:apply-grants`, which runs after every migration; this script never touches them.
+
+# The MySQL entrypoint *sources* init scripts that lack the executable bit. Run as a separate process in that
+# case, so this script's shell options and exits cannot break the entrypoint (a failure still fails the init).
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  bash "${BASH_SOURCE[0]}"
+  return $?
+fi
+
 set -euo pipefail
 
 : "${MYSQL_ROOT_PASSWORD:?}" "${CAIS_DATABASES:?}"

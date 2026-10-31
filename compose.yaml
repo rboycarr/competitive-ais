@@ -66,15 +66,22 @@ services:
   node:
     build:
       context: .
+      args:
+        UID: ${DEV_UID:-1000}
+        GID: ${DEV_GID:-1000}
       dockerfile_inline: |
         FROM node:24.22.2-alpine
-        RUN mkdir -p /app/node_modules && chown node:node /app/node_modules
-        USER node
+        ARG UID
+        ARG GID
+        RUN mkdir -p /app/node_modules && chown "$${UID}:$${GID}" /app/node_modules
         WORKDIR /app
     image: competitive-ais/node:dev
+    # Same uid as the owner of the checkout (like the php image), so .env (mode 600) is readable.
+    user: "${DEV_UID:-1000}:${DEV_GID:-1000}"
     command: ["npm", "run", "dev"]
     environment:
       VITE_POLL: "1"
+      HOME: /tmp
     ports: ["127.0.0.1:5173:5173"]
     volumes:
       - .:/app
