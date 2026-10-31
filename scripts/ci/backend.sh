@@ -53,6 +53,7 @@ echo "ok: schema commands refused; no secret files or variables in runtime conta
 
 step "init-env scenarios";          bash scripts/ci/init-env-test.sh
 step "Annotation redaction";        bash scripts/ci/redact-test.sh
+step "nginx fallback security headers"; bash scripts/ci/nginx-headers-test.sh
 step "Account hardening (seeded privileges are removed)"; bash scripts/ci/accounts-test.sh
 
 step "Migrations: migrate -> rollback all -> migrate (test database)"

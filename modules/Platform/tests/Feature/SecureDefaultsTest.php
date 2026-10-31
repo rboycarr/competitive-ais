@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\Str;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Http\PublicHttpException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -29,7 +30,11 @@ class SecureDefaultsTest extends TestCase
         Vite::useHotFile(storage_path('framework/testing/no-vite-dev-server')); // deterministic: no dev server
         Route::get('/_test/nonce', fn () => Vite::cspNonce());
         Route::get('/api/v1/_test/boom', fn () => throw new RuntimeException('db password=hunter2 in SELECT * FROM users'));
-        Route::get('/api/v1/_test/gone', fn () => abort(410, 'This resource was withdrawn.'));
+        Route::get('/api/v1/_test/gone', fn () => throw new PublicHttpException(410, 'This resource was withdrawn.'));
+        Route::get('/api/v1/_test/leaky/{status}', fn (int $status) => abort($status, 'db password=hunter2 /var/www/html/app.php SELECT * FROM users'));
+        Route::get('/_test/json-page', fn () => abort(403, 'internal reason'));
+        Route::get('/api/v1/_test/in-middleware', fn () => 'unreachable')
+            ->middleware(ThrowingProbeMiddleware::class);
         Route::get('/api/v1/_test/throttled', fn () => throw new ThrottleRequestsException('Too Many Attempts.', null, ['Retry-After' => 30]));
         Route::post('/api/v1/_test/validate', fn (Request $request) => $request->validate(['name' => 'required|string']));
     }
@@ -137,7 +142,39 @@ class SecureDefaultsTest extends TestCase
         ], $response->json());
 
         $this->get('/api/v1/_test/no-such-route')->assertStatus(404)->assertHeader('Content-Type', 'application/problem+json')
-            ->assertJsonPath('title', 'Not Found');
+            ->assertJsonPath('title', 'Not Found')
+            ->assertJsonPath('detail', 'The requested resource was not found.');
+    }
+
+    public function test_client_errors_never_echo_exception_messages(): void
+    {
+        foreach ([400, 403, 404, 405, 409, 418] as $status) {
+            $response = $this->get("/api/v1/_test/leaky/$status");
+
+            $response->assertStatus($status)->assertHeader('Content-Type', 'application/problem+json');
+            foreach (['hunter2', '/var/www', 'SELECT'] as $secret) {
+                $this->assertStringNotContainsString($secret, (string) $response->getContent(), "Status $status");
+            }
+            $this->assertNotEmpty($response->json('detail'));
+        }
+    }
+
+    public function test_json_requests_to_web_routes_get_problem_json(): void
+    {
+        $this->getJson('/_test/json-page')
+            ->assertStatus(403)
+            ->assertHeader('Content-Type', 'application/problem+json')
+            ->assertJsonPath('detail', 'You are not allowed to do this.');
+    }
+
+    public function test_errors_thrown_inside_middleware_get_the_headers_and_the_request_id(): void
+    {
+        $response = $this->get('/api/v1/_test/in-middleware');
+
+        $response->assertStatus(500)->assertHeader('Content-Type', 'application/problem+json')->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->assertTrue(Str::isUlid((string) $response->headers->get('X-Request-Id')));
+        $this->assertSame($response->headers->get('X-Request-Id'), $response->json('request_id'));
+        $this->assertStringNotContainsString('thrown inside', (string) $response->getContent());
     }
 
     public function test_validation_errors_list_the_fields(): void
@@ -176,5 +213,14 @@ class SecureDefaultsTest extends TestCase
         foreach (['mysql', 'migrator', 'retention'] as $connection) {
             $this->assertSame('+00:00', DB::connection($connection)->scalar('select @@session.time_zone'), $connection);
         }
+    }
+}
+
+/** A route middleware that fails before the route runs. */
+final class ThrowingProbeMiddleware
+{
+    public function handle(Request $request, \Closure $next): never
+    {
+        throw new RuntimeException('thrown inside a middleware');
     }
 }
