@@ -33,6 +33,20 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MAIN\`.zz_probe_t TO '$APP'@'%';
 GRANT DELETE ON \`$MAIN\`.zz_probe_t TO '$RET'@'%';
 SQL
 
+# db:apply-grants on the test database, with only that database managed, must reject the grants on the main
+# database and leave them unchanged (TASK-0006 #1, TASK-0008 #1).
+echo "=== Grants on an unmanaged database are rejected and left alone"
+TEST=$(val .env DB_TEST_DATABASE); TEST=${TEST:-cais_test}
+if out=$(docker compose run --rm --no-deps -T -e DB_DATABASE="$TEST" -e DB_GRANT_DATABASES="$TEST" \
+           migrator php artisan db:apply-grants 2>&1); then
+  echo "db:apply-grants accepted grants on an unmanaged database" >&2; exit 1
+fi
+grep -qF "app has grants on [$MAIN], which is not a managed database" <<<"$out" \
+  || { echo "Unexpected db:apply-grants failure: $out" >&2; exit 1; }
+echo "SHOW GRANTS FOR '$APP'@'%';" | root | grep -qF "ON \`$MAIN\`.\`zz_probe_t\`" \
+  || { echo "db:apply-grants changed grants on an unmanaged database" >&2; exit 1; }
+echo "ok: rejected, and the main database's grants were not changed"
+
 echo "=== Rerunning the account init script"
 docker compose exec -T mysql bash /docker-entrypoint-initdb.d/10-accounts.sh
 

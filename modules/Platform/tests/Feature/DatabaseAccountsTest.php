@@ -180,53 +180,18 @@ class DatabaseAccountsTest extends TestCase
         $this->assertSame([], $tables->verify());
     }
 
-    public function test_grants_on_the_other_managed_database_are_checked_too(): void
+    public function test_grants_are_only_applied_to_a_listed_database(): void
     {
-        $migrator = DB::connection('migrator');
-        $other = $this->otherManagedDatabase();
-
-        // A probe table there (an unclassified table must have no access), removed again with its grant.
-        $app = config('database.grants.app_user');
-        $table = "`$other`.`zz_probe_elsewhere`";
-        $migrator->statement("create table $table (id int primary key)");
-
-        try {
-            $migrator->unprepared("GRANT SELECT ON $table TO '$app'@'%'"); // @phpstan-ignore argument.type (validated name, configured account)
-            $problems = implode("\n", $this->app->make(TableGrants::class)->verify());
-            $this->assertStringContainsString("app on [$other.zz_probe_elsewhere] has SELECT; the policy is nothing", $problems);
-        } finally {
-            $migrator->unprepared("REVOKE IF EXISTS SELECT ON $table FROM '$app'@'%'"); // @phpstan-ignore argument.type
-            $migrator->statement("drop table if exists $table");
-        }
-    }
-
-    public function test_a_database_outside_the_managed_list_is_never_changed(): void
-    {
-        $migrator = DB::connection('migrator');
-        $other = $this->otherManagedDatabase();
         $databases = config('database.grants.databases');
-        $app = config('database.grants.app_user');
-        $table = "`$other`.`zz_probe_unmanaged`";
-        $migrator->statement("create table $table (id int primary key)");
+        config()->set('database.grants.databases', ['zz_some_other_database']);
 
         try {
-            $migrator->unprepared("GRANT SELECT, UPDATE ON $table TO '$app'@'%'"); // @phpstan-ignore argument.type (validated name, configured account)
-            config()->set('database.grants.databases', [$migrator->getDatabaseName()]);
-
-            try {
-                $this->app->make(TableGrants::class)->apply();
-                $this->fail('Expected grants on an unmanaged database to fail verification.');
-            } catch (RuntimeException $e) {
-                $this->assertStringContainsString("app has grants on [$other], which is not a managed database", $e->getMessage());
-            }
-
-            // apply() did not revoke them: the unmanaged database is left alone.
-            $grants = array_map(fn (object $row): string => array_values((array) $row)[0], DB::select('show grants'));
-            $this->assertContains("GRANT SELECT, UPDATE ON `$other`.`zz_probe_unmanaged` TO `$app`@`%`", $grants);
+            $this->app->make(TableGrants::class)->apply();
+            $this->fail('Expected apply() to refuse a database outside database.grants.databases.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('is not in database.grants.databases', $e->getMessage());
         } finally {
             config()->set('database.grants.databases', $databases); // teardown migrations re-apply grants
-            $migrator->unprepared("REVOKE IF EXISTS SELECT, UPDATE ON $table FROM '$app'@'%'"); // @phpstan-ignore argument.type
-            $migrator->statement("drop table if exists $table");
         }
     }
 
@@ -341,17 +306,6 @@ class DatabaseAccountsTest extends TestCase
         } finally {
             config()->set('database.connections.migrator', $migrator);
         }
-    }
-
-    /** The main database, managed next to the test database. */
-    private function otherManagedDatabase(): string
-    {
-        $current = DB::connection('migrator')->getDatabaseName();
-        $other = collect((array) config('database.grants.databases'))->first(fn (mixed $db): bool => $db !== $current);
-        $this->assertIsString($other, 'Expected the main database in database.grants.databases next to the test database.');
-        $this->assertMatchesRegularExpression('/^[A-Za-z0-9_]+$/', $other);
-
-        return $other;
     }
 
     private function assertDenied(callable $query): void
