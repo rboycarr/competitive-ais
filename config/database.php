@@ -17,7 +17,7 @@ return [
     |
     */
 
-    'default' => env('DB_CONNECTION', 'sqlite'),
+    'default' => env('DB_CONNECTION', 'mysql'),
 
     /*
     |--------------------------------------------------------------------------
@@ -44,17 +44,58 @@ return [
             'transaction_mode' => 'DEFERRED',
         ],
 
+        // Application account (least privilege, docs/02 §6).
         'mysql' => [
             'driver' => 'mysql',
             'url' => env('DB_URL'),
             'host' => env('DB_HOST', '127.0.0.1'),
             'port' => env('DB_PORT', '3306'),
-            'database' => env('DB_DATABASE', 'laravel'),
-            'username' => env('DB_USERNAME', 'root'),
+            'database' => env('DB_DATABASE', 'cais'),
+            'username' => env('DB_USERNAME', 'cais_app'),
             'password' => env('DB_PASSWORD', ''),
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
-            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
+        // Schema changes only. Migration commands switch to it automatically (AppServiceProvider).
+        'migrator' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => env('DB_DATABASE', 'cais'),
+            'username' => env('DB_MIGRATOR_USERNAME', 'cais_migrator'),
+            'password' => env('DB_MIGRATOR_PASSWORD', ''),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
+        // Scheduled retention job only: SELECT, DELETE on the tables listed in grants.retention_tables.
+        'retention' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => env('DB_DATABASE', 'cais'),
+            'username' => env('DB_RETENTION_USERNAME', 'cais_retention'),
+            'password' => env('DB_RETENTION_PASSWORD', ''),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
@@ -130,6 +171,43 @@ return [
     'migrations' => [
         'table' => 'migrations',
         'update_date_on_publish' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Table Grants (P1-09, docs/02 §6, ADR-0006)
+    |--------------------------------------------------------------------------
+    |
+    | Applied by `php artisan db:apply-grants`, which also runs after every
+    | migration. Every base table gets SELECT, INSERT, UPDATE, DELETE for the
+    | app account unless it is listed below. Append-only tables get SELECT and
+    | INSERT only. Tables may be listed before they exist.
+    |
+    */
+
+    'grants' => [
+        'host' => '%',
+        'app_user' => env('DB_USERNAME', 'cais_app'),
+        'retention_user' => env('DB_RETENTION_USERNAME', 'cais_retention'),
+
+        // No access for the app account.
+        'app_excluded' => [
+            'migrations',
+        ],
+
+        'append_only' => [
+            'audit_events',
+            'audit_event_network',
+            'audit_checkpoints',
+            'evidence_custody_events',
+            'source_policies',
+            'verification_reviews',
+        ],
+
+        // The retention account gets exactly these privileges and nothing else.
+        'retention_tables' => [
+            'audit_event_network' => ['SELECT', 'DELETE'],
+        ],
     ],
 
     /*

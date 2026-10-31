@@ -18,12 +18,25 @@ fill_secrets() {
   done
 }
 
+# Append keys that exist in the example but not yet in the env file (new settings after a pull).
+add_missing_keys() {
+  local file=$1 line
+  while IFS= read -r line; do
+    [[ $line =~ ^([A-Z0-9_]+)= ]] || continue
+    if ! grep -q "^${BASH_REMATCH[1]}=" "$file"; then
+      printf '%s\n' "$line" >> "$file"
+      echo "  ${file}: added ${BASH_REMATCH[1]}"
+    fi
+  done < "$file.example"
+}
+
 for f in .env .env.services; do
   if [ ! -f "$f" ]; then cp "$f.example" "$f"; echo "Created $f from $f.example"; fi
   chmod 600 "$f"
+  add_missing_keys "$f"
 done
-fill_secrets .env DB_PASSWORD REDIS_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-fill_secrets .env.services MYSQL_ROOT_PASSWORD S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY
+fill_secrets .env DB_PASSWORD DB_MIGRATOR_PASSWORD DB_RETENTION_PASSWORD REDIS_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+fill_secrets .env.services MYSQL_ROOT_PASSWORD DB_READONLY_PASSWORD S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY
 
 echo "Building images"
 DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose build
@@ -39,7 +52,11 @@ fi
 echo "Starting the stack (the first ClamAV start downloads signatures and can take several minutes)"
 docker compose up -d --wait --wait-timeout 1200
 
+# Accounts and schema privileges (also runs on first volume init; repeated here for existing volumes),
+# then migrations as the migrator, which re-apply table grants. Workers restart to pick up credentials.
+docker compose exec -T mysql bash /docker-entrypoint-initdb.d/10-accounts.sh
 docker compose exec php php artisan migrate --no-interaction
+docker compose restart horizon scheduler >/dev/null
 
 cat <<'EOF'
 

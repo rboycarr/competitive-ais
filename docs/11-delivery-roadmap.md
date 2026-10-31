@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; O17 decided (SeaweedFS); P1-02 done 2026-10-31. |
+| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; O17 decided (SeaweedFS); P1-02 and P1-09 done 2026-10-31. |
 | Owner | Product Owner (priorities, approvals); Claude Code (backlog maintenance) |
 | Related | `skills/10_ROADMAP_SKILLS.md`, `competitive-ais.md` §14, §17 |
 
@@ -45,7 +45,7 @@
 | P1-06 | As the platform, domain events reach consumers reliably | `outbox_events`, `OutboxPublisher`, `RelayOutboxJob` with idempotent handler test | S | P1-04 |
 | P1-07 | As a developer, CI blocks bad merges | Pipeline: Pint, Larastan, Pest (MySQL 8.4), migrate/rollback, Vitest, build, audits, gitleaks | M | P1-03, O1 |
 | P1-08 | As a user, the app has secure defaults | Security-headers middleware (CSP nonce), problem+json errors, request IDs, UTC config | S | P1-04 |
-| P1-09 | As the platform, every DB connection runs with least privilege (TASK-0001 #14) | `cais_migrator`, `cais_app`, `cais_readonly`, `cais_retention` created by an init script (local, CI, staging); `db:apply-grants` command; feature tests connect as `cais_app`; tests prove UPDATE/DELETE fail on append-only tables and that every required INSERT succeeds; documented rollback | M | P1-02 |
+| P1-09 | As the platform, every DB connection runs with least privilege (TASK-0001 #14) | `cais_migrator`, `cais_app`, `cais_readonly`, `cais_retention` created by an init script (local, CI, staging); `db:apply-grants` command; feature tests connect as `cais_app`; tests prove UPDATE/DELETE fail on append-only tables and that every required INSERT succeeds; documented rollback | M | P1-02 (**done** 2026-10-31: accounts by init script; `db:apply-grants` + automatic run after migrations; 11 grant tests as `cais_app`/`cais_retention` on MySQL 8.4; rollback in `docs/02` §6) |
 
 ### Sprint 1.1 — Identity and access
 

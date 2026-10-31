@@ -98,11 +98,19 @@ services:
     env_file: [.env.services]
     environment:
       MYSQL_DATABASE: ${DB_DATABASE}
-      # Interim single account until P1-09 creates cais_migrator / cais_app / cais_readonly / cais_retention.
-      MYSQL_USER: ${DB_USERNAME}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
+      # Least-privilege accounts (P1-09): created by docker/mysql/init/10-accounts.sh.
+      CAIS_DATABASES: "${DB_DATABASE} ${DB_TEST_DATABASE:-cais_test}"
+      CAIS_MIGRATOR_USER: ${DB_MIGRATOR_USERNAME}
+      CAIS_MIGRATOR_PASSWORD: ${DB_MIGRATOR_PASSWORD}
+      CAIS_APP_USER: ${DB_USERNAME}
+      CAIS_APP_PASSWORD: ${DB_PASSWORD}
+      CAIS_RETENTION_USER: ${DB_RETENTION_USERNAME}
+      CAIS_RETENTION_PASSWORD: ${DB_RETENTION_PASSWORD}
+      CAIS_READONLY_USER: cais_readonly
     ports: ["127.0.0.1:3307:3306"]
-    volumes: [mysql-data:/var/lib/mysql]
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
     networks: [data]
     restart: unless-stopped
     healthcheck:
