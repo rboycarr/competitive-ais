@@ -3,7 +3,8 @@
 #   bash scripts/ci/frontend.sh
 # Needs: built node image and `npm ci`. The production build goes to a temporary directory, not public/build.
 set -euo pipefail
-cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)   # set -e stops here if git cannot read the repo
+cd "$ROOT"
 
 node() { docker compose run --rm --no-deps -T node "$@"; }
 step() { echo; echo "=== $*"; }

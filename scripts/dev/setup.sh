@@ -3,7 +3,8 @@
 # Run inside WSL from anywhere in the repo:  bash scripts/dev/setup.sh
 # Idempotent: existing .env values, volumes, and data are kept. Secrets are generated locally and never printed.
 set -euo pipefail
-cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)   # set -e stops here if git cannot read the repo
+cd "$ROOT"
 
 command -v docker >/dev/null || { echo "Docker is not available in this shell (docs/10 §1.1)." >&2; exit 1; }
 

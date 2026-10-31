@@ -66,7 +66,7 @@ return [
         ],
 
         // Schema changes only (TASK-0003 #1). Defined only where the migrator credentials are present, i.e. in
-        // the `migrator` compose service (env file .env.migrator). Web, Horizon and scheduler containers never
+        // the `migrator` compose service (env file .secrets/migrator.env). Web, Horizon and scheduler containers never
         // get them, so resolving this connection there fails. Schema commands switch to it automatically
         // (Modules\Platform\PlatformServiceProvider).
         ...(env('DB_MIGRATOR_PASSWORD') ? ['migrator' => [
