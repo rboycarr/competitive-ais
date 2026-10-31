@@ -12,6 +12,7 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 use LogicException;
 use Modules\Platform\Classification;
+use Modules\Platform\Support\TypedFields;
 
 /**
  * Writes one append-only, hashed audit row per sensitive action (P1-05, ADR-0006, docs/03 Platform).
@@ -22,22 +23,6 @@ use Modules\Platform\Classification;
  */
 class AuditLogger
 {
-    private const MAX_TEXT = 500;
-
-    private const MAX_LIST = 100;
-
-    /**
-     * Credential shapes refused in `text` values (TASK-0010 #1). A safety net only: callers must not pass user input,
-     * prompts or document content as audit context in the first place.
-     */
-    private const CREDENTIAL_SHAPES = [
-        '/-----BEGIN [A-Z ]*PRIVATE KEY-----/',
-        '/\b(?:gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|ASIA|AIza)[A-Za-z0-9_\-]{8,}/',
-        '/\bBearer\s+\S{8,}/i',
-        '/\b(?:password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]/i',
-        '/[A-Za-z0-9+\/_\-]{32,}={0,2}/',
-    ];
-
     private ?string $connectionName = null;
 
     public function __construct(
@@ -113,47 +98,7 @@ class AuditLogger
      */
     private function validContext(string $action, array $context): ?array
     {
-        $types = $this->actions->context($action);
-        foreach ($context as $key => $value) {
-            $type = $types[$key] ?? throw new InvalidArgumentException("Context key [$key] is not allowed for audit action [$action].");
-            $isList = str_ends_with($type, '[]');
-            if ($isList && (! is_array($value) || ! array_is_list($value) || count($value) > self::MAX_LIST)) {
-                throw new InvalidArgumentException("Context value [$key] for [$action] must be a list of at most ".self::MAX_LIST." $type values.");
-            }
-            foreach ($isList ? $value : [$value] as $item) {
-                // Typed scalars only (no floats or nested structures): the hash must survive MySQL's JSON round trip.
-                if (! $this->hasType($item, rtrim($type, '[]'))) {
-                    throw new InvalidArgumentException("Context value [$key] for [$action] is not a valid $type.");
-                }
-            }
-        }
-
-        return $context === [] ? null : $context;
-    }
-
-    private function hasType(mixed $value, string $type): bool
-    {
-        return match ($type) {
-            'ulid' => is_string($value) && Str::isUlid($value),
-            'sha256' => is_string($value) && preg_match('/^[0-9a-f]{64}$/', $value) === 1,
-            'id' => is_int($value) && $value > 0,
-            'int' => is_int($value),
-            'bool' => is_bool($value),
-            'code' => is_string($value) && preg_match('/^[a-z0-9][a-z0-9_.\-]{0,63}$/', $value) === 1,
-            'text' => is_string($value) && mb_strlen($value) <= self::MAX_TEXT && ! $this->looksLikeCredential($value),
-            default => false,
-        };
-    }
-
-    private function looksLikeCredential(string $value): bool
-    {
-        foreach (self::CREDENTIAL_SHAPES as $pattern) {
-            if (preg_match($pattern, $value) === 1) {
-                return true;
-            }
-        }
-
-        return false;
+        return TypedFields::validate("audit action [$action]", $this->actions->context($action), $context);
     }
 
     private function currentActor(): Actor
