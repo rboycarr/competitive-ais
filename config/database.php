@@ -65,14 +65,17 @@ return [
             ]) : [],
         ],
 
-        // Schema changes only. Migration commands switch to it automatically (AppServiceProvider).
-        'migrator' => [
+        // Schema changes only (TASK-0003 #1). Defined only where the migrator credentials are present, i.e. in
+        // the `migrator` compose service (env file .env.migrator). Web, Horizon and scheduler containers never
+        // get them, so resolving this connection there fails. Schema commands switch to it automatically
+        // (Modules\Platform\PlatformServiceProvider).
+        ...(env('DB_MIGRATOR_PASSWORD') ? ['migrator' => [
             'driver' => 'mysql',
             'host' => env('DB_HOST', '127.0.0.1'),
             'port' => env('DB_PORT', '3306'),
             'database' => env('DB_DATABASE', 'cais'),
             'username' => env('DB_MIGRATOR_USERNAME', 'cais_migrator'),
-            'password' => env('DB_MIGRATOR_PASSWORD', ''),
+            'password' => env('DB_MIGRATOR_PASSWORD'),
             'unix_socket' => env('DB_SOCKET', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'collation' => env('DB_COLLATION', 'utf8mb4_0900_ai_ci'),
@@ -83,9 +86,10 @@ return [
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
-        ],
+        ]] : []),
 
         // Scheduled retention job only: SELECT, DELETE on the tables listed in grants.retention_tables.
+        // Its password stays in .env because the scheduler runs the retention job.
         'retention' => [
             'driver' => 'mysql',
             'host' => env('DB_HOST', '127.0.0.1'),
@@ -179,9 +183,10 @@ return [
     |--------------------------------------------------------------------------
     |
     | Applied by `php artisan db:apply-grants`, which also runs after every
-    | migration. Every base table gets SELECT, INSERT, UPDATE, DELETE for the
-    | app account unless it is listed below. Append-only tables get SELECT and
-    | INSERT only. Tables may be listed before they exist.
+    | migration. Every table must be listed in exactly one of `mutable`,
+    | `append_only` or `app_excluded` (TASK-0003 #2). An unlisted table gets no
+    | app access and makes the command, and therefore the migration, fail.
+    | Views are not permitted. Tables may be listed before they exist.
     |
     */
 
@@ -189,6 +194,18 @@ return [
         'host' => '%',
         'app_user' => env('DB_USERNAME', 'cais_app'),
         'retention_user' => env('DB_RETENTION_USERNAME', 'cais_retention'),
+
+        // SELECT, INSERT, UPDATE, DELETE for the app account.
+        'mutable' => [
+            'cache',
+            'cache_locks',
+            'failed_jobs',
+            'job_batches',
+            'jobs',
+            'password_reset_tokens',
+            'sessions',
+            'users',
+        ],
 
         // No access for the app account.
         'app_excluded' => [

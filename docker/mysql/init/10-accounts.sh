@@ -1,10 +1,11 @@
 #!/bin/bash
-# Least-privilege MySQL accounts (P1-09, docs/02 §6). Idempotent.
+# Least-privilege MySQL accounts (P1-09, docs/02 §6; hardened after TASK-0003). Idempotent.
 # Runs automatically when the data volume is first initialised (/docker-entrypoint-initdb.d) and again from
 # scripts/dev/setup.sh:  docker compose exec -T mysql bash /docker-entrypoint-initdb.d/10-accounts.sh
 #
-# Schema- and global-level privileges are set here. Table-level privileges for the app and retention accounts
-# are owned by `php artisan db:apply-grants`, which runs after every migration; this script never touches them.
+# Global- and schema-level privileges, roles, and proxy privileges are set here. Table-level privileges for the
+# app and retention accounts are owned by `php artisan db:apply-grants`; this script only removes table grants
+# left on objects that no longer exist, and fails if any managed account holds something unexpected.
 
 # The MySQL entrypoint *sources* init scripts that lack the executable bit. Run as a separate process in that
 # case, so this script's shell options and exits cannot break the entrypoint (a failure still fails the init).
@@ -16,21 +17,27 @@ fi
 set -euo pipefail
 
 : "${MYSQL_ROOT_PASSWORD:?}" "${CAIS_DATABASES:?}"
-: "${CAIS_MIGRATOR_USER:?}" "${CAIS_MIGRATOR_PASSWORD:?}"
+: "${DB_MIGRATOR_USERNAME:?}" "${DB_MIGRATOR_PASSWORD:?}"
 : "${CAIS_APP_USER:?}" "${CAIS_APP_PASSWORD:?}"
 : "${CAIS_RETENTION_USER:?}" "${CAIS_RETENTION_PASSWORD:?}"
 : "${CAIS_READONLY_USER:?}" "${DB_READONLY_PASSWORD:?}"
 
+MIGRATOR=$DB_MIGRATOR_USERNAME
+USERS=("$MIGRATOR" "$CAIS_APP_USER" "$CAIS_RETENTION_USER" "$CAIS_READONLY_USER")
+
 # Values are inlined into SQL, so only plain identifiers and alphanumeric secrets are accepted.
-for v in CAIS_MIGRATOR_USER CAIS_APP_USER CAIS_RETENTION_USER CAIS_READONLY_USER; do
-  [[ ${!v} =~ ^[a-z_][a-z0-9_]{0,31}$ ]] || { echo "10-accounts.sh: $v is not a plain identifier" >&2; exit 1; }
+for u in "${USERS[@]}"; do
+  [[ $u =~ ^[a-z_][a-z0-9_]{0,31}$ ]] || { echo "10-accounts.sh: account name '$u' is not a plain identifier" >&2; exit 1; }
 done
 for db in $CAIS_DATABASES; do
   [[ $db =~ ^[a-z_][a-z0-9_]{0,63}$ ]] || { echo "10-accounts.sh: database name '$db' is not a plain identifier" >&2; exit 1; }
 done
-for v in CAIS_MIGRATOR_PASSWORD CAIS_APP_PASSWORD CAIS_RETENTION_PASSWORD DB_READONLY_PASSWORD; do
+for v in DB_MIGRATOR_PASSWORD CAIS_APP_PASSWORD CAIS_RETENTION_PASSWORD DB_READONLY_PASSWORD; do
   [[ ${!v} =~ ^[A-Za-z0-9]{16,}$ ]] || { echo "10-accounts.sh: $v must be at least 16 alphanumeric characters" >&2; exit 1; }
 done
+
+sql() { MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket -uroot "$@"; }
+in_list=$(printf "'%s'," "${USERS[@]}"); in_list=${in_list%,}
 
 # The first database is the main one; any others (e.g. cais_test) are for automated tests only.
 read -r MAIN_DB _ <<<"$CAIS_DATABASES"
@@ -41,6 +48,7 @@ CREATE USER IF NOT EXISTS '$1'@'%' IDENTIFIED BY '$2';
 ALTER USER '$1'@'%' IDENTIFIED BY '$2';
 REVOKE IF EXISTS ALL PRIVILEGES ON *.* FROM '$1'@'%';
 REVOKE IF EXISTS GRANT OPTION ON *.* FROM '$1'@'%';
+SET DEFAULT ROLE NONE TO '$1'@'%';
 SQL
   for db in $CAIS_DATABASES; do
     echo "REVOKE IF EXISTS ALL PRIVILEGES ON \`$db\`.* FROM '$1'@'%';"
@@ -48,26 +56,64 @@ SQL
   done
 }
 
+# 1. Accounts, global and schema privileges.
 {
   for db in $CAIS_DATABASES; do
     echo "CREATE DATABASE IF NOT EXISTS \`$db\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
   done
 
-  account "$CAIS_MIGRATOR_USER" "$CAIS_MIGRATOR_PASSWORD"
+  account "$MIGRATOR" "$DB_MIGRATOR_PASSWORD"
   account "$CAIS_APP_USER" "$CAIS_APP_PASSWORD"
   account "$CAIS_RETENTION_USER" "$CAIS_RETENTION_PASSWORD"
   account "$CAIS_READONLY_USER" "$DB_READONLY_PASSWORD"
 
-  # Migrator: schema changes and data for migrations. GRANT OPTION lets db:apply-grants manage the
-  # app/retention table grants without root.
+  # Migrator: schema changes and data for migrations; no views (TASK-0003 #3). GRANT OPTION lets
+  # db:apply-grants manage the app/retention table grants without root.
   for db in $CAIS_DATABASES; do
-    echo "GRANT ALTER, CREATE, CREATE TEMPORARY TABLES, CREATE VIEW, DELETE, DROP, INDEX, INSERT, LOCK TABLES, REFERENCES, SELECT, SHOW VIEW, UPDATE ON \`$db\`.* TO '$CAIS_MIGRATOR_USER'@'%' WITH GRANT OPTION;"
+    echo "GRANT ALTER, CREATE, CREATE TEMPORARY TABLES, DELETE, DROP, INDEX, INSERT, LOCK TABLES, REFERENCES, SELECT, UPDATE ON \`$db\`.* TO '$MIGRATOR'@'%' WITH GRANT OPTION;"
   done
 
   # Read-only (backups, reporting): main database only.
   echo "GRANT SELECT, SHOW VIEW ON \`$MAIN_DB\`.* TO '$CAIS_READONLY_USER'@'%';"
 
   # App and retention: no schema-level privileges at all (table grants come from db:apply-grants).
-} | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket -uroot
+} | sql
+
+# 2. Remove granted roles, proxy privileges, and table grants on objects that no longer exist (TASK-0003 #3, #4).
+#    The statements are generated by the server with QUOTE(), so names are escaped by MySQL itself.
+cleanup=$(sql -N -B <<SQL
+SELECT CONCAT('REVOKE ', QUOTE(FROM_USER), '@', QUOTE(FROM_HOST), ' FROM ', QUOTE(TO_USER), '@', QUOTE(TO_HOST), ';')
+  FROM mysql.role_edges WHERE TO_USER IN ($in_list);
+SELECT CONCAT('REVOKE PROXY ON ', QUOTE(Proxied_user), '@', QUOTE(Proxied_host), ' FROM ', QUOTE(User), '@', QUOTE(Host), ';')
+  FROM mysql.proxies_priv WHERE User IN ($in_list);
+SELECT CONCAT('REVOKE ALL PRIVILEGES ON \`', REPLACE(t.Db, '\`', '\`\`'), '\`.\`', REPLACE(t.Table_name, '\`', '\`\`'), '\` FROM ', QUOTE(t.User), '@', QUOTE(t.Host), ';')
+  FROM mysql.tables_priv t
+ WHERE t.User IN ($in_list)
+   AND NOT EXISTS (SELECT 1 FROM information_schema.TABLES s WHERE s.TABLE_SCHEMA = t.Db AND s.TABLE_NAME = t.Table_name);
+SQL
+)
+if [ -n "$cleanup" ]; then
+  printf '%s\n' "$cleanup" | sql
+  echo "10-accounts.sh: removed $(wc -l <<<"$cleanup") role/proxy/stale table grant(s)"
+fi
+
+# 3. Fail if any managed account still holds something it must not (TASK-0003 #4).
+problems=$(sql -N -B <<SQL
+SELECT CONCAT('role granted to ', TO_USER) FROM mysql.role_edges WHERE TO_USER IN ($in_list)
+UNION ALL SELECT CONCAT('proxy privilege for ', User) FROM mysql.proxies_priv WHERE User IN ($in_list)
+UNION ALL SELECT CONCAT('column privilege for ', User) FROM mysql.columns_priv WHERE User IN ($in_list)
+UNION ALL SELECT CONCAT('table privilege for ', User, ' on ', Db, '.', Table_name) FROM mysql.tables_priv
+          WHERE User IN ('$MIGRATOR', '$CAIS_READONLY_USER')
+UNION ALL SELECT CONCAT('global privilege for ', User) FROM mysql.user
+          WHERE User IN ($in_list) AND (Super_priv = 'Y' OR Grant_priv = 'Y' OR File_priv = 'Y' OR Process_priv = 'Y'
+                OR Create_user_priv = 'Y' OR Select_priv = 'Y' OR Insert_priv = 'Y' OR Update_priv = 'Y' OR Delete_priv = 'Y'
+                OR Drop_priv = 'Y' OR Alter_priv = 'Y' OR Create_priv = 'Y' OR Shutdown_priv = 'Y' OR Reload_priv = 'Y');
+SQL
+)
+if [ -n "$problems" ]; then
+  echo "10-accounts.sh: unexpected privileges remain:" >&2
+  printf '  %s\n' "$problems" >&2
+  exit 1
+fi
 
 echo "10-accounts.sh: accounts and schema privileges applied for: $CAIS_DATABASES"

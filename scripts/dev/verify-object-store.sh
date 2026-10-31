@@ -5,7 +5,7 @@
 set -uo pipefail
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
-CLI_IMAGE=amazon/aws-cli:2.39.3
+CLI_IMAGE=amazon/aws-cli:2.39.3@sha256:d557b3524475d70dd3104cf44d96568ee3188897b73a6ece2b37aa50e1af362f
 NET=competitive-ais_data
 EP=http://seaweedfs:8333
 
@@ -17,8 +17,8 @@ trap cleanup EXIT
 envval() { grep -m1 "^$2=" "$1" | cut -d= -f2-; }
 umask 077
 printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .env AWS_ACCESS_KEY_ID)" "$(envval .env AWS_SECRET_ACCESS_KEY)" > "$KEYS/app"
-printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .env.services S3_ADMIN_ACCESS_KEY)" "$(envval .env.services S3_ADMIN_SECRET_KEY)" > "$KEYS/admin"
-printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .env.services S3_ANCHOR_ACCESS_KEY)" "$(envval .env.services S3_ANCHOR_SECRET_KEY)" > "$KEYS/anchor"
+printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .env.s3 S3_ADMIN_ACCESS_KEY)" "$(envval .env.s3 S3_ADMIN_SECRET_KEY)" > "$KEYS/admin"
+printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .env.s3 S3_ANCHOR_ACCESS_KEY)" "$(envval .env.s3 S3_ANCHOR_SECRET_KEY)" > "$KEYS/anchor"
 umask 022
 printf 'verify\n' > "$WORK/obj.txt"
 cat > "$WORK/config" <<'EOF'

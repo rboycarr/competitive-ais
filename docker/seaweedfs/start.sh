@@ -17,6 +17,7 @@ sed -e "s/__S3_ADMIN_ACCESS_KEY__/$S3_ADMIN_ACCESS_KEY/" \
     -e "s/__S3_APP_SECRET_KEY__/$S3_APP_SECRET_KEY/" \
     -e "s/__S3_ANCHOR_ACCESS_KEY__/$S3_ANCHOR_ACCESS_KEY/" \
     -e "s/__S3_ANCHOR_SECRET_KEY__/$S3_ANCHOR_SECRET_KEY/" \
-    /etc/seaweedfs/s3-identities.template.json > /tmp/s3.json
+    /etc/seaweedfs/s3-identities.template.json > /run/s3config/s3.json
 
-exec weed mini -dir=/data -s3.config=/tmp/s3.json -master.telemetry=false
+# /run/s3config is a tmpfs with mode 700 (compose.yaml): the keys never touch disk (TASK-0003 #8).
+exec weed mini -dir=/data -s3.config=/run/s3config/s3.json -master.telemetry=false

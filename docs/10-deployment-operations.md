@@ -61,15 +61,25 @@ Inside WSL, from the repository root:
 | Daily | `docker compose up -d --wait` | Starts the stack and returns once every service is healthy (about 40 s) |
 | Stop | `docker compose stop` | Keeps containers and data |
 | Object-store key check | `bash scripts/dev/verify-object-store.sh` | 19 checks of the per-purpose keys (ADR-0007); cleans up its test objects |
-| Tests | `docker compose exec php php artisan test` | |
+| Migrations | `docker compose run --rm migrator php artisan migrate` | Only the `migrator` service has the migrator account; in `php` schema commands fail with instructions |
+| Tests | `docker compose run --rm migrator php artisan test` | Tests migrate `cais_test`, so they run in the `migrator` service |
 | All CI checks locally | `bash scripts/ci/backend.sh`, `bash scripts/ci/frontend.sh`, `bash scripts/ci/secrets.sh` | Same scripts as CI (§1.4) |
 
 The first start downloads the ClamAV signature database and can take several minutes. Only `docker compose down -v` deletes data volumes; do not run it without meaning to.
 
-**Environment files** (both gitignored, mode 600): `.env` is read by Laravel and by Compose for interpolation; `.env.services` holds secrets only services need (MySQL root password, SeaweedFS admin and audit-anchor keys) and is never loaded by Laravel. In local development the repository is bind-mounted into the PHP container, so the app process could still read `.env.services` from disk; production images are not bind-mounted and receive only their own secrets (§3).
+**Environment files** (all gitignored, mode 600, created by `scripts/dev/init-env.sh`; each goes only to the services that need it, TASK-0003):
+
+| File | Holds | Given to |
+|---|---|---|
+| `.env` | app settings, app DB account, retention account, Redis, app object-store key, `DEV_UID`/`DEV_GID` | Laravel (web, Horizon, scheduler) and Compose interpolation |
+| `.env.migrator` | migrator account (DDL, `GRANT OPTION`) | `migrator` service and MySQL account init only |
+| `.env.services` | MySQL root and readonly passwords | `mysql` only |
+| `.env.s3` | SeaweedFS admin and audit-anchor keys | `seaweedfs` (it must hold every key to verify signatures) and `seaweedfs-init` only |
+
+Local caveat: the repository is bind-mounted into the PHP containers, so a process there could still read the other files from disk. Production images are not bind-mounted and receive only their own secrets (§3).
 
 ### 1.3 Compose services (Phase 1)
-`nginx` (serves only `public/`, read-only), `php` (PHP-FPM, pinned version per ADR-0003, runs as the developer's uid), `horizon`, `scheduler`, `node` (Vite dev server, polling file watcher), `mysql` (8.4; utf8mb4 / `utf8mb4_0900_ai_ci`; UTC), `valkey`, `seaweedfs` (`-master.telemetry=false`; identities and per-bucket permissions rendered at start from `docker/seaweedfs/s3-identities.template.json`) + `seaweedfs-init` (one-shot; creates the `evidence-quarantine`, `evidence`, `exports`, and `audit-anchor` buckets, object lock on `evidence` and `audit-anchor`; ADR-0007), `clamav`, `mailpit`. Healthchecks on every service. Named volumes for data, `vendor`, and `node_modules`. Networks `edge`, `app`, `data` as in `docs/07`; `data` is not internal locally because ClamAV needs egress for signature updates. MySQL runs with least-privilege accounts (`cais_app`, `cais_migrator`, `cais_retention`, `cais_readonly`; `docs/02` §6) created by `docker/mysql/init/10-accounts.sh`; tests use the `cais_test` database.
+`nginx` (serves only `public/`, read-only), `php` (PHP-FPM, pinned version per ADR-0003, runs as the developer's uid), `horizon`, `scheduler`, `migrator` (profile `tools`, one-shot; the only PHP service with the migrator account), `node` (Vite dev server, polling file watcher, runs as the developer's uid), `mysql` (8.4; utf8mb4 / `utf8mb4_0900_ai_ci`; UTC), `valkey`, `seaweedfs` (`-master.telemetry=false`; identities and per-bucket permissions rendered at start from `docker/seaweedfs/s3-identities.template.json`) + `seaweedfs-init` (one-shot; creates the `evidence-quarantine`, `evidence`, `exports`, and `audit-anchor` buckets, object lock on `evidence` and `audit-anchor`; ADR-0007), `clamav`, `mailpit`. Healthchecks on every service. Named volumes for data, `vendor`, and `node_modules`. Networks `edge`, `app`, `data` as in `docs/07`; `data` is not internal locally because ClamAV needs egress for signature updates. MySQL runs with least-privilege accounts (`cais_app`, `cais_migrator`, `cais_retention`, `cais_readonly`; `docs/02` §6) created by `docker/mysql/init/10-accounts.sh`; tests use the `cais_test` database.
 
 **Performance note:** bind mounts from the Windows drive into WSL2 can be slow for PHP. Measured in Sprint 1.0 (ADR-0003): median 0.15 s per page with `vendor` and `node_modules` in named volumes, which is acceptable. If it becomes slow, move the working copy into the WSL filesystem (`\\wsl$\Ubuntu-24.04\home\<user>\competitive-ais`) and open it with VS Code Remote-WSL.
 

@@ -6,7 +6,9 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Modules\Platform\Database\TableGrants;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -24,6 +26,8 @@ class DatabaseAccountsTest extends TestCase
 
     private const MUTABLE_PROBE = 'zz_probe_mutable';
 
+    private const UNCLASSIFIED_PROBE = 'zz_probe_unclassified';
+
     /** MySQL ER_TABLEACCESS_DENIED_ERROR */
     private const ACCESS_DENIED = 1142;
 
@@ -37,6 +41,7 @@ class DatabaseAccountsTest extends TestCase
         }
 
         config()->push('database.grants.append_only', self::APPEND_ONLY_PROBE);
+        config()->push('database.grants.mutable', self::MUTABLE_PROBE);
         config()->set('database.grants.retention_tables.'.self::APPEND_ONLY_PROBE, ['SELECT', 'DELETE']);
         $this->app->make(TableGrants::class)->apply();
     }
@@ -44,7 +49,7 @@ class DatabaseAccountsTest extends TestCase
     protected function tearDown(): void
     {
         $migrator = DB::connection('migrator');
-        foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE] as $table) {
+        foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE, self::UNCLASSIFIED_PROBE] as $table) {
             foreach ([config('database.grants.app_user'), config('database.grants.retention_user')] as $user) {
                 $migrator->unprepared('REVOKE IF EXISTS '.implode(', ', TableGrants::TABLE_PRIVILEGES)." ON `$table` FROM '$user'@'%' IGNORE UNKNOWN USER"); // @phpstan-ignore argument.type (constant table names, configured account names)
             }
@@ -153,6 +158,100 @@ class DatabaseAccountsTest extends TestCase
         $this->assertSame($tables->apply(), $tables->apply());
         $this->assertSame(0, Artisan::call('db:apply-grants'));
         $this->test_app_cannot_update_or_delete_append_only_tables();
+    }
+
+    public function test_unclassified_table_gets_no_access_and_fails_the_grant_run(): void
+    {
+        DB::connection('migrator')->statement('create table `'.self::UNCLASSIFIED_PROBE.'` (id bigint unsigned primary key)');
+
+        try {
+            $this->app->make(TableGrants::class)->apply();
+            $this->fail('Expected apply() to reject the unclassified table.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString(self::UNCLASSIFIED_PROBE, $e->getMessage());
+        }
+
+        $this->assertDenied(fn () => DB::table(self::UNCLASSIFIED_PROBE)->count());
+        $this->assertDenied(fn () => DB::table(self::UNCLASSIFIED_PROBE)->insert(['id' => 1]));
+    }
+
+    public function test_a_table_cannot_be_in_two_classes(): void
+    {
+        $mutable = config('database.grants.mutable');
+        config()->push('database.grants.mutable', self::APPEND_ONLY_PROBE);
+
+        try {
+            $this->app->make(TableGrants::class)->plan();
+            $this->fail('Expected the duplicate classification to be rejected.');
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString('listed in both', $e->getMessage());
+        } finally {
+            config()->set('database.grants.mutable', $mutable); // teardown migrations re-apply grants
+        }
+    }
+
+    public function test_migrator_cannot_create_views(): void
+    {
+        $this->assertDenied(fn () => DB::connection('migrator')->statement('create view zz_probe_view as select 1 as x'));
+    }
+
+    public function test_every_existing_append_only_table_rejects_update_delete_and_truncate(): void
+    {
+        $migrator = DB::connection('migrator');
+        $checked = 0;
+
+        foreach ((array) config('database.grants.append_only') as $table) {
+            $column = $migrator->table('information_schema.COLUMNS')
+                ->where('TABLE_SCHEMA', $migrator->getDatabaseName())
+                ->where('TABLE_NAME', $table)
+                ->orderBy('ORDINAL_POSITION')
+                ->value('COLUMN_NAME');
+            if ($column === null) {
+                continue; // not migrated yet; covered automatically once its migration exists
+            }
+
+            $privileges = DB::table('information_schema.TABLE_PRIVILEGES')
+                ->where('TABLE_SCHEMA', DB::connection()->getDatabaseName())
+                ->where('TABLE_NAME', $table)
+                ->orderBy('PRIVILEGE_TYPE')
+                ->pluck('PRIVILEGE_TYPE')
+                ->all();
+            $this->assertSame(['INSERT', 'SELECT'], $privileges, "App grants on append-only [$table]");
+
+            // The privilege check happens before any row is touched, so WHERE 1 = 0 is enough.
+            $this->assertDenied(fn () => DB::table($table)->whereRaw('1 = 0')->update([$column => DB::raw("`$column`")])); // @phpstan-ignore argument.type (column name read from information_schema)
+            $this->assertDenied(fn () => DB::table($table)->whereRaw('1 = 0')->delete());
+            $this->assertDenied(fn () => DB::statement("truncate table `$table`"));
+            $checked++;
+        }
+
+        $this->assertGreaterThanOrEqual(1, $checked, 'Expected at least the probe table to be checked.');
+    }
+
+    public function test_migrator_connection_is_refused_where_its_credentials_are_absent(): void
+    {
+        $migrator = config('database.connections.migrator');
+        DB::purge('migrator');
+        config()->set('database.connections.migrator', null);
+
+        try {
+            try {
+                DB::connection('migrator');
+                $this->fail('Expected the migrator connection to be unavailable.');
+            } catch (InvalidArgumentException $e) {
+                $this->assertStringContainsString('not configured', $e->getMessage());
+            }
+
+            try {
+                Artisan::call('migrate:status');
+                $this->fail('Expected migrate:status to be refused.');
+            } catch (RuntimeException $e) {
+                $this->assertStringContainsString('only available in the migrator service', $e->getMessage());
+            }
+            $this->assertSame('mysql', DB::getDefaultConnection());
+        } finally {
+            config()->set('database.connections.migrator', $migrator);
+        }
     }
 
     private function assertDenied(callable $query): void

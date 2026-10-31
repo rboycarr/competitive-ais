@@ -3,8 +3,9 @@
 name: CI
 
 on:
+  # Every branch: review branches (handoffs/) must be green before they are merged.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 permissions:

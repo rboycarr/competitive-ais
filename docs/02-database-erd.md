@@ -239,7 +239,7 @@ Each Phase 1 list query is checked with `EXPLAIN` against seeded volume (10k ite
 
 | User | Privileges |
 |---|---|
-| `cais_migrator` | DDL on schema; used only by `php artisan migrate` |
+| `cais_migrator` | DDL on schema (no views); used only by migrations and `db:apply-grants` in the `migrator` service |
 | `cais_app` | SELECT, INSERT, UPDATE, DELETE on mutable tables; **SELECT, INSERT only** on `audit_events`, `audit_event_network`, `audit_checkpoints`, `evidence_custody_events`, `source_policies`, `verification_reviews` (and later `price_observations` and others) |
 | `cais_readonly` | SELECT for backups and reporting |
 | `cais_retention` | SELECT, DELETE on `audit_event_network` only; used only by the scheduled retention job (§8). **No** UPDATE or DELETE on any hashed audit table. |
@@ -253,6 +253,12 @@ A migration-adjacent artisan command `db:apply-grants` keeps the grants in code.
 - `cais_test` is created alongside the main schema for automated tests; the migrator has the same rights there.
 - Tests: `modules/Platform/tests/Feature/DatabaseAccountsTest.php` (MySQL 8.4, real accounts) proves the mechanism on probe tables and compares the app account's actual grants on every real table with the policy.
 - Rollback: revert the commit; then, only with explicit authorization, `DROP USER cais_app, cais_retention, cais_readonly` as root and point `DB_USERNAME` back at the migrator. Data is not affected.
+
+**Hardening after Codex review TASK-0003 (2026-10-31; `handoffs/TASK-0003-review.md`):**
+- The migrator's credentials exist only in `.env.migrator`, given to the one-shot `migrator` compose service and to MySQL's account init. Web, Horizon and scheduler containers do not have them; the `migrator` connection is not even configured there, and schema commands fail with instructions. CI asserts this. A source scan allows the name `migrator` only in the Platform migration wiring.
+- Every table must be classified in `config/database.php` → `grants` as `mutable`, `append_only` or `app_excluded`. An unclassified table gets no app access and fails the grant run, and with it the migration. Views are not permitted: the migrator no longer holds `CREATE VIEW`, and any view fails the grant run.
+- The account init script also revokes granted roles and proxy privileges, removes table grants left on objects that no longer exist, and fails if any managed account still holds a role, proxy, column, unexpected table or global privilege.
+- A data-driven test checks every configured append-only table once it exists: `SELECT, INSERT` granted; `UPDATE`, `DELETE` and `TRUNCATE` denied.
 
 ## 7. Migration discipline
 

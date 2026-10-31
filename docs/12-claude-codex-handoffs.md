@@ -35,7 +35,8 @@ AI approval never replaces human approval.
 |---|---|---|---|---|---|---|
 | TASK-0001 | Phase 0 architecture and docs review | Claude Code | Reviewer (gpt-5.6-luna, read-only; invoked by Claude at the PO's request, 2026-10-31) | n/a (repo not yet in git) | **Reviewed; 13 accepted, 1 partially accepted; docs amended** | `handoffs/TASK-0001-review.md` |
 | TASK-0002 | Follow-up review of the TASK-0001 amendments | Claude Code | Reviewer | n/a | Proposed (not yet created) | — |
-| TASK-0003 | **Retrospective** review: DB grants (P1-09), object-store keys, CI | Claude Code | Reviewer (read-only) | `main` @ `8fdba15` | Brief ready; P1-09 was merged without the mandatory review (missed by Claude Code, flagged 2026-10-31); G1 not signed off until done | `handoffs/TASK-0003-review.md` (pending) |
+| TASK-0003 | **Retrospective** review: DB grants (P1-09), object-store keys, CI | Claude Code | Reviewer (gpt-5.6-luna, read-only; invoked by Claude at the PO's request, 2026-10-31) | reviewed `main` @ `28ca5c7`; fixes on `fix/task-0003-hardening` | **Reviewed: 10 findings (1 critical, 3 high, 5 medium, 1 low); 8 accepted, 2 accepted in part; fixes implemented.** Pending: Codex re-review of the fix diff (TASK-0004) and PO approval to merge. G1 not signed off until merged | `handoffs/TASK-0003-review.md` |
+| TASK-0004 | Re-review of the TASK-0003 fixes (diff `main..fix/task-0003-hardening`) | Claude Code | Reviewer (read-only) | `fix/task-0003-hardening` | Brief ready; waiting for the PO | `handoffs/TASK-0004-review.md` (pending) |
 
 ## 4. Decision and disagreement log
 
