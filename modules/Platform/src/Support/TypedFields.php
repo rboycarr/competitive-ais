@@ -34,7 +34,7 @@ final class TypedFields
         '/-----BEGIN [A-Z ]*PRIVATE KEY-----/',
         '/\b(?:gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|ASIA|AIza)[A-Za-z0-9_\-]{8,}/',
         '/\bBearer\s+\S{8,}/i',
-        '/\b(?:password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]/i',
+        '/\b(?:password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]\s*\S*/i', // the value too, so redact() masks it
         '/[A-Za-z0-9+\/_\-]{32,}={0,2}/',
     ];
 
@@ -92,6 +92,15 @@ final class TypedFields
             'text' => is_string($value) && mb_strlen($value) <= self::MAX_TEXT && ! self::looksLikeCredential($value),
             default => false,
         };
+    }
+
+    /**
+     * Replaces credential-shaped parts of a diagnostic message with *** (TASK-0012 #2). Heuristic, like the check
+     * above: use it for log lines, never as permission to store raw messages.
+     */
+    public static function redact(string $message): string
+    {
+        return (string) preg_replace(self::CREDENTIAL_SHAPES, '***', $message);
     }
 
     private static function looksLikeCredential(string $value): bool

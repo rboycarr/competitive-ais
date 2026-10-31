@@ -15,7 +15,7 @@ class RelayOutbox extends Command
     public function handle(OutboxRelay $relay): int
     {
         $result = $relay->run();
-        $this->components->info("Outbox: {$result['dispatched']} dispatched, {$result['retrying']} retrying, {$result['dead']} dead-lettered.");
+        $this->components->info("Outbox: {$result['dispatched']} dispatched, {$result['retrying']} retrying, {$result['dead']} dead-lettered, {$result['superseded']} superseded.");
 
         return self::SUCCESS;
     }

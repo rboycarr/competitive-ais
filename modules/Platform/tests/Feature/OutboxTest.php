@@ -9,6 +9,7 @@ use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use LogicException;
 use Modules\Platform\Jobs\RelayOutboxJob;
@@ -38,6 +39,7 @@ class OutboxTest extends TestCase
         OutboxProbeHandler::$calls = [];
         OutboxFlakyHandler::$failuresLeft = 0;
         OutboxFlakyHandler::$calls = 0;
+        OutboxFlakyHandler::$message = 'flaky';
 
         $events = $this->app->make(OutboxEvents::class);
         $events->define('probe.changed', ['item' => 'ulid', 'version' => 'int', 'state' => 'code']);
@@ -96,15 +98,62 @@ class OutboxTest extends TestCase
     public function test_handlers_receive_each_event_once_and_events_are_marked_dispatched(): void
     {
         $ulid = DB::transaction(fn () => $this->publish(['version' => 1]));
-        DB::transaction(fn () => $this->app->make(OutboxPublisher::class)->publish($this->aggregate, 'probe.unhandled'));
 
-        $this->assertSame(['dispatched' => 2, 'retrying' => 0, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay());
         $this->assertSame([[$ulid, 'probe.changed', ['version' => 1], 1]], OutboxProbeHandler::$calls);
         $this->assertSame(0, DB::table('outbox_events')->whereNull('dispatched_at')->count());
         $this->assertSame(1, DB::table('outbox_receipts')->count());
 
-        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay());
         $this->assertCount(1, OutboxProbeHandler::$calls);
+    }
+
+    public function test_an_event_nobody_consumes_is_never_marked_dispatched(): void
+    {
+        try {
+            DB::transaction(fn () => $this->app->make(OutboxPublisher::class)->publish($this->aggregate, 'probe.unhandled'));
+            $this->fail('Expected publishing an event without handlers to be refused.');
+        } catch (LogicException $e) {
+            $this->assertStringContainsString('no subscribed handler', $e->getMessage());
+        }
+
+        // Written earlier, when a handler existed (e.g. before a configuration change): retried, not lost.
+        $now = now('UTC')->format('Y-m-d H:i:s.u');
+        DB::table('outbox_events')->insert(['ulid' => (string) Str::ulid(), 'aggregate_type' => OutboxProbeAggregate::class,
+            'aggregate_id' => $this->aggregate->getKey(), 'event_type' => 'probe.unhandled', 'available_at' => $now, 'created_at' => $now]);
+
+        $this->assertSame(['dispatched' => 0, 'retrying' => 1, 'dead' => 0, 'superseded' => 0], $this->relay());
+        $this->assertStringStartsWith('LogicException (ref ', (string) DB::table('outbox_events')->value('last_error'));
+    }
+
+    public function test_the_stored_error_holds_no_exception_message_and_the_log_is_masked(): void
+    {
+        $this->app->make(OutboxEvents::class)->subscribe('probe.changed', OutboxFlakyHandler::class);
+        OutboxFlakyHandler::$failuresLeft = 1;
+        OutboxFlakyHandler::$message = 'upstream said password=hunter2 for SELECT * FROM users';
+        DB::transaction(fn () => $this->publish());
+        $log = Log::spy();
+
+        $this->relay();
+
+        $error = (string) DB::table('outbox_events')->value('last_error');
+        $this->assertMatchesRegularExpression('/^RuntimeException \(ref [0-9A-HJKMNP-TV-Z]{26}\)$/', $error);
+        $log->shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context): bool => $message === 'Outbox delivery failed; will retry'
+            && $context['exception'] === RuntimeException::class
+            && str_contains($error, $context['ref'])
+            && ! str_contains($context['message'], 'hunter2'));
+    }
+
+    public function test_a_run_that_lost_its_lease_reports_superseded_and_changes_nothing(): void
+    {
+        $this->app->make(OutboxEvents::class)->define('probe.slow');
+        $this->app->make(OutboxEvents::class)->subscribe('probe.slow', OutboxLeaseLosingHandler::class);
+        DB::transaction(fn () => $this->app->make(OutboxPublisher::class)->publish($this->aggregate, 'probe.slow'));
+
+        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0, 'superseded' => 1], $this->relay());
+        $event = DB::table('outbox_events')->sole();
+        $this->assertNull($event->dispatched_at, "The other run's lease still governs the event.");
+        $this->assertSame(OutboxLeaseLosingHandler::TAKEN_OVER, $event->claimed_until);
     }
 
     public function test_a_failure_is_retried_with_backoff_and_successful_handlers_are_not_rerun(): void
@@ -113,18 +162,18 @@ class OutboxTest extends TestCase
         OutboxFlakyHandler::$failuresLeft = 1;
         DB::transaction(fn () => $this->publish());
 
-        $this->assertSame(['dispatched' => 0, 'retrying' => 1, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 0, 'retrying' => 1, 'dead' => 0, 'superseded' => 0], $this->relay());
         $event = DB::table('outbox_events')->sole();
         $this->assertSame(1, $event->attempts);
         $this->assertNull($event->dispatched_at);
         $this->assertNull($event->claimed_until);
-        $this->assertStringContainsString('RuntimeException: flaky', (string) $event->last_error);
+        $this->assertStringContainsString('RuntimeException (ref ', (string) $event->last_error);
         $this->assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $event->available_at, 'Backoff delays the retry.');
 
-        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0], $this->relay(), 'Not due yet.');
+        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay(), 'Not due yet.');
 
         Carbon::setTestNow(now()->addHours(2));
-        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay());
         $this->assertCount(1, OutboxProbeHandler::$calls, 'The handler that succeeded first time is not run again.');
         $this->assertSame(2, OutboxFlakyHandler::$calls);
         $this->assertNull(DB::table('outbox_events')->value('last_error'));
@@ -138,9 +187,9 @@ class OutboxTest extends TestCase
         DB::transaction(fn () => $this->publish());
         $log = Log::spy();
 
-        $this->assertSame(['dispatched' => 0, 'retrying' => 1, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 0, 'retrying' => 1, 'dead' => 0, 'superseded' => 0], $this->relay());
         Carbon::setTestNow(now()->addHours(2));
-        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 1], $this->relay());
+        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 1, 'superseded' => 0], $this->relay());
 
         $event = DB::table('outbox_events')->sole();
         $this->assertNotNull($event->failed_at);
@@ -148,7 +197,7 @@ class OutboxTest extends TestCase
         $log->shouldHaveReceived('error')->once()->withArgs(fn (string $message): bool => $message === 'Outbox event dead-lettered');
 
         Carbon::setTestNow(now()->addDays(2));
-        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0], $this->relay(), 'Dead letters are not retried automatically.');
+        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay(), 'Dead letters are not retried automatically.');
     }
 
     public function test_a_claimed_event_is_left_to_its_run_until_the_lease_expires(): void
@@ -157,11 +206,11 @@ class OutboxTest extends TestCase
         $lease = now('UTC')->addMinutes(5)->format('Y-m-d H:i:s.u');
         DB::table('outbox_events')->update(['claimed_until' => $lease]);
 
-        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 0, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay());
         $this->assertSame([], OutboxProbeHandler::$calls);
 
         Carbon::setTestNow(now()->addMinutes(6));
-        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay());
     }
 
     public function test_a_concurrent_delivery_cannot_apply_a_handlers_database_changes_twice(): void
@@ -171,7 +220,7 @@ class OutboxTest extends TestCase
         DB::transaction(fn () => $this->app->make(OutboxPublisher::class)->publish($this->aggregate, 'probe.raced'));
 
         // While the handler runs, "another relay" records the receipt first (OutboxRacedHandler).
-        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0], $this->relay());
+        $this->assertSame(['dispatched' => 1, 'retrying' => 0, 'dead' => 0, 'superseded' => 0], $this->relay());
 
         $this->assertSame(0, DB::table('cache')->where('key', 'like', 'outbox-probe:%')->count(), "This run's changes were rolled back.");
         $this->assertSame(1, DB::table('outbox_receipts')->count());
@@ -228,12 +277,25 @@ final class OutboxFlakyHandler implements OutboxHandler
 
     public static int $calls = 0;
 
+    public static string $message = 'flaky';
+
     public function handle(OutboxMessage $message): void
     {
         self::$calls++;
         if (self::$failuresLeft-- > 0) {
-            throw new RuntimeException('flaky');
+            throw new RuntimeException(self::$message);
         }
+    }
+}
+
+/** Simulates a slow handler: while it runs, its lease expires and another relay run claims the event. */
+final class OutboxLeaseLosingHandler implements OutboxHandler
+{
+    public const TAKEN_OVER = '2099-01-01 00:00:00.000000';
+
+    public function handle(OutboxMessage $message): void
+    {
+        DB::connection('migrator')->table('outbox_events')->where('ulid', $message->ulid)->update(['claimed_until' => self::TAKEN_OVER]);
     }
 }
 

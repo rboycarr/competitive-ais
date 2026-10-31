@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use LogicException;
+use Modules\Platform\Support\TypedFields;
 use stdClass;
 use Throwable;
 
@@ -36,13 +37,13 @@ class OutboxRelay
     ) {}
 
     /**
-     * @return array{dispatched: int, retrying: int, dead: int}
+     * @return array{dispatched: int, retrying: int, dead: int, superseded: int}
      *
      * @phpstan-impure
      */
     public function run(): array
     {
-        $result = ['dispatched' => 0, 'retrying' => 0, 'dead' => 0];
+        $result = ['dispatched' => 0, 'retrying' => 0, 'dead' => 0, 'superseded' => 0];
         $lease = $this->time(CarbonImmutable::now('UTC')->addSeconds((int) $this->config->get('outbox.lease_seconds')));
 
         foreach ($this->claim($lease) as $event) {
@@ -82,30 +83,33 @@ class OutboxRelay
     }
 
     /**
-     * @return 'dispatched'|'retrying'|'dead'
+     * @return 'dispatched'|'retrying'|'dead'|'superseded'
      */
     private function deliver(stdClass $event, string $lease): string
     {
-        $message = new OutboxMessage(
-            (string) $event->ulid,
-            (string) $event->event_type,
-            (string) $event->aggregate_type,
-            (int) $event->aggregate_id,
-            $event->payload === null ? [] : (array) json_decode((string) $event->payload, true, 8, JSON_THROW_ON_ERROR),
-            (int) $event->attempts,
-        );
-
         try {
-            foreach ($this->events->handlers($message->eventType) as $handler) {
+            $message = new OutboxMessage(
+                (string) $event->ulid,
+                (string) $event->event_type,
+                (string) $event->aggregate_type,
+                (int) $event->aggregate_id,
+                $event->payload === null ? [] : (array) json_decode((string) $event->payload, true, 8, JSON_THROW_ON_ERROR),
+                (int) $event->attempts,
+            );
+            $handlers = $this->events->handlers($message->eventType);
+            if ($handlers === []) {
+                // Never mark an event nobody consumed as dispatched (TASK-0012 #1); it retries, then dead-letters.
+                throw new LogicException("Outbox event type [{$message->eventType}] has no subscribed handler.");
+            }
+            foreach ($handlers as $handler) {
                 $this->runHandler((int) $event->id, $handler, $message);
             }
         } catch (Throwable $e) {
             return $this->fail($event, $lease, $e);
         }
 
-        $this->settle($event, $lease, ['dispatched_at' => $this->time(CarbonImmutable::now('UTC')), 'last_error' => null]);
-
-        return 'dispatched';
+        return $this->settle($event, $lease, ['dispatched_at' => $this->time(CarbonImmutable::now('UTC')), 'last_error' => null])
+            ? 'dispatched' : 'superseded';
     }
 
     /**
@@ -136,37 +140,47 @@ class OutboxRelay
     }
 
     /**
-     * @return 'retrying'|'dead'
+     * Stores only the exception class and a reference in the table; the message goes to the log, with credential
+     * shapes masked (TASK-0012 #2). Exception messages can hold SQL, payload values or upstream responses.
+     *
+     * @return 'retrying'|'dead'|'superseded'
      */
     private function fail(stdClass $event, string $lease, Throwable $e): string
     {
         $attempts = (int) $event->attempts;
-        $error = Str::limit($e::class.': '.$e->getMessage(), 990);
+        $reference = (string) Str::ulid();
+        $error = $e::class." (ref $reference)";
+        $diagnostic = ['ref' => $reference, 'ulid' => $event->ulid, 'event_type' => $event->event_type, 'attempts' => $attempts,
+            'exception' => $e::class, 'message' => Str::limit(TypedFields::redact($e->getMessage()), 500)];
 
         if ($attempts >= (int) $this->config->get('outbox.max_attempts')) {
-            $this->settle($event, $lease, ['failed_at' => $this->time(CarbonImmutable::now('UTC')), 'last_error' => $error]);
-            Log::error('Outbox event dead-lettered', ['ulid' => $event->ulid, 'event_type' => $event->event_type, 'attempts' => $attempts, 'error' => $e::class]);
+            Log::error('Outbox event dead-lettered', $diagnostic);
 
-            return 'dead';
+            return $this->settle($event, $lease, ['failed_at' => $this->time(CarbonImmutable::now('UTC')), 'last_error' => $error])
+                ? 'dead' : 'superseded';
         }
 
+        Log::warning('Outbox delivery failed; will retry', $diagnostic);
         $base = (int) $this->config->get('outbox.backoff_seconds');
         $delay = min((int) $this->config->get('outbox.backoff_max_seconds'), $base * 2 ** min($attempts - 1, 20));
         $delay = max(1, intdiv($delay * random_int(50, 100), 100));
-        $this->settle($event, $lease, ['available_at' => $this->time(CarbonImmutable::now('UTC')->addSeconds($delay)), 'last_error' => $error]);
 
-        return 'retrying';
+        return $this->settle($event, $lease, ['available_at' => $this->time(CarbonImmutable::now('UTC')->addSeconds($delay)), 'last_error' => $error])
+            ? 'retrying' : 'superseded';
     }
 
     /**
+     * Applies the outcome only if this run still holds the lease. False: the lease expired and another run took
+     * the event over, so this run's outcome is discarded and reported as superseded (TASK-0012 #3).
+     *
      * @param  array<string, string|null>  $changes
      */
-    private function settle(stdClass $event, string $lease, array $changes): void
+    private function settle(stdClass $event, string $lease, array $changes): bool
     {
-        $this->db->connection()->table('outbox_events')
+        return $this->db->connection()->table('outbox_events')
             ->where('id', $event->id)
             ->where('claimed_until', $lease)
-            ->update($changes + ['claimed_until' => null]);
+            ->update($changes + ['claimed_until' => null]) === 1;
     }
 
     private function time(CarbonImmutable $time): string

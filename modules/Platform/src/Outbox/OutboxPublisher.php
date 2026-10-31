@@ -34,6 +34,10 @@ class OutboxPublisher
         }
 
         $payload = TypedFields::validate("outbox event [$eventType]", $this->events->payload($eventType), $payload);
+        if ($this->events->handlers($eventType) === []) {
+            // An event nobody consumes would be marked dispatched and lost (TASK-0012 #1).
+            throw new LogicException("Outbox event [$eventType] has no subscribed handler; register one with OutboxEvents::subscribe().");
+        }
         $type = $aggregate->getMorphClass();
         $id = $aggregate->getKey();
         if (strlen($type) > 100 || ! (is_int($id) || (is_string($id) && ctype_digit($id)))) {

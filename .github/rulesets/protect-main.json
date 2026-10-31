@@ -1,5 +1,5 @@
 {
-  "name": "Protect main",
+  "name": "main",
   "target": "branch",
   "enforcement": "active",
   "conditions": {
