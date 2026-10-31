@@ -84,15 +84,28 @@ The first start downloads the ClamAV signature database and can take several min
 **Performance note:** bind mounts from the Windows drive into WSL2 can be slow for PHP. Measured in Sprint 1.0 (ADR-0003): median 0.15 s per page with `vendor` and `node_modules` in named volumes, which is acceptable. If it becomes slow, move the working copy into the WSL filesystem (`\\wsl$\Ubuntu-24.04\home\<user>\competitive-ais`) and open it with VS Code Remote-WSL.
 
 ### 1.4 Continuous integration (P1-07, O1: GitHub Actions)
-`.github/workflows/ci.yml` runs on every push to `main` and on every pull request. It builds the **same Docker images** as local development and runs the scripts in `scripts/ci/`, so a local run and a CI run check the same things. Each job gets throwaway secrets from `scripts/dev/init-env.sh`. The token is read-only (`contents: read`), and `actions/checkout` is pinned to a commit SHA.
+`.github/workflows/ci.yml` runs on every push to any branch and on every pull request. It builds the **same Docker images** as local development and runs the scripts in `scripts/ci/`, so a local run and a CI run check the same things. Each job gets throwaway secrets from `scripts/dev/init-env.sh`. The token is read-only (`contents: read`), and `actions/checkout` is pinned to a commit SHA.
 
 | Job | Checks |
 |---|---|
 | `backend` | Pint (format) · Larastan level 8 (`phpstan.neon`) · Pest on MySQL 8.4 as the real least-privilege accounts, on a fresh volume, so the account init script is exercised · migrate → rollback all → migrate on `cais_test` · `composer audit` |
 | `frontend` | Vitest (`--passWithNoTests` until the Vue pages arrive in Sprint 1.1) · production build · `npm audit` |
-| `secrets` | Secret-like keys in `.env*.example` must be empty · gitleaks v8.30.1 over the full history (`.gitleaks.toml`: default rules; only the example files are exempt, covered by the first check) |
+| `secrets` | `.env*.example` files hold only blank lines, comments and `KEY=VALUE` lines whose non-empty values are on the approved list (`scripts/ci/env-example-values.txt`) · gitleaks v8.30.1 over the full history and the working tree (`.gitleaks.toml`) |
 
-Branch protection on `main` should require all three jobs to pass (Product Owner action, after the first green run). Not yet in CI: ESLint + vue-tsc (with the Vue/TypeScript setup in Sprint 1.1), Playwright E2E (P1-47), OpenAPI contract checks (with the first `/api/v1` endpoint).
+Not yet in CI: ESLint + vue-tsc (with the Vue/TypeScript setup in Sprint 1.1), Playwright E2E (P1-47), OpenAPI contract checks (with the first `/api/v1` endpoint).
+
+### 1.5 Protected `main` and the merge flow (P1-03)
+`main` is protected by a GitHub ruleset kept in the repository: `.github/rulesets/protect-main.json`. The file is not applied automatically; the Product Owner imports it once (repository admin rights needed):
+
+1. GitHub → repository **Settings** → **Rules** → **Rulesets** → **New ruleset** → **Import a ruleset**.
+2. Choose `.github/rulesets/protect-main.json` (download it from the repository first), check that it shows *Enforcement: Active* and the default branch as target, and **Create**.
+3. Check: `git push origin main` from a local clone must now be rejected.
+
+What it enforces on `main`: no deletion; no force-push; changes only through a pull request; the `backend`, `frontend` and `secrets` CI checks must pass on the pull request's latest commit, and the branch must be up to date with `main`. No approving review is required, because the project has one human maintainer; the Product Owner clicking **Merge pull request** is the approval. Merge commits only, so each story stays one revertible merge. Nobody bypasses the ruleset, including the owner; changing it is itself a Product Owner action.
+
+Flow from now on: Claude Code pushes a feature branch, runs the Codex review where `docs/12` §2 requires it, and posts the link to open the pull request (`https://github.com/rboycarr/competitive-ais/compare/main...<branch>?expand=1`). The Product Owner opens and merges it once CI is green. Claude Code no longer pushes to `main`.
+
+If a CI job is renamed in `.github/workflows/ci.yml`, update the `context` names in the ruleset file and re-import it, otherwise pull requests wait for a check that never runs.
 
 ## 2. Environments and configuration
 
