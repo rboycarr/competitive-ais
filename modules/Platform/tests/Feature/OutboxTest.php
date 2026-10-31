@@ -246,7 +246,7 @@ class OutboxTest extends TestCase
     }
 
     /**
-     * @return array{dispatched: int, retrying: int, dead: int}
+     * @return array{dispatched: int, retrying: int, dead: int, superseded: int}
      */
     private function relay(): array
     {
