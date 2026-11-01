@@ -34,10 +34,11 @@ class ApplyDatabaseGrants extends Command
 
         $count = fn (string $class): int => count(array_filter($plan, fn (array $t): bool => $t['class'] === $class));
         $this->components->info(sprintf(
-            'Grants applied to %d tables: %d mutable, %d append-only, %d no app access, %d with retention access.',
+            'Grants applied to %d tables: %d mutable, %d append-only, %d no-delete, %d no app access, %d with retention access.',
             count($plan),
             $count('mutable'),
             $count('append_only'),
+            $count('no_delete'),
             $count('app_excluded'),
             count(array_filter($plan, fn (array $t): bool => $t['retention'] !== [])),
         ));

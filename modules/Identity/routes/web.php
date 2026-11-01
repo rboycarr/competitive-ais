@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Identity\Http\Controllers\Admin\AccessGrantController;
 use Modules\Identity\Http\Controllers\Admin\RoleController;
 use Modules\Identity\Http\Controllers\Admin\TeamController;
 use Modules\Identity\Http\Controllers\Admin\UserController;
@@ -35,5 +36,12 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function () {
         Route::put('/teams/{team}', [TeamController::class, 'update'])->name('teams.update');
         Route::post('/teams/{team}/members', [TeamController::class, 'addMember'])->name('teams.members.add');
         Route::delete('/teams/{team}/members/{user}', [TeamController::class, 'removeMember'])->name('teams.members.remove');
+    });
+
+    // Access grants (P1-14): revoked, never deleted, so there is no DELETE route.
+    Route::middleware('can:grant.manage')->group(function () {
+        Route::get('/access-grants', [AccessGrantController::class, 'index'])->name('access-grants.index');
+        Route::post('/access-grants', [AccessGrantController::class, 'store'])->name('access-grants.store');
+        Route::post('/access-grants/{grant}/revoke', [AccessGrantController::class, 'revoke'])->name('access-grants.revoke');
     });
 });

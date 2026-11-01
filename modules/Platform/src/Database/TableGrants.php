@@ -29,7 +29,10 @@ class TableGrants
 
     public const APPEND_ONLY = ['SELECT', 'INSERT'];
 
-    private const CLASSES = ['mutable', 'append_only', 'app_excluded'];
+    /** Rows are revoked or closed by UPDATE, never deleted (P1-14). */
+    public const NO_DELETE = ['SELECT', 'INSERT', 'UPDATE'];
+
+    private const CLASSES = ['mutable', 'append_only', 'no_delete', 'app_excluded'];
 
     public function __construct(
         private readonly DatabaseManager $db,
@@ -52,6 +55,7 @@ class TableGrants
             $app = match ($class) {
                 'mutable' => self::MUTABLE,
                 'append_only' => self::APPEND_ONLY,
+                'no_delete' => self::NO_DELETE,
                 default => [],
             };
 
@@ -117,7 +121,7 @@ class TableGrants
         $unclassified = array_keys(array_filter($plan, fn (array $t): bool => $t['class'] === 'unclassified'));
         if ($unclassified !== [] || $views !== []) {
             throw new RuntimeException(trim(
-                ($unclassified !== [] ? 'Unclassified tables (no app access granted; add each to database.grants mutable, append_only or app_excluded): '.implode(', ', $unclassified).'. ' : '')
+                ($unclassified !== [] ? 'Unclassified tables (no app access granted; add each to database.grants mutable, append_only, no_delete or app_excluded): '.implode(', ', $unclassified).'. ' : '')
                 .($views !== [] ? 'Views are not permitted: '.implode(', ', $views).'.' : '')
             ));
         }

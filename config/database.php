@@ -187,7 +187,7 @@ return [
     |
     | Applied by `php artisan db:apply-grants`, which also runs after every
     | migration. Every table must be listed in exactly one of `mutable`,
-    | `append_only` or `app_excluded` (TASK-0003 #2). An unlisted table gets no
+    | `append_only`, `no_delete` or `app_excluded` (TASK-0003 #2). An unlisted table gets no
     | app access and makes the command, and therefore the migration, fail.
     | Views are not permitted. Tables may be listed before they exist.
     |
@@ -227,6 +227,11 @@ return [
             'teams',
             'user_invitations',
             'users',
+        ],
+
+        // SELECT, INSERT, UPDATE for the app account: rows are revoked or closed, never deleted (P1-14).
+        'no_delete' => [
+            'access_grants',
         ],
 
         // No access for the app account.
