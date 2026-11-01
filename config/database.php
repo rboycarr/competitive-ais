@@ -212,6 +212,8 @@ return [
         'mutable' => [
             'cache',
             'cache_locks',
+            'competitor_aliases', // P1-21: removing one is an audited correction
+            'competitor_relationships', // P1-21: ended with valid_to; removing one is an audited correction
             'failed_jobs',
             'job_batches',
             'jobs',

@@ -3,6 +3,8 @@ import { computed, ref } from 'vue';
 import { Link, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import CompetitorForm, { type CompetitorFields } from './CompetitorForm.vue';
+import AliasesSection, { type Alias } from './AliasesSection.vue';
+import RelationshipsSection, { type Relationship } from './RelationshipsSection.vue';
 
 type Option = { ulid: string; name: string };
 type Competitor = {
@@ -12,6 +14,7 @@ type Competitor = {
 
 const props = defineProps<{
     competitor: Competitor; lifecycles: string[]; canManage: boolean; tiers: string[]; analysts: Option[]; classifications: string[];
+    aliases: Alias[]; aliasTypes: string[]; relationships: Relationship[]; relationTypes: string[]; precisions: string[]; others: Option[];
 }>();
 
 // The server accepts only http(s) addresses; checked again here so no other scheme becomes a link.
@@ -51,6 +54,9 @@ function setLifecycle(): void {
             <dt class="font-medium">Classification</dt><dd>{{ props.competitor.classification }}</dd>
             <dt class="font-medium">Description</dt><dd class="whitespace-pre-line">{{ props.competitor.description ?? '—' }}</dd>
         </dl>
+
+        <AliasesSection :competitor-ulid="props.competitor.ulid" :competitor-name="props.competitor.name" :aliases="props.aliases" :alias-types="props.aliasTypes" :can-manage="props.canManage" />
+        <RelationshipsSection :competitor-ulid="props.competitor.ulid" :relationships="props.relationships" :relation-types="props.relationTypes" :precisions="props.precisions" :others="props.others" :can-manage="props.canManage" />
 
         <template v-if="props.canManage">
             <section aria-labelledby="lifecycle-heading" class="mb-6 max-w-2xl">

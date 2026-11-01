@@ -16,6 +16,8 @@ use Modules\Platform\Classification;
 use Modules\Registry\Actions\CompetitorService;
 use Modules\Registry\Http\Requests\CompetitorRequest;
 use Modules\Registry\Models\Competitor;
+use Modules\Registry\Models\CompetitorAlias;
+use Modules\Registry\Models\CompetitorRelationship;
 
 /**
  * Competitors (P1-20): list and profile for competitor.view holders, filtered by AccessScope (hidden entries are 404);
@@ -87,7 +89,48 @@ class CompetitorController
                 'description' => $competitor->description,
             ],
             'lifecycles' => Competitor::LIFECYCLES,
+            'aliases' => $competitor->aliases()->orderBy('alias')->get()->map(fn (CompetitorAlias $a): array => ['id' => $a->id, 'alias' => $a->alias, 'type' => $a->alias_type])->all(),
+            'aliasTypes' => CompetitorAlias::TYPES,
+            'relationships' => $this->relationships($viewer, $competitor),
+            'relationTypes' => CompetitorRelationship::TYPES,
+            'precisions' => CompetitorRelationship::PRECISIONS,
+            // Candidates for a new relationship: every other competitor the viewer can see, archived ones included.
+            'others' => $this->gate->forUser($viewer)->allows('competitor.manage')
+                ? Competitor::query()->visibleTo($viewer)->whereKeyNot($competitor->id)->orderBy('name')->get(['ulid', 'name'])
+                    ->map(fn (Competitor $c): array => ['ulid' => $c->ulid, 'name' => $c->name])->all()
+                : [],
         ] + $this->formOptions($viewer, $analysts));
+    }
+
+    /**
+     * Relationships of this competitor whose other competitor the viewer can see as well; the others are left out
+     * without a trace (a relationship has no classification of its own). Newest first.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function relationships(Authenticatable $viewer, Competitor $competitor): array
+    {
+        $rows = CompetitorRelationship::query()
+            ->where(fn ($q) => $q->where('parent_competitor_id', $competitor->id)->orWhere('child_competitor_id', $competitor->id))
+            ->orderByDesc('valid_from')->orderBy('id')->get();
+        $otherIds = $rows->map(fn (CompetitorRelationship $r): int => $r->parent_competitor_id === $competitor->id ? $r->child_competitor_id : $r->parent_competitor_id)->unique()->values()->all();
+        $others = $otherIds === [] ? collect() : Competitor::query()->visibleTo($viewer)->whereKey($otherIds)->get(['id', 'ulid', 'name'])->keyBy('id');
+
+        return array_values($rows->map(function (CompetitorRelationship $r) use ($competitor, $others): ?array {
+            $role = $r->parent_competitor_id === $competitor->id ? 'parent' : 'child';
+            $other = $others->get($role === 'parent' ? $r->child_competitor_id : $r->parent_competitor_id);
+
+            return $other === null ? null : [
+                'ulid' => $r->ulid,
+                'type' => $r->relation_type,
+                'role' => $role,
+                'other' => ['ulid' => $other->ulid, 'name' => $other->name],
+                'validFrom' => $r->valid_from->toDateString(),
+                'validFromPrecision' => $r->valid_from_precision,
+                'validTo' => $r->valid_to?->toDateString(),
+                'notes' => $r->notes,
+            ];
+        })->filter()->all());
     }
 
     public function store(CompetitorRequest $request, CompetitorService $competitors): RedirectResponse
