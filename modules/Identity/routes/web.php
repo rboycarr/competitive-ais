@@ -8,6 +8,7 @@ use Modules\Identity\Http\Controllers\Admin\TeamController;
 use Modules\Identity\Http\Controllers\Admin\UserController;
 use Modules\Identity\Http\Controllers\InvitationController;
 use Modules\Identity\Http\Controllers\SecurityController;
+use Modules\Identity\Http\Controllers\SessionController;
 
 // Accepting an invitation (P1-10). Rate-limited per IP (IdentityServiceProvider). No route pattern on {token}: the
 // service rejects malformed tokens, so every unusable link gets the same page (TASK-0017 #3).
@@ -19,7 +20,12 @@ Route::middleware('throttle:invitations')->group(function () {
 
 // Security settings (P1-11), behind a recent password confirmation, so the two-factor endpoints on the page (Fortify's
 // routes, config/fortify.php) do not interrupt with their own confirmation. Login and logout are Fortify's routes.
-Route::middleware(['auth', 'password.confirm'])->get('/user/security', [SecurityController::class, 'show'])->name('security.show');
+Route::middleware(['auth', 'password.confirm'])->group(function () {
+    Route::get('/user/security', [SecurityController::class, 'show'])->name('security.show');
+    // Signing out other devices (P1-17); the handle is an HMAC of the session ID, never the ID itself.
+    Route::delete('/user/sessions/{handle}', [SessionController::class, 'destroy'])->where('handle', '[0-9a-f]{64}')->name('sessions.destroy');
+    Route::delete('/user/sessions', [SessionController::class, 'destroyOthers'])->name('sessions.destroy-others');
+});
 
 // Administration (P1-13). Each route needs the permission; the services check the actor again.
 Route::middleware('auth')->prefix('admin')->name('admin.')->group(function () {

@@ -127,7 +127,7 @@ Indexes: (subject_type, subject_id, occurred_at), (actor_id, occurred_at), (acti
 - Not yet: deleting dispatched events after a retention period, and an admin screen for dead letters (with the Phase 1 admin pages).
 - Tests: `modules/Platform/tests/Feature/OutboxTest.php` (MySQL 8.4, real app account).
 
-**features** (Laravel Pennant), **jobs/failed_jobs/job_batches**, **cache**, and **sessions** use framework defaults.
+**features** (Laravel Pennant), **jobs/failed_jobs/job_batches**, **cache**, and **sessions** use framework defaults. **Sessions are stored in MySQL** (`SESSION_DRIVER=database`, PO decision 2026-11-01 for P1-17; previously Valkey), so users can list and end their own sessions: the security page shows each session's IP address, user agent and last activity, identified by an HMAC handle (app key), never by the session ID. Signing out a device deletes its row and cycles the remember token; `session.revoked` (scope `one`/`others`, count) is audited. Tests: `modules/Identity/tests/Feature/SessionsTest.php`.
 
 ### 3.2 Identity
 

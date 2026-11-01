@@ -3,7 +3,10 @@ import { computed, ref } from 'vue';
 import { router, useForm, usePage } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 
-const props = defineProps<{ twoFactorEnabled: boolean; twoFactorPending: boolean }>();
+type SessionRow = { handle: string; ipAddress: string | null; userAgent: string | null; lastActiveAt: string; current: boolean };
+
+const props = defineProps<{ twoFactorEnabled: boolean; twoFactorPending: boolean; sessions: SessionRow[] }>();
+const otherSessions = computed(() => props.sessions.filter((session) => !session.current));
 
 // P1-12: users with a privileged role are sent here until two-factor authentication is on.
 const page = usePage<{ auth?: { mfaRequired?: boolean } }>();
@@ -48,6 +51,21 @@ function regenerate(): void {
 
 function disable(): void {
     router.delete('/user/two-factor-authentication', { preserveScroll: true, onSuccess: () => { recoveryCodes.value = []; qrImage.value = null; } });
+}
+
+// P1-17: sign out other devices. The server identifies each session by a handle, never by its session ID.
+function signOut(session: SessionRow): void {
+    router.delete(`/user/sessions/${session.handle}`, { preserveScroll: true });
+}
+
+function signOutOthers(): void {
+    if (window.confirm('Sign out all other devices?')) {
+        router.delete('/user/sessions', { preserveScroll: true });
+    }
+}
+
+function lastActive(iso: string): string {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 if (props.twoFactorPending) {
@@ -101,6 +119,26 @@ if (props.twoFactorPending) {
                     <li v-for="code in recoveryCodes" :key="code">{{ code }}</li>
                 </ul>
             </div>
+        </section>
+
+        <section aria-labelledby="sessions-heading" class="mt-10 max-w-xl space-y-4">
+            <h2 id="sessions-heading" class="text-lg font-semibold">Where you're signed in</h2>
+            <p class="text-sm text-slate-700">Signing out another device also ends "keep me signed in" everywhere; this device stays signed in.</p>
+            <ul class="divide-y divide-slate-200 rounded border border-slate-200">
+                <li v-for="session in props.sessions" :key="session.handle" class="flex items-start justify-between gap-4 p-3 text-sm">
+                    <div>
+                        <p class="font-medium">{{ session.userAgent ?? 'Unknown browser' }}</p>
+                        <p class="text-slate-600">{{ session.ipAddress ?? 'Unknown address' }} · last active {{ lastActive(session.lastActiveAt) }}</p>
+                    </div>
+                    <span v-if="session.current" class="shrink-0 rounded bg-green-50 px-2 py-0.5 text-green-900">This device</span>
+                    <button v-else type="button" class="shrink-0 underline" @click="signOut(session)">
+                        Sign out<span class="sr-only"> {{ session.userAgent ?? 'this device' }}</span>
+                    </button>
+                </li>
+            </ul>
+            <button v-if="otherSessions.length > 0" type="button" class="rounded border border-red-300 px-4 py-2 text-red-800" @click="signOutOthers">
+                Sign out all other devices
+            </button>
         </section>
     </AppLayout>
 </template>
