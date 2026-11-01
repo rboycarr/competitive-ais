@@ -138,6 +138,10 @@ class AuditLogTest extends TestCase
             $encode(['id' => 5, 'occurred_at' => '2026-01-01', '_pointsToNextItems' => true]), str_repeat('A', 300)] as $cursor) {
             $this->actingAs($this->auditor)->get('/admin/audit?cursor='.urlencode($cursor))->assertRedirect()->assertSessionHasErrors('cursor');
         }
+        // TASK-0028: array-shaped input is a validation error too (Cursor::fromEncoded returns null for non-strings).
+        foreach (['cursor[]=x', 'cursor[id]=5&cursor[_pointsToNextItems]=1'] as $query) {
+            $this->actingAs($this->auditor)->get("/admin/audit?$query")->assertRedirect()->assertSessionHasErrors('cursor');
+        }
         $this->assertSame(0, DB::table('audit_events')->where('action', 'audit.searched')->count());
     }
 
