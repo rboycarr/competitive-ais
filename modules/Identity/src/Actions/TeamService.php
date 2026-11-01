@@ -6,6 +6,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
 use Modules\Platform\Audit\Actor;
@@ -14,7 +15,7 @@ use Modules\Platform\Classification;
 
 /**
  * Teams and their members (P1-13). The actor is active and holds team.manage; every change is audited. Teams are
- * not deleted here: access grants will reference them (P1-14), and history keeps them.
+ * not deleted here: access grants reference them (P1-14), and history keeps them.
  */
 class TeamService
 {
@@ -67,6 +68,12 @@ class TeamService
         }
 
         $this->db->transaction(function () use ($actor, $team, $member): void {
+            // Same team row lock as AccessGrantService::grant: joining a team that holds grants would be a self-grant
+            // (P1-14, docs/07 T2); others may add the actor.
+            Team::query()->whereKey($team->id)->lockForUpdate()->first();
+            if ($member->is($actor) && AccessGrant::query()->active()->where('team_id', $team->id)->exists()) {
+                throw ValidationException::withMessages(['member' => 'You cannot add yourself to a team that holds access grants.']);
+            }
             if ($team->members()->whereKey($member->id)->exists()) {
                 return;
             }

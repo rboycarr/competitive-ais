@@ -31,8 +31,8 @@ use Modules\Platform\Support\ModuleServiceProvider;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Identity (M01, docs/03): users, invitations (P1-10), login with TOTP two-factor authentication (P1-11), roles and
- * permissions; teams and access grants follow in Sprint 1.1.
+ * Identity (M01, docs/03): users, invitations (P1-10), login with TOTP two-factor authentication (P1-11), roles,
+ * permissions and teams (P1-13), access grants (P1-14).
  */
 class IdentityServiceProvider extends ModuleServiceProvider
 {
@@ -75,6 +75,11 @@ class IdentityServiceProvider extends ModuleServiceProvider
         $actions->define('team.updated', ['fields' => 'code[]', 'lead' => 'ulid']);
         $actions->define('team.member_added', ['member' => 'ulid']);
         $actions->define('team.member_removed', ['member' => 'ulid']);
+        $actions->define('access_grant.created', [
+            'grantee_type' => 'code', 'grantee' => 'ulid', 'scope' => 'code', 'max_classification' => 'code', 'can_export' => 'bool',
+            'expires_at' => 'int', // Unix seconds
+        ]);
+        $actions->define('access_grant.revoked', ['grantee_type' => 'code', 'grantee' => 'ulid']);
     }
 
     /**
@@ -140,6 +145,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
                     'userView' => $user->hasPermissionTo('user.view'),
                     'roleManage' => $user->hasPermissionTo('role.manage'),
                     'teamManage' => $user->hasPermissionTo('team.manage'),
+                    'grantManage' => $user->hasPermissionTo('grant.manage'),
                 ] : [],
             ];
         });
