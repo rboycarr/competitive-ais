@@ -56,6 +56,7 @@ describe('Registry/Admin/Categories', () => {
         await wrapper.get('section[aria-labelledby="add-category-heading"] form').trigger('submit');
         expect(post).toHaveBeenCalledWith('/admin/categories', expect.any(Object));
         expect(transform?.({ name: 'Crackers', parent: 1 })).toEqual({ name: 'Crackers', parent: 1 });
+        expect(transform?.({ name: 'Crackers', parent: '' })).toEqual({ name: 'Crackers', parent: null }); // top level
     });
 
     it('asks before removing and shows a refused removal', async () => {

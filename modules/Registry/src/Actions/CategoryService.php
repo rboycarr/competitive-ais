@@ -9,9 +9,11 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Validation\ValidationException;
+use LogicException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Registry\Models\ProductCategory;
+use Modules\Registry\Support\CategoryTree;
 use Modules\Registry\Support\Names;
 
 /**
@@ -111,6 +113,10 @@ class CategoryService
                     'UPDATE product_categories SET path = CONCAT(CONVERT(? USING ascii) COLLATE ascii_bin, SUBSTRING(path, ?)), depth = CAST(depth AS SIGNED) + ?, updated_at = ? WHERE path LIKE ?',
                     [$locked->childPath(), strlen($oldChildPath) + 1, $newDepth - $oldDepth, CarbonImmutable::now('UTC'), $oldChildPath.'%'],
                 );
+                // The CHECKs see single rows; compare the moved subtree with its parents before committing.
+                if (($inconsistent = CategoryTree::inconsistencies($locked->id)) !== []) {
+                    throw new LogicException('Moving category '.$locked->id.' left inconsistent categories: '.implode(', ', $inconsistent));
+                }
                 $this->audit->record('category.moved', $locked, array_filter([
                     'from_parent' => $from, 'to_parent' => $parent?->id,
                 ]) + ['subcategories' => $moved], $this->actor($actor));

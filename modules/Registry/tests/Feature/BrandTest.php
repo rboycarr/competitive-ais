@@ -51,6 +51,10 @@ class BrandTest extends TestCase
         $this->actingAs($reader)->delete("/brands/{$brand->ulid}")->assertForbidden();
         // Super admins manage the platform, not content (docs/07 ¹).
         $this->actingAs($admin)->get('/brands')->assertForbidden();
+        // A suspended account is signed out before anything is read or changed.
+        $suspended = $this->createUser('suspended@example.test', 'ci_analyst', 'suspended');
+        $this->actingAs($suspended)->get('/brands')->assertRedirect('/login');
+        $this->actingAs($suspended)->post('/brands', ['name' => 'Other'])->assertRedirect('/login');
         $this->assertSame(['Our Snacks'], Brand::query()->pluck('name')->all());
     }
 

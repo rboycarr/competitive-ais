@@ -5,11 +5,15 @@ namespace Modules\Registry\Tests\Feature;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Inertia\Testing\AssertableInertia;
+use LogicException;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
+use Modules\Registry\Actions\CategoryService;
 use Modules\Registry\Models\ProductCategory;
+use Modules\Registry\Support\CategoryTree;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
@@ -175,6 +179,35 @@ class CategoryTest extends TestCase
         }
         DB::table('product_categories')->insert($row([]));
         $this->assertSame(2, ProductCategory::query()->count());
+    }
+
+    public function test_the_tree_check_finds_rows_the_single_row_checks_cannot(): void
+    {
+        $snacks = $this->category('Snacks');
+        $chips = $this->category('Chips', $snacks);
+        $food = $this->category('Food');
+        $this->actingAs($this->director)->put("/admin/categories/{$snacks->id}/parent", ['parent' => $food->id])->assertRedirect();
+        $this->assertSame([], CategoryTree::inconsistencies());
+        $this->assertSame(0, Artisan::call('registry:verify-categories'));
+
+        // TASK-0036 #1: a path ending in the parent's ID passes the CHECKs even when the rest is wrong.
+        DB::table('product_categories')->insert(['name' => 'Stray', 'parent_id' => $chips->id, 'path' => "/{$chips->id}/{$chips->id}/", 'depth' => 2, 'created_at' => now(), 'updated_at' => now()]);
+        $stray = ProductCategory::query()->where('name', 'Stray')->sole();
+        $this->assertSame([$stray->id], CategoryTree::inconsistencies());
+        $this->assertSame([$stray->id], CategoryTree::inconsistencies($snacks->id));
+        $this->assertSame([], CategoryTree::inconsistencies($food->id + 1000));
+        $this->assertSame(1, Artisan::call('registry:verify-categories'));
+        $this->assertStringContainsString("disagrees with the parent: {$stray->id}", Artisan::output());
+
+        // A move that would leave its subtree inconsistent is rolled back.
+        try {
+            $this->app->make(CategoryService::class)->move($this->director, $snacks, null);
+            $this->fail('A move over an inconsistent subtree was committed.');
+        } catch (LogicException $e) {
+            $this->assertStringContainsString((string) $stray->id, $e->getMessage());
+        }
+        $this->assertSame($food->id, $snacks->refresh()->parent_id);
+        $this->assertSame(1, DB::table('audit_events')->where('action', 'category.moved')->count());
     }
 
     private function category(string $name, ?ProductCategory $parent = null): ProductCategory

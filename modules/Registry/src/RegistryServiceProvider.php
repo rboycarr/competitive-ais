@@ -2,15 +2,17 @@
 
 namespace Modules\Registry;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
+use Modules\Registry\Console\VerifyCategoryTree;
 use Modules\Registry\Contracts\CompetitorLookup;
 use Modules\Registry\Lookup\EloquentCompetitorLookup;
 
 /**
  * Registry (M02–M04, docs/03): competitors (P1-20), aliases and relationships (P1-21), brands and the category tree
- * (P1-22a); products, markets and taxonomies follow in Sprint 1.2. Competitor entries are classified records without competitor/market scopes (PO decision 2026-11-01):
- * classification and AccessScope decide who sees them.
+ * (P1-22a); products, markets and taxonomies follow in Sprint 1.2. Competitor entries are classified records without
+ * competitor/market scopes (PO decision 2026-11-01): classification and AccessScope decide who sees them.
  */
 class RegistryServiceProvider extends ModuleServiceProvider
 {
@@ -24,6 +26,14 @@ class RegistryServiceProvider extends ModuleServiceProvider
     public function boot(): void
     {
         parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([VerifyCategoryTree::class]);
+        }
+        // Daily, like the audit chain check: rows written around CategoryService show up here (TASK-0036 #1).
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            $schedule->command('registry:verify-categories')->daily();
+        });
 
         $audit = $this->app->make(AuditActions::class);
         $audit->define('competitor.created', ['lifecycle' => 'code', 'classification' => 'code']);
