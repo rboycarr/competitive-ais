@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Identity\Http\Controllers\Admin\AccessGrantController;
+use Modules\Identity\Http\Controllers\Admin\AuditLogController;
 use Modules\Identity\Http\Controllers\Admin\RoleController;
 use Modules\Identity\Http\Controllers\Admin\TeamController;
 use Modules\Identity\Http\Controllers\Admin\UserController;
@@ -44,4 +45,7 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function () {
         Route::post('/access-grants', [AccessGrantController::class, 'store'])->name('access-grants.store');
         Route::post('/access-grants/{grant}/revoke', [AccessGrantController::class, 'revoke'])->name('access-grants.revoke');
     });
+
+    // Audit log (P1-16): read-only; there are no routes that change audit events.
+    Route::get('/audit', [AuditLogController::class, 'index'])->middleware('can:audit.view')->name('audit.index');
 });

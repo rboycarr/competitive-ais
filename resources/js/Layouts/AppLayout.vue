@@ -5,7 +5,7 @@ import { Head, Link, usePage } from '@inertiajs/vue3';
 defineProps<{ title: string }>();
 
 type Shared = {
-    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean } };
+    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean } };
     flash?: { status?: string | null };
 };
 
@@ -18,6 +18,7 @@ const adminLinks = computed(() => [
     can.value.roleManage ? { href: '/admin/roles', label: 'Roles' } : null,
     can.value.teamManage ? { href: '/admin/teams', label: 'Teams' } : null,
     can.value.grantManage ? { href: '/admin/access-grants', label: 'Access grants' } : null,
+    can.value.auditView ? { href: '/admin/audit', label: 'Audit log' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 </script>
 
