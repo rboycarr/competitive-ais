@@ -57,8 +57,8 @@
 | P1-13 | As an admin, I manage roles, permissions, and teams | Seeded roles (`docs/07`); role changes audited; cannot edit own roles | M (**done** 2026-11-01: merged as pull request #7 after Codex reviews TASK-0023/0024) |
 | P1-14 | As an admin, I grant scoped access with expiry | `access_grants` CRUD (revoke, never delete); self-grant blocked; audited | M (**done** 2026-11-01: merged as pull request #8 after Codex review TASK-0025; scope `all` only until the registry exists, PO decision) |
 | P1-15 | As every module, visibility is decided in one place | `AccessScope` (`allows`, `applyTo`); matrix harness in `tests/Support`; 404 for hidden records | L (**done** 2026-11-01: merged as pull request #9 after Codex review TASK-0026; matrix: 4 clearances × 2 statuses × 7 grant variants × 4 classifications × 4 scope shapes, through `allows()`, `visibleTo()` and HTTP) |
-| P1-16 | As an auditor, I can search the audit trail | Read-only viewer; filters (actor, action, subject, date); `audit.view` only | M (**implemented** 2026-11-01 on `feature/p1-16-audit-viewer`; rows filtered by `AccessScope`; searches audited; pending Codex review and PO merge) |
-| P1-17 | As a user, I can see and revoke my sessions | Sessions list; revoke others; audit | S |
+| P1-16 | As an auditor, I can search the audit trail | Read-only viewer; filters (actor, action, subject, date); `audit.view` only | M (**done** 2026-11-01: merged as pull request #10 after Codex reviews TASK-0027/0028) |
+| P1-17 | As a user, I can see and revoke my sessions | Sessions list; revoke others; audit | S (**implemented** 2026-11-01 on `feature/p1-17-sessions`; sessions moved to MySQL (PO decision); pending Codex review and PO merge) |
 
 ### Sprint 1.2 — Registries
 

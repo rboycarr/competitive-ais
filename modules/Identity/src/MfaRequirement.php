@@ -35,5 +35,8 @@ final class MfaRequirement
         'password.confirm.store' => 'user/confirm-password',
         'password.confirmation' => 'user/confirmed-password-status',
         'logout' => 'logout',
+        // Signing out other devices protects the account, so it stays reachable before enrollment (P1-17).
+        'sessions.destroy' => 'user/sessions/{handle}',
+        'sessions.destroy-others' => 'user/sessions',
     ];
 }

@@ -74,7 +74,7 @@ covered(user, record, type, id) := ∃ grant ∈ activeGrants(user) ∪ activeGr
 | Domain | Control |
 |---|---|
 | Authentication | Fortify; Argon2id password hashing; breached/weak password rules; login throttling per account + IP; TOTP MFA with recovery codes; MFA mandatory for privileged permissions (`EnsureMfa` middleware); invitations only; session regeneration on login and privilege change; idle timeout 30 min (configurable); session list and revoke |
-| Sessions/cookies | `Secure`, `HttpOnly`, `SameSite=Lax`; CSRF on all state-changing routes; Redis-backed sessions |
+| Sessions/cookies | `Secure`, `HttpOnly`, `SameSite=Lax`; CSRF on all state-changing routes; sessions in the MySQL `sessions` table (PO decision 2026-11-01, P1-17), so users can list and end their own sessions; revocation deletes the row and cycles the remember token |
 | API | Sanctum tokens with abilities, expiry, and last-used tracking; per-token rate limits; `/api/v1` versioning; problem+json errors without stack traces |
 | Input | Form Requests everywhere; strict types; max lengths; enum validation; ULID route binding; no mass assignment (`$fillable` explicit) |
 | Output | Vue escaping by default; Markdown rendered server-side through an allowlist sanitizer; no `v-html` on unsanitized data (lint rule) |
