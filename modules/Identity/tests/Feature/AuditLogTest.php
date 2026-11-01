@@ -10,7 +10,6 @@ use Inertia\Testing\AssertableInertia;
 use LogicException;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
-use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Audit\AuditEvent;
@@ -18,6 +17,7 @@ use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Spatie\Permission\Models\Role;
 use Tests\Support\AuthorizationMatrix;
+use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
 /**

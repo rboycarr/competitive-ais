@@ -30,14 +30,16 @@
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/",
             "Modules\\Identity\\": "modules/Identity/src/",
-            "Modules\\Platform\\": "modules/Platform/src/"
+            "Modules\\Platform\\": "modules/Platform/src/",
+            "Modules\\Registry\\": "modules/Registry/src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
             "Tests\\": "tests/",
             "Modules\\Identity\\Tests\\": "modules/Identity/tests/",
-            "Modules\\Platform\\Tests\\": "modules/Platform/tests/"
+            "Modules\\Platform\\Tests\\": "modules/Platform/tests/",
+            "Modules\\Registry\\Tests\\": "modules/Registry/tests/"
         }
     },
     "scripts": {

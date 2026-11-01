@@ -12,11 +12,11 @@ use Modules\Identity\Actions\TeamService;
 use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
-use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
 use Tests\Support\Access\ProbeRecord;
 use Tests\Support\AuthorizationMatrix;
+use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
 /**
