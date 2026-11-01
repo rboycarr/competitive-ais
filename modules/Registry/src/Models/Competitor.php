@@ -3,6 +3,7 @@
 namespace Modules\Registry\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Modules\Platform\Access\Classifiable;
 use Modules\Platform\Access\Scoped;
 use Modules\Platform\Access\VisibleTo;
@@ -60,6 +61,12 @@ class Competitor extends Model implements Classifiable, Scoped
     public static function scopeRelations(): array
     {
         return [];
+    }
+
+    /** @return HasMany<CompetitorAlias, $this> */
+    public function aliases(): HasMany
+    {
+        return $this->hasMany(CompetitorAlias::class);
     }
 
     /**
