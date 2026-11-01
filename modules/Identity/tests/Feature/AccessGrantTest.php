@@ -13,7 +13,9 @@ use Modules\Identity\Actions\TeamService;
 use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
+use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
+use RuntimeException;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
@@ -207,7 +209,9 @@ class AccessGrantTest extends TestCase
         foreach ([
             'both grantees' => ['team_id' => $team->id],
             'no grantee' => ['user_id' => null],
-            'scope before the registry exists' => ['scope_type' => 'competitor'],
+            'competitor scope without a competitor' => ['scope_type' => 'competitor'],
+            'all scope with a competitor' => ['competitor_id' => $this->competitor('Acme Foods')],
+            'market scope before the market registry' => ['scope_type' => 'market'],
             'unknown classification' => ['max_classification' => 'secret'],
             'revoked without revoker' => ['revoked_at' => now('UTC')],
             'blank reason' => ['reason' => '  '],
@@ -221,11 +225,75 @@ class AccessGrantTest extends TestCase
         }
     }
 
+    public function test_a_grant_can_open_one_competitor_the_grantor_can_see(): void
+    {
+        // P1-20a.
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $acme = $this->competitor('Acme Foods');
+        $hidden = $this->competitor('Secret Co', 'restricted'); // the director has no restricted grant
+        $acmeUlid = (string) DB::table('competitors')->where('id', $acme)->value('ulid');
+
+        $this->actingAs($this->director)->get('/admin/access-grants')->assertInertia(fn (AssertableInertia $page) => $page
+            ->where('competitors', [['ulid' => $acmeUlid, 'name' => 'Acme Foods']]));
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'competitor', 'competitor' => $acmeUlid] + $this->form($analyst))->assertSessionHasNoErrors();
+
+        $grant = AccessGrant::query()->sole();
+        $this->assertSame(['competitor', $acme], [$grant->scope_type, $grant->competitor_id]);
+        $this->assertSame([$acme => Classification::Confidential], $this->app->make(AccessScope::class)->effectiveGrants($analyst)->competitors);
+        $this->assertEquals(['grantee_type' => 'user', 'grantee' => $analyst->ulid, 'scope' => 'competitor', 'competitor' => $acmeUlid, 'max_classification' => 'confidential', 'can_export' => false],
+            json_decode((string) DB::table('audit_events')->where('action', 'access_grant.created')->value('context'), true));
+        $this->actingAs($this->director)->get('/admin/access-grants')->assertInertia(fn (AssertableInertia $page) => $page->where('grants.0.competitor', 'Acme Foods'));
+
+        // A competitor the grantor cannot see, a missing competitor, or a competitor with the `all` scope: refused.
+        $hiddenUlid = (string) DB::table('competitors')->where('id', $hidden)->value('ulid');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'competitor', 'competitor' => $hiddenUlid] + $this->form($analyst))->assertSessionHasErrors('competitor');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'competitor'] + $this->form($analyst))->assertSessionHasErrors('competitor');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['competitor' => $acmeUlid] + $this->form($analyst))->assertSessionHasErrors('competitor');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market'] + $this->form($analyst))->assertSessionHasErrors('scope');
+        $this->assertSame(1, AccessGrant::query()->count());
+
+        // TASK-0033: a grant on a competitor the viewing admin cannot see shows no name.
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => 'competitor', 'competitor_id' => $hidden,
+            'max_classification' => 'internal', 'granted_by' => $this->director->id, 'reason' => 'Granted elsewhere', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $response = $this->actingAs($this->director)->get('/admin/access-grants')->assertInertia(fn (AssertableInertia $page) => $page->where('grants.0.competitor', 'A competitor you cannot see'));
+        $this->assertStringNotContainsString('Secret Co', (string) $response->getContent());
+    }
+
+    public function test_rolling_back_refuses_while_competitor_grants_exist(): void
+    {
+        // TASK-0033: down() checks before any DDL, so nothing changes and the grant stays a competitor grant.
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $acme = $this->competitor('Acme Foods');
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => 'competitor', 'competitor_id' => $acme,
+            'max_classification' => 'internal', 'granted_by' => $this->director->id, 'reason' => 'Rollback probe', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $migration = require base_path('modules/Identity/database/migrations/2026_11_07_000100_add_competitor_scope_to_access_grants.php');
+
+        try {
+            $migration->down();
+            $this->fail('The rollback ran although competitor grants exist.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Competitor-scoped access grants exist', $e->getMessage());
+        }
+        $this->assertSame(['competitor', $acme], [DB::table('access_grants')->value('scope_type'), (int) DB::table('access_grants')->value('competitor_id')]);
+    }
+
+    private function competitor(string $name, string $classification = 'internal'): int
+    {
+        return DB::table('competitors')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'name' => $name, 'slug' => Str::slug($name), 'lifecycle' => 'active',
+            'classification' => $classification, 'created_by' => $this->director->id, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
     /** @return array<string, mixed> */
     private function form(User|Team $grantee, string $classification = 'confidential', ?string $expires = null): array
     {
         return [
-            'grantee_type' => $grantee instanceof User ? 'user' : 'team', 'grantee' => $grantee->ulid,
+            'grantee_type' => $grantee instanceof User ? 'user' : 'team', 'grantee' => $grantee->ulid, 'scope' => 'all',
             'max_classification' => $classification, 'can_export' => false, 'reason' => 'Pricing study for Q1', 'expires_at' => $expires,
         ];
     }

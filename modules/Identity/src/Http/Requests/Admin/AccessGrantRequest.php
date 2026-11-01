@@ -20,6 +20,8 @@ class AccessGrantRequest extends FormRequest
         return [
             'grantee_type' => ['required', 'string', Rule::in(['user', 'team'])],
             'grantee' => ['required', 'string', 'size:26'],
+            'scope' => ['required', 'string', Rule::in(['all', 'competitor'])],
+            'competitor' => ['nullable', 'required_if:scope,competitor', 'prohibited_unless:scope,competitor', 'string', 'ulid'],
             'max_classification' => ['required', Rule::enum(Classification::class)],
             'can_export' => ['boolean'],
             'reason' => ['required', 'string', 'min:3', 'max:500'],

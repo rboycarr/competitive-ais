@@ -6,7 +6,7 @@ type Data = Record<string, unknown>;
 const post = vi.fn();
 const routerPost = vi.fn();
 const form = reactive({
-    grantee_type: 'user', grantee: '', max_classification: '', can_export: false, reason: '', expires_at: '',
+    grantee_type: 'user', grantee: '', scope: 'all', competitor: '', max_classification: '', can_export: false, reason: '', expires_at: '',
     errors: {} as Record<string, string>, processing: false, post, reset: vi.fn(),
     transformer: (data: Data): Data => data,
     transform(callback: (data: Data) => Data) { this.transformer = callback; return this; },
@@ -26,13 +26,13 @@ vi.mock('@inertiajs/vue3', async () => {
 const { default: AccessGrants } = await import('./AccessGrants.vue');
 
 const grant = (status: 'active' | 'revoked') => ({
-    ulid: `01J${status.toUpperCase().padEnd(23, '0')}`, granteeType: 'user' as const, grantee: 'Ana', scope: 'all', maxClassification: 'internal',
+    ulid: `01J${status.toUpperCase().padEnd(23, '0')}`, granteeType: 'user' as const, grantee: 'Ana', scope: 'all', competitor: null, maxClassification: 'internal',
     canExport: false, reason: 'Pricing study', grantedBy: 'Dee', grantedAt: '2026-11-01T00:00:00Z', expiresAt: null,
     revokedBy: status === 'revoked' ? 'Dee' : null, revokedAt: status === 'revoked' ? '2026-11-01T01:00:00Z' : null, status,
 });
 const props = {
     grants: [grant('active'), grant('revoked')], users: [{ ulid: 'U'.repeat(26), name: 'Ana' }], teams: [],
-    classifications: ['public', 'internal'], canGrantExport: false,
+    classifications: ['public', 'internal'], canGrantExport: false, competitors: [{ ulid: 'C'.repeat(26), name: 'Acme Foods' }],
 };
 
 describe('Identity/Admin/AccessGrants', () => {
@@ -49,6 +49,9 @@ describe('Identity/Admin/AccessGrants', () => {
         expect(post).toHaveBeenCalledWith('/admin/access-grants', expect.any(Object));
         expect(form.transformer({ expires_at: '2026-12-01T09:30' }).expires_at).toBe(new Date('2026-12-01T09:30').toISOString());
         expect(form.transformer({ expires_at: '' }).expires_at).toBeNull();
+        // A competitor is sent only with the competitor scope.
+        expect(form.transformer({ scope: 'all', competitor: 'C'.repeat(26), expires_at: '' }).competitor).toBeNull();
+        expect(form.transformer({ scope: 'competitor', competitor: 'C'.repeat(26), expires_at: '' }).competitor).toBe('C'.repeat(26));
     });
 
     it('offers revoke only for grants that are not revoked, after confirmation', async () => {

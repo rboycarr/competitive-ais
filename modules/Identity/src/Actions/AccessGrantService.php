@@ -14,6 +14,7 @@ use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Modules\Registry\Contracts\CompetitorLookup;
 
 /**
  * Access grants (P1-14, docs/07 §3, T2). The actor is active and holds grant.manage (which needs two-factor). Nobody
@@ -27,11 +28,21 @@ class AccessGrantService
         private readonly DatabaseManager $db,
         private readonly AuditLogger $audit,
         private readonly AccessScope $access,
+        private readonly CompetitorLookup $competitors,
     ) {}
 
-    public function grant(User $actor, User|Team $grantee, Classification $maxClassification, bool $canExport, string $reason, ?CarbonImmutable $expiresAt): AccessGrant
+    /**
+     * @param  ?string  $competitorUlid  null for scope `all`; otherwise a competitor the actor can see (P1-20a)
+     */
+    public function grant(User $actor, User|Team $grantee, Classification $maxClassification, bool $canExport, string $reason, ?CarbonImmutable $expiresAt, ?string $competitorUlid = null): AccessGrant
     {
         $this->assertMayManage($actor);
+        // A competitor grant names a competitor the actor can see: nobody hands out access to what they cannot see.
+        $competitor = null;
+        if ($competitorUlid !== null) {
+            $competitor = $this->competitors->findVisible($actor, $competitorUlid)
+                ?? throw ValidationException::withMessages(['competitor' => 'Unknown competitor.']);
+        }
         $reason = $this->validReason($reason);
         if ($expiresAt !== null && ! $expiresAt->isFuture()) {
             throw ValidationException::withMessages(['expires_at' => 'The expiry must be in the future.']);
@@ -44,7 +55,7 @@ class AccessGrantService
             throw ValidationException::withMessages(['can_export' => 'You cannot grant exports without being allowed to export.']);
         }
 
-        $grant = $this->db->transaction(function () use ($actor, $grantee, $maxClassification, $canExport, $reason, $expiresAt): AccessGrant {
+        $grant = $this->db->transaction(function () use ($actor, $grantee, $maxClassification, $canExport, $reason, $expiresAt, $competitor): AccessGrant {
             if ($grantee instanceof User) {
                 $grantee = User::query()->whereKey($grantee->id)->lockForUpdate()->firstOrFail();
                 if ($grantee->is($actor)) {
@@ -66,7 +77,8 @@ class AccessGrantService
                 'ulid' => (string) Str::ulid(),
                 'user_id' => $grantee instanceof User ? $grantee->id : null,
                 'team_id' => $grantee instanceof Team ? $grantee->id : null,
-                'scope_type' => AccessGrant::SCOPE_ALL,
+                'scope_type' => $competitor === null ? AccessGrant::SCOPE_ALL : AccessGrant::SCOPE_COMPETITOR,
+                'competitor_id' => $competitor?->id,
                 'max_classification' => $maxClassification,
                 'can_export' => $canExport,
                 'granted_by' => $actor->id,
@@ -77,7 +89,8 @@ class AccessGrantService
             $this->audit->record('access_grant.created', $grant, array_filter([
                 'grantee_type' => $grantee instanceof User ? 'user' : 'team',
                 'grantee' => $grantee->ulid,
-                'scope' => AccessGrant::SCOPE_ALL,
+                'scope' => $competitor === null ? AccessGrant::SCOPE_ALL : AccessGrant::SCOPE_COMPETITOR,
+                'competitor' => $competitor?->ulid,
                 'max_classification' => $maxClassification->value,
                 'can_export' => $canExport,
                 'expires_at' => $expiresAt?->getTimestamp(),

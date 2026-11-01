@@ -29,7 +29,7 @@ Each module lists its responsibility, public contracts (what other modules may u
 
 ## Registry (M02, M03, M04) — Phase 1
 - **Responsibility:** competitors, aliases, relationships, brands, categories, products (competitor or own), variants, markets, regions, channels, retailers, currencies, tags.
-- **Contracts:** `CompetitorLookup` (find by ULID or alias, `visibleTo` aware), `ProductLookup`, `MarketLookup`. Read DTOs only; other modules never write registry tables. Uses Identity's `UserDirectory` contract (active permission holders and display names as `UserSummary`, never the `User` model; P1-20).
+- **Contracts:** `CompetitorLookup` (find by ULID or alias, `visibleTo` aware), `ProductLookup`, `MarketLookup`. Read DTOs only; other modules never write registry tables. Uses Identity's `UserDirectory` contract (active permission holders and display names as `UserSummary`, never the `User` model; P1-20). `CompetitorLookup` implemented (P1-20a): `findVisible`, `visibleTo`, `summaries`, always filtered by `AccessScope`, returning `CompetitorSummary`; Identity uses it for competitor-scoped grants.
 - **Events:** `CompetitorCreated`, `CompetitorUpdated`, `CompetitorArchived`, `ProductCreated`, `ProductUpdated`, `VariantCreated`.
 - **Permissions:** `competitor.view`, `competitor.manage`, `product.view`, `product.manage`, `taxonomy.manage`.
 - **Rules:** archiving is blocked while open (non-terminal) intelligence items reference the entity; it warns otherwise. Relationship validity ranges must not overlap for the same pair and type. Aliases are normalized (trim, collapse whitespace) and stay unique per competitor.
