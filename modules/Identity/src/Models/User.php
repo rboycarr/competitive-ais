@@ -2,9 +2,12 @@
 
 namespace Modules\Identity\Models;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Carbon;
+use Laravel\Fortify\TwoFactorAuthenticatable;
 use Modules\Platform\Classification;
 use Spatie\Permission\Traits\HasRoles;
 
@@ -18,11 +21,15 @@ use Spatie\Permission\Traits\HasRoles;
  * @property string $email
  * @property string $status
  * @property Classification $clearance
+ * @property ?string $two_factor_secret
+ * @property ?string $two_factor_recovery_codes
+ * @property ?Carbon $two_factor_confirmed_at
+ * @property ?CarbonImmutable $last_login_at
  */
-#[Hidden(['password', 'remember_token'])]
+#[Hidden(['password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes'])]
 class User extends Authenticatable
 {
-    use HasRoles, Notifiable;
+    use HasRoles, Notifiable, TwoFactorAuthenticatable;
 
     protected $guarded = ['*'];
 
@@ -35,6 +42,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'last_login_at' => 'immutable_datetime',
             'password' => 'hashed',
+            'two_factor_confirmed_at' => 'datetime',
             'clearance' => Classification::class,
         ];
     }
