@@ -210,6 +210,7 @@ return [
 
         // SELECT, INSERT, UPDATE, DELETE for the app account.
         'mutable' => [
+            'brands', // P1-22a: unused brands may be removed (audited)
             'cache',
             'cache_locks',
             'competitor_aliases', // P1-21: removing one is an audited correction
@@ -222,6 +223,7 @@ return [
             'outbox_events',
             'password_reset_tokens',
             'permissions',
+            'product_categories', // P1-22a: empty categories may be removed (audited)
             'role_has_permissions',
             'roles',
             'sessions',

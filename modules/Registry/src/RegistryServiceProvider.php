@@ -8,8 +8,8 @@ use Modules\Registry\Contracts\CompetitorLookup;
 use Modules\Registry\Lookup\EloquentCompetitorLookup;
 
 /**
- * Registry (M02–M04, docs/03): competitors (P1-20), aliases and relationships (P1-21); products, markets and taxonomies
- * follow in Sprint 1.2. Competitor entries are classified records without competitor/market scopes (PO decision 2026-11-01):
+ * Registry (M02–M04, docs/03): competitors (P1-20), aliases and relationships (P1-21), brands and the category tree
+ * (P1-22a); products, markets and taxonomies follow in Sprint 1.2. Competitor entries are classified records without competitor/market scopes (PO decision 2026-11-01):
  * classification and AccessScope decide who sees them.
  */
 class RegistryServiceProvider extends ModuleServiceProvider
@@ -35,6 +35,14 @@ class RegistryServiceProvider extends ModuleServiceProvider
         $audit->define('competitor.relationship_added', ['parent' => 'ulid', 'child' => 'ulid', 'relation_type' => 'code']);
         $audit->define('competitor.relationship_updated', ['fields' => 'code[]']);
         $audit->define('competitor.relationship_removed', ['parent' => 'ulid', 'child' => 'ulid', 'relation_type' => 'code']);
+        // P1-22a: owner "own" or "competitor" (with its ULID); category parents by ID, absent for the top level.
+        foreach (['brand.created', 'brand.renamed', 'brand.removed'] as $action) {
+            $audit->define($action, ['owner' => 'code', 'competitor' => 'ulid']);
+        }
+        $audit->define('category.created', ['parent_id' => 'id']);
+        $audit->define('category.renamed');
+        $audit->define('category.moved', ['from_parent' => 'id', 'to_parent' => 'id', 'subcategories' => 'int']);
+        $audit->define('category.removed', ['parent_id' => 'id']);
         // Domain events (docs/03: CompetitorCreated, CompetitorUpdated, CompetitorArchived) are defined with their first
         // consumer, the Phase 2 search indexer; the outbox refuses events that no handler subscribes to.
     }

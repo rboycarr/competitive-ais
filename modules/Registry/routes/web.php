@@ -1,6 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Registry\Http\Controllers\BrandController;
+use Modules\Registry\Http\Controllers\CategoryController;
 use Modules\Registry\Http\Controllers\CompetitorAliasController;
 use Modules\Registry\Http\Controllers\CompetitorController;
 use Modules\Registry\Http\Controllers\CompetitorRelationshipController;
@@ -22,5 +24,22 @@ Route::middleware('auth')->group(function () {
         Route::post('/competitors/{competitor}/relationships', [CompetitorRelationshipController::class, 'store'])->name('competitors.relationships.store');
         Route::put('/competitors/{competitor}/relationships/{relationship}', [CompetitorRelationshipController::class, 'update'])->name('competitors.relationships.update');
         Route::delete('/competitors/{competitor}/relationships/{relationship}', [CompetitorRelationshipController::class, 'destroy'])->name('competitors.relationships.destroy');
+    });
+
+    // Brands (P1-22a): ours and visible competitors'; BrandService checks the owner's visibility again.
+    Route::get('/brands', [BrandController::class, 'index'])->middleware('can:product.view')->name('brands.index');
+    Route::middleware('can:product.manage')->group(function () {
+        Route::post('/brands', [BrandController::class, 'store'])->name('brands.store');
+        Route::put('/brands/{brand}', [BrandController::class, 'update'])->name('brands.update');
+        Route::delete('/brands/{brand}', [BrandController::class, 'destroy'])->name('brands.destroy');
+    });
+
+    // Admin › Categories (P1-22a): the product category tree.
+    Route::middleware('can:taxonomy.manage')->prefix('admin')->name('admin.')->group(function () {
+        Route::get('/categories', [CategoryController::class, 'index'])->name('categories.index');
+        Route::post('/categories', [CategoryController::class, 'store'])->name('categories.store');
+        Route::put('/categories/{category}', [CategoryController::class, 'update'])->name('categories.update')->whereNumber('category');
+        Route::put('/categories/{category}/parent', [CategoryController::class, 'move'])->name('categories.move')->whereNumber('category');
+        Route::delete('/categories/{category}', [CategoryController::class, 'destroy'])->name('categories.destroy')->whereNumber('category');
     });
 });
