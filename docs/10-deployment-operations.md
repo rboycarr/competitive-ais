@@ -89,10 +89,12 @@ The first start downloads the ClamAV signature database and can take several min
 | Job | Checks |
 |---|---|
 | `backend` | Pint (format) · Larastan level 8 (`phpstan.neon`) · Pest on MySQL 8.4 as the real least-privilege accounts, on a fresh volume, so the account init script is exercised · migrate → rollback all → migrate on `cais_test` · `composer audit` |
-| `frontend` | Vitest (`--passWithNoTests` until the Vue pages arrive in Sprint 1.1) · production build · `npm audit` |
+| `frontend` | ESLint (`eslint.config.js`; `vue/no-v-html` is an error, docs/07 Output) · `vue-tsc` type check · Vitest with jsdom (Vue Test Utils) · production build · `npm audit --omit=dev` (runtime packages: any advisory fails) · `npm audit --audit-level=high` (development tools: high and critical fail) |
 | `secrets` | `.env*.example` files hold only blank lines, comments and `KEY=VALUE` lines whose non-empty values are on the approved list (`scripts/ci/env-example-values.txt`) · gitleaks v8.30.1 over the full history and the working tree (`.gitleaks.toml`) |
 
-Not yet in CI: ESLint + vue-tsc (with the Vue/TypeScript setup in Sprint 1.1), Playwright E2E (P1-47), OpenAPI contract checks (with the first `/api/v1` endpoint).
+Known development-tool advisories (not shipped to browsers), review on 2026-11-15: GHSA-g3hv-75wg-m249 (`minimatch` < 11.0.1, used by ESLint, typescript-eslint and js-beautify) and GHSA-3g3m-2fjr-6pw4 (`glob` ≤ 14.0.1, via `@vue/test-utils` → js-beautify), both moderate. The fixed releases (minimatch 11.0.1, glob 14.0.2, 2026-10-27) are new majors that ESLint does not accept yet and are under two weeks old; upgrade when both are true. Patterns come from our own configuration, not user input.
+
+Not yet in CI: Playwright E2E (P1-47), OpenAPI contract checks (with the first `/api/v1` endpoint).
 
 ### 1.5 Protected `main` and the merge flow (P1-03)
 `main` is protected by a GitHub ruleset kept in the repository: `.github/rulesets/protect-main.json`. The file is not applied automatically; the Product Owner imports it once (repository admin rights needed):

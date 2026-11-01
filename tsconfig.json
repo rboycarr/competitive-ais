@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "jsx": "preserve",
+        "strict": true,
+        "noUncheckedIndexedAccess": true,
+        "noImplicitOverride": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "skipLibCheck": true,
+        "noEmit": true,
+        "types": ["vite/client"],
+        "paths": { "@/*": ["./resources/js/*"] }
+    },
+    "include": ["resources/js/**/*.ts", "resources/js/**/*.vue", "modules/*/resources/js/**/*.ts", "modules/*/resources/js/**/*.vue"]
+}

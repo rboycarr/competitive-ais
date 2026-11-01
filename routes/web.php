@@ -1,7 +1,3 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-
-Route::get('/', function () {
-    return view('welcome');
-});
+// Application-wide web routes. Module routes live in modules/<Module>/routes/web.php (docs/01 §3).
