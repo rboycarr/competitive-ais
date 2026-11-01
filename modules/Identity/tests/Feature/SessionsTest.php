@@ -91,6 +91,53 @@ class SessionsTest extends TestCase
         $this->assertEquals(['scope' => 'others', 'count' => 2], json_decode((string) DB::table('audit_events')->where('action', 'session.revoked')->value('context'), true));
     }
 
+    public function test_a_request_in_flight_cannot_bring_a_revoked_session_back(): void
+    {
+        // TASK-0029 #2: the other device's request read its session before the revocation and writes after it.
+        $phone = $this->otherSession($this->user, 'Phone browser');
+        $handler = $this->app->make('session')->driver('database')->getHandler();
+        $handler->read($phone);
+
+        $this->asCurrentDevice()->delete('/user/sessions')->assertRedirect();
+        $handler->write($phone, serialize(['_token' => 'late write']));
+
+        $this->assertFalse(DB::table('sessions')->where('id', $phone)->exists()); // an UPDATE of a missing row, no insert
+    }
+
+    public function test_the_revoked_devices_remember_cookie_stops_working(): void
+    {
+        $this->user->forceFill(['remember_token' => Str::random(60)])->save();
+        $recaller = fn (): string => $this->user->id.'|'.$this->user->getRememberToken().'|'.$this->user->getAuthPassword();
+        $oldCookie = $recaller();
+        $fromPhone = function () use ($oldCookie) {
+            // A device with only its remember cookie: no session data or signed-in guard left from other requests.
+            $this->flushSession();
+            $this->defaultCookies = []; // withCookie() would also send this device's session cookie
+            $this->app->make('auth')->forgetGuards();
+
+            return $this->withCookie($this->app->make('auth')->guard('web')->getRecallerName(), $oldCookie)->get('/user/security');
+        };
+
+        $fromPhone()->assertRedirect('/user/confirm-password'); // signed back in by the cookie
+        $this->app->make('auth')->forgetGuards();
+        $this->asCurrentDevice()->delete('/user/sessions')->assertRedirect();
+        $this->user->refresh();
+        $this->assertNotSame($oldCookie, $recaller());
+        $fromPhone()->assertRedirect('/login');
+    }
+
+    public function test_malformed_handles_change_nothing(): void
+    {
+        $this->otherSession($this->user, 'Phone browser');
+        $handle = $this->handleFor('Phone browser');
+
+        foreach ([strtoupper($handle), substr($handle, 0, 63), $handle.'0', 'not-a-handle'] as $bad) {
+            $this->asCurrentDevice()->delete('/user/sessions/'.$bad)->assertNotFound();
+        }
+        $this->assertSame(2, DB::table('sessions')->where('user_id', $this->user->id)->count());
+        $this->assertSame(0, DB::table('audit_events')->where('action', 'session.revoked')->count());
+    }
+
     public function test_a_recent_password_confirmation_is_required(): void
     {
         $this->otherSession($this->user, 'Phone browser');

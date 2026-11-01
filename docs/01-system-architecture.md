@@ -18,7 +18,7 @@ Nginx ──► Laravel (PHP-FPM) — modular monolith
             ├─ Scheduler — outbox relay, audit checkpoints, retention, health checks
             └─ Reverb — authorized realtime events (alerts, job progress)
    ├─ MySQL 8.4 LTS ........ canonical records (source of truth)
-   ├─ Redis ................ cache, queues, sessions, rate limiters
+   ├─ Redis ................ cache, queues, rate limiters (sessions: MySQL, P1-17)
    ├─ MinIO (S3 API) ....... buckets: evidence-quarantine, evidence (versioning + object lock), exports,
    │                          audit-anchor (signed checkpoint manifests; own credentials; compliance-mode lock)
    ├─ ClamAV (clamd) ....... upload malware scanning
