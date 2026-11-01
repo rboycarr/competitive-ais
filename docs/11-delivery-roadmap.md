@@ -52,8 +52,8 @@
 | ID | Story | Acceptance criteria | Size |
 |---|---|---|---|
 | P1-10 | As an admin, I invite users; there is no self-registration | Invite email (Mailpit); token hashed; 72 h expiry; single use; audit `user.invited`/`user.activated` | M (**done** 2026-11-02: merged as pull request #4 after Codex reviews TASK-0017/0018) |
-| P1-11 | As a user, I log in with password + TOTP MFA | Fortify; recovery codes; throttling; failed logins audited | M (**implemented** 2026-11-02 on `feature/p1-11-login-mfa`; pending Codex review and PO merge) |
-| P1-12 | As the security owner, privileged users cannot work without MFA | `EnsureMfa` blocks privileged permissions until enrolled (test per permission) | S |
+| P1-11 | As a user, I log in with password + TOTP MFA | Fortify; recovery codes; throttling; failed logins audited | M (**done** 2026-11-02: merged as pull request #5 after Codex reviews TASK-0019/0020) |
+| P1-12 | As the security owner, privileged users cannot work without MFA | `EnsureMfa` blocks privileged permissions until enrolled (test per permission) | S (**implemented** 2026-11-02 on `feature/p1-12-enforce-mfa`; pending Codex review and PO merge) |
 | P1-13 | As an admin, I manage roles, permissions, and teams | Seeded roles (`docs/07`); role changes audited; cannot edit own roles | M |
 | P1-14 | As an admin, I grant scoped access with expiry | `access_grants` CRUD (revoke, never delete); self-grant blocked; audited | M |
 | P1-15 | As every module, visibility is decided in one place | `AccessScope` (`allows`, `applyTo`); matrix harness in `tests/Support`; 404 for hidden records | L |

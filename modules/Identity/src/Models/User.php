@@ -8,7 +8,9 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
 use Laravel\Fortify\TwoFactorAuthenticatable;
+use Modules\Identity\MfaRequirement;
 use Modules\Platform\Classification;
+use Spatie\Permission\Contracts\Permission;
 use Spatie\Permission\Traits\HasRoles;
 
 /**
@@ -29,9 +31,55 @@ use Spatie\Permission\Traits\HasRoles;
 #[Hidden(['password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes'])]
 class User extends Authenticatable
 {
-    use HasRoles, Notifiable, TwoFactorAuthenticatable;
+    use HasRoles {
+        hasPermissionTo as private roleGrantsPermission;
+        hasDirectPermission as private directlyGrantsPermission;
+    }
+    use Notifiable, TwoFactorAuthenticatable;
 
     protected $guarded = ['*'];
+
+    /**
+     * A privileged permission counts only after two-factor authentication is confirmed (P1-12). Every permission
+     * check goes through here: Gate abilities, policies, `can` middleware and direct calls.
+     *
+     * @param  string|int|Permission|\BackedEnum  $permission
+     */
+    public function hasPermissionTo($permission, ?string $guardName = null): bool
+    {
+        if (! $this->roleGrantsPermission($permission, $guardName)) {
+            return false;
+        }
+
+        return $this->mfaAllows($permission, $guardName);
+    }
+
+    /**
+     * The same rule for spatie's direct-permission check (TASK-0021 #1). hasAnyPermission, hasAllPermissions and
+     * checkPermissionTo go through hasPermissionTo. Authorize with can()/hasPermissionTo, never with the raw
+     * permission collections (getAllPermissions, getDirectPermissions), which list what is assigned.
+     *
+     * @param  string|int|Permission|\BackedEnum  $permission
+     */
+    public function hasDirectPermission($permission): bool
+    {
+        return $this->directlyGrantsPermission($permission) && $this->mfaAllows($permission);
+    }
+
+    /**
+     * @param  string|int|Permission|\BackedEnum  $permission
+     */
+    private function mfaAllows($permission, ?string $guardName = null): bool
+    {
+        return ! in_array($this->filterPermission($permission, $guardName)->name, MfaRequirement::PRIVILEGED_PERMISSIONS, true)
+            || $this->hasEnabledTwoFactorAuthentication();
+    }
+
+    /** Holds a privileged permission (through a role or directly), so two-factor authentication is mandatory. */
+    public function requiresMfa(): bool
+    {
+        return $this->getAllPermissions()->pluck('name')->intersect(MfaRequirement::PRIVILEGED_PERMISSIONS)->isNotEmpty();
+    }
 
     /**
      * @return array<string, string>
