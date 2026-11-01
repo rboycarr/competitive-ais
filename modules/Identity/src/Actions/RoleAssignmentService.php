@@ -45,7 +45,10 @@ class RoleAssignmentService
         }
 
         $this->db->transaction(function () use ($actor, $target, $wanted): void {
-            // Locked, so two concurrent changes cannot both remove the last super admin.
+            // Locks in one fixed order for every change: all active super admins by ID, then the target. Two
+            // concurrent changes therefore wait for each other instead of deadlocking (TASK-0023 #2), and cannot both
+            // remove the last super admin.
+            User::role('super_admin')->where('status', 'active')->orderBy('users.id')->lockForUpdate()->pluck('users.id');
             User::query()->whereKey($target->id)->lockForUpdate()->first();
             $current = $target->roles()->pluck('name')->all();
             $added = array_values(array_diff($wanted, $current));
@@ -84,8 +87,9 @@ class RoleAssignmentService
         }
     }
 
+    /** Counted after the locks above, so it is stable for the rest of the transaction. */
     private function activeSuperAdmins(): int
     {
-        return User::role('super_admin')->where('status', 'active')->lockForUpdate()->count();
+        return User::role('super_admin')->where('status', 'active')->count();
     }
 }

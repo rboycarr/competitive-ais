@@ -22,6 +22,7 @@ use Laravel\Fortify\Events\TwoFactorAuthenticationFailed;
 use Laravel\Fortify\Fortify;
 use Modules\Identity\Actions\AuthenticateUser;
 use Modules\Identity\Console\InviteUser;
+use Modules\Identity\Http\Middleware\EnsureActiveAccount;
 use Modules\Identity\Http\Middleware\EnsureMfaEnrolled;
 use Modules\Identity\Listeners\AuditAuthentication;
 use Modules\Identity\Models\User;
@@ -152,8 +153,11 @@ class IdentityServiceProvider extends ModuleServiceProvider
     {
         /** @var Kernel $kernel the bound HTTP kernel (resolving the concrete class would build a second one) */
         $kernel = $this->app->make(HttpKernel::class);
-        // Both route groups: API routes (/api/v1, Sanctum tokens later) are held to the same rule (TASK-0021 #2).
-        $kernel->appendMiddlewareToGroup('web', EnsureMfaEnrolled::class);
-        $kernel->appendMiddlewareToGroup('api', EnsureMfaEnrolled::class);
+        // Both route groups: API routes (/api/v1, Sanctum tokens later) are held to the same rules (TASK-0021 #2).
+        // Inactive accounts are signed out first (TASK-0023 #3), then two-factor enrollment is enforced.
+        foreach (['web', 'api'] as $group) {
+            $kernel->appendMiddlewareToGroup($group, EnsureActiveAccount::class);
+            $kernel->appendMiddlewareToGroup($group, EnsureMfaEnrolled::class);
+        }
     }
 }

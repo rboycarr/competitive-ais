@@ -177,6 +177,24 @@ class AdministrationTest extends TestCase
         $this->assertSame(['fields' => ['name', 'description', 'lead_user_id']], json_decode((string) DB::table('audit_events')->where('action', 'team.updated')->value('context'), true));
     }
 
+    public function test_a_suspended_account_loses_its_session_and_every_permission(): void
+    {
+        // TASK-0023 #3: suspension takes effect at the next request, also for a session that is still open.
+        $admin = $this->enableTwoFactor($this->createUser('admin@example.test', 'super_admin', clearance: Classification::Restricted));
+        $this->actingAs($admin)->get('/admin/users')->assertOk();
+
+        DB::table('users')->where('id', $admin->id)->update(['status' => 'suspended']);
+        $admin->refresh();
+        $this->assertFalse($admin->hasPermissionTo('user.view'));
+        $this->assertFalse($admin->hasDirectPermission('user.view'));
+
+        foreach (['/admin/users', '/admin/roles', '/admin/teams', '/'] as $page) {
+            $this->actingAs($admin)->get($page)->assertRedirect('/login');
+            $this->assertGuest();
+        }
+        $this->actingAs($admin)->getJson('/admin/users')->assertUnauthorized()->assertHeader('Content-Type', 'application/problem+json');
+    }
+
     public function test_admins_without_two_factor_are_sent_to_enroll_first(): void
     {
         $admin = $this->createUser('admin@example.test', 'super_admin');

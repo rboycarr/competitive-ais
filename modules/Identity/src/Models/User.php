@@ -53,7 +53,8 @@ class User extends Authenticatable
      */
     public function hasPermissionTo($permission, ?string $guardName = null): bool
     {
-        if (! $this->roleGrantsPermission($permission, $guardName)) {
+        // A suspended or deactivated account holds no permission at all (TASK-0023 #3).
+        if ($this->status !== 'active' || ! $this->roleGrantsPermission($permission, $guardName)) {
             return false;
         }
 
@@ -69,7 +70,7 @@ class User extends Authenticatable
      */
     public function hasDirectPermission($permission): bool
     {
-        return $this->directlyGrantsPermission($permission) && $this->mfaAllows($permission);
+        return $this->status === 'active' && $this->directlyGrantsPermission($permission) && $this->mfaAllows($permission);
     }
 
     /**
