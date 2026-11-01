@@ -9,6 +9,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
+use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
@@ -22,6 +23,7 @@ class TeamService
     public function __construct(
         private readonly DatabaseManager $db,
         private readonly AuditLogger $audit,
+        private readonly AccessScope $access,
     ) {}
 
     public function create(User $actor, string $name, ?string $description, ?User $lead): Team
@@ -80,6 +82,7 @@ class TeamService
             $team->members()->attach($member->id, ['added_by' => $actor->id, 'created_at' => now('UTC')->format('Y-m-d H:i:s.u')]);
             $this->audit->record('team.member_added', $team, ['member' => $member->ulid], Actor::user($actor->id), Classification::Internal);
         });
+        $this->access->forget(); // team grants reach members (P1-15)
     }
 
     public function removeMember(User $actor, Team $team, User $member): void
@@ -92,6 +95,7 @@ class TeamService
             }
             $this->audit->record('team.member_removed', $team, ['member' => $member->ulid], Actor::user($actor->id), Classification::Internal);
         });
+        $this->access->forget();
     }
 
     private function assertMayManage(User $actor): void

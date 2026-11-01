@@ -10,6 +10,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
+use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
@@ -25,6 +26,7 @@ class AccessGrantService
     public function __construct(
         private readonly DatabaseManager $db,
         private readonly AuditLogger $audit,
+        private readonly AccessScope $access,
     ) {}
 
     public function grant(User $actor, User|Team $grantee, Classification $maxClassification, bool $canExport, string $reason, ?CarbonImmutable $expiresAt): AccessGrant
@@ -42,7 +44,7 @@ class AccessGrantService
             throw ValidationException::withMessages(['can_export' => 'You cannot grant exports without being allowed to export.']);
         }
 
-        return $this->db->transaction(function () use ($actor, $grantee, $maxClassification, $canExport, $reason, $expiresAt): AccessGrant {
+        $grant = $this->db->transaction(function () use ($actor, $grantee, $maxClassification, $canExport, $reason, $expiresAt): AccessGrant {
             if ($grantee instanceof User) {
                 $grantee = User::query()->whereKey($grantee->id)->lockForUpdate()->firstOrFail();
                 if ($grantee->is($actor)) {
@@ -83,6 +85,9 @@ class AccessGrantService
 
             return $grant;
         });
+        $this->access->forget(); // visibility changes from now on, also later in this request (P1-15)
+
+        return $grant;
     }
 
     public function revoke(User $actor, AccessGrant $grant): void
@@ -102,6 +107,7 @@ class AccessGrantService
                 'grantee' => $grantee->ulid,
             ], Actor::user($actor->id), Classification::Internal);
         });
+        $this->access->forget();
     }
 
     private function assertMayManage(User $actor): void
