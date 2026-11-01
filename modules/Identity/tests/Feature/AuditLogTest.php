@@ -16,6 +16,7 @@ use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Audit\AuditEvent;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Spatie\Permission\Models\Role;
 use Tests\Support\AuthorizationMatrix;
 use Tests\TestCase;
 
@@ -123,6 +124,36 @@ class AuditLogTest extends TestCase
         $second = $this->actingAs($this->auditor)->get($next)->assertOk();
         $this->assertSame(array_slice(array_reverse($ulids), 50), array_column($second->inertiaProps('events'), 'ulid'));
         $this->assertNull($second->inertiaProps('nextUrl'));
+        $this->assertEquals(
+            [['filters' => ['action'], 'next_page' => false], ['filters' => ['action'], 'next_page' => true]],
+            DB::table('audit_events')->where('action', 'audit.searched')->orderBy('id')->pluck('context')->map(fn ($c) => json_decode((string) $c, true))->all(),
+        );
+    }
+
+    public function test_forged_page_links_are_refused_not_errors(): void
+    {
+        // TASK-0027 #1: a cursor that decodes but lacks an integer id made the paginator throw (500).
+        $encode = fn (array $fields): string => rtrim(strtr(base64_encode((string) json_encode($fields)), '+/', '-_'), '=');
+        foreach (['forged', $encode(['_pointsToNextItems' => true]), $encode(['id' => 'x', '_pointsToNextItems' => true]),
+            $encode(['id' => 5, 'occurred_at' => '2026-01-01', '_pointsToNextItems' => true]), str_repeat('A', 300)] as $cursor) {
+            $this->actingAs($this->auditor)->get('/admin/audit?cursor='.urlencode($cursor))->assertRedirect()->assertSessionHasErrors('cursor');
+        }
+        $this->assertSame(0, DB::table('audit_events')->where('action', 'audit.searched')->count());
+    }
+
+    public function test_the_actor_list_needs_the_user_directory_and_inactive_viewers_are_signed_out(): void
+    {
+        // TASK-0027 #2: the actor filter lists every account (inactive too), so only for user.view holders.
+        Role::create(['name' => 'audit_only', 'guard_name' => 'web'])->givePermissionTo('audit.view');
+        $auditOnly = $this->createUser('audit-only@example.test', 'audit_only', clearance: Classification::Restricted);
+        $this->createUser('gone@example.test', 'ci_analyst', 'deactivated');
+
+        $this->actingAs($auditOnly)->get('/admin/audit')->assertOk()->assertInertia(fn (AssertableInertia $page) => $page->where('users', []));
+        $this->actingAs($this->auditor)->get('/admin/audit')->assertOk()->assertInertia(fn (AssertableInertia $page) => $page->has('users', 3));
+
+        DB::table('users')->where('id', $this->auditor->id)->update(['status' => 'suspended']);
+        $this->actingAs($this->auditor->refresh())->get('/admin/audit')->assertRedirect('/login');
+        $this->assertGuest();
     }
 
     public function test_every_search_is_audited_and_network_data_stays_hidden(): void
@@ -132,7 +163,7 @@ class AuditLogTest extends TestCase
 
         $search = DB::table('audit_events')->where('action', 'audit.searched')->sole();
         $this->assertSame($this->auditor->id, $search->actor_id);
-        $this->assertEquals(['filters' => ['action', 'subject']], json_decode((string) $search->context, true));
+        $this->assertEquals(['filters' => ['action', 'subject'], 'next_page' => false], json_decode((string) $search->context, true));
         $this->assertSame('127.0.0.1', DB::table('audit_event_network')->where('audit_event_id', $search->id)->value('ip_address'));
 
         $body = (string) $response->getContent();

@@ -27,7 +27,7 @@ class AuditLogController
     {
         $viewer = $request->user();
         abort_unless($viewer instanceof User, 403);
-        $filters = array_filter($request->validated(), fn ($value) => is_string($value) && $value !== '');
+        $filters = array_filter($request->safe()->except('cursor'), fn ($value) => is_string($value) && $value !== '');
 
         $query = AuditEvent::query()->visibleTo($viewer);
         if (isset($filters['actor'])) {
@@ -50,10 +50,11 @@ class AuditLogController
         $events = collect($page->items());
         $actors = User::query()->whereIn('id', $events->pluck('actor_id')->filter()->unique()->values())->pluck('name', 'id');
 
-        $db->transaction(fn () => $audit->record('audit.searched', null, array_filter([
+        // Filter names only, never their values (TASK-0027 #3: both keys always present).
+        $db->transaction(fn () => $audit->record('audit.searched', null, [
             'filters' => array_keys($filters),
             'next_page' => $request->filled('cursor'),
-        ]), Actor::user($viewer->id), Classification::Internal));
+        ], Actor::user($viewer->id), Classification::Internal));
 
         return Inertia::render('Identity/Admin/AuditLog', [
             'events' => $events->map(fn (AuditEvent $event): array => [
@@ -71,8 +72,12 @@ class AuditLogController
             'previousUrl' => $page->previousPageUrl(),
             'filters' => $filters,
             'actions' => $actions->names(),
-            'users' => User::query()->orderBy('name')->get(['id', 'ulid', 'name'])
-                ->map(fn (User $user): array => ['ulid' => $user->ulid, 'name' => $user->name])->all(),
+            // The actor filter lists every account, inactive ones too (past actions stay searchable), and only for
+            // viewers who may see the user directory anyway (TASK-0027 #2).
+            'users' => $viewer->hasPermissionTo('user.view')
+                ? User::query()->orderBy('name')->get(['id', 'ulid', 'name'])
+                    ->map(fn (User $user): array => ['ulid' => $user->ulid, 'name' => $user->name])->all()
+                : [],
         ]);
     }
 }
