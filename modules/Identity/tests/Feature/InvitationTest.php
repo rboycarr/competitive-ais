@@ -16,6 +16,7 @@ use Modules\Identity\Actions\InvitationService;
 use Modules\Identity\Mail\InvitationMail;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
+use Spatie\Permission\Models\Role;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\TestCase;
 
@@ -140,8 +141,11 @@ class InvitationTest extends TestCase
 
     public function test_unknown_and_malformed_links_get_the_same_answer(): void
     {
-        $this->get('/invitations/'.str_repeat('a', 64))->assertNotFound()->assertInertia(fn (AssertableInertia $page) => $page->component('Identity/InvitationUnavailable'));
-        $this->get('/invitations/not-a-token')->assertNotFound();
+        // Unknown, malformed, upper-case and oversized tokens: same status and same page (TASK-0017 #3).
+        foreach ([str_repeat('a', 64), 'not-a-token', str_repeat('A', 64), str_repeat('a', 65), str_repeat('f', 500)] as $token) {
+            $this->get("/invitations/$token")->assertNotFound()
+                ->assertInertia(fn (AssertableInertia $page) => $page->component('Identity/InvitationUnavailable'));
+        }
         $this->assertNull($this->app->make(InvitationService::class)->accept('not-a-token', 'X', self::PASSWORD));
     }
 
@@ -167,18 +171,62 @@ class InvitationTest extends TestCase
         $this->assertSame(1, Artisan::call('identity:invite', ['email' => 'x@example.test', '--role' => 'ci_analyst', '--clearance' => 'top-secret']));
     }
 
-    public function test_inviters_cannot_exceed_their_own_clearance_or_create_super_admins(): void
+    public function test_only_holders_of_user_manage_invite_and_only_super_admins_without_a_ceiling(): void
     {
-        $this->invite('director@example.test', 'ci_director', Classification::Confidential);
-        $this->accept($this->sentToken('director@example.test'));
-        $director = User::query()->where('email', 'director@example.test')->sole();
+        $roles = ['super_admin', 'ci_director', 'ci_analyst', 'data_collector', 'sales_field', 'exec_reader', 'auditor', 'service_account'];
+        $inviters = [];
+        foreach ($roles as $role) {
+            $inviters[$role] = $this->member($role, Classification::Restricted);
+        }
 
-        $this->assertInvalid(fn () => $this->invite('above@example.test', 'ci_analyst', Classification::Restricted, $director), 'clearance');
-        $this->assertInvalid(fn () => $this->invite('boss@example.test', 'super_admin', Classification::Internal, $director), 'role');
+        // TASK-0017 #1: every role tries to invite every role. Only super_admin holds user.manage in the seeded matrix.
+        foreach ($inviters as $inviterRole => $inviter) {
+            foreach ($roles as $target) {
+                $email = "$inviterRole.$target@example.test";
+                if ($inviterRole === 'super_admin') {
+                    $this->invite($email, $target, Classification::Internal, $inviter);
+                } else {
+                    $this->assertInvalid(fn () => $this->invite($email, $target, Classification::Internal, $inviter), 'role');
+                }
+            }
+        }
+        $this->assertSame(count($roles), DB::table('user_invitations')->where('email', 'like', 'super_admin.%')->count());
 
-        $this->invite('peer@example.test', 'ci_analyst', Classification::Confidential, $director);
         $audit = DB::table('audit_events')->where('action', 'user.invited')->orderByDesc('id')->first();
-        $this->assertSame(['user', $director->id], [$audit?->actor_type, $audit?->actor_id]);
+        $this->assertSame(['user', $inviters['super_admin']->id], [$audit?->actor_type, $audit?->actor_id]);
+    }
+
+    public function test_a_role_with_user_manage_cannot_hand_out_permissions_it_lacks(): void
+    {
+        $lead = Role::create(['name' => 'team_lead', 'guard_name' => 'web']);
+        $lead->givePermissionTo(['user.manage', 'competitor.view', 'product.view', 'intelligence.view']);
+        $inviter = $this->member('team_lead', Classification::Confidential);
+
+        $this->invite('reader@example.test', 'exec_reader', Classification::Internal, $inviter);      // a subset: allowed
+        $this->invite('field@example.test', 'sales_field', Classification::Confidential, $inviter);   // a subset: allowed
+        $this->assertInvalid(fn () => $this->invite('analyst@example.test', 'ci_analyst', Classification::Internal, $inviter), 'role');
+        $this->assertInvalid(fn () => $this->invite('boss@example.test', 'super_admin', Classification::Internal, $inviter), 'role');
+        $this->assertInvalid(fn () => $this->invite('above@example.test', 'exec_reader', Classification::Restricted, $inviter), 'clearance');
+
+        DB::table('users')->where('id', $inviter->id)->update(['status' => 'suspended']);
+        $this->assertInvalid(fn () => $this->invite('later@example.test', 'exec_reader', Classification::Internal, $inviter->refresh()), 'role');
+    }
+
+    public function test_super_admins_stay_within_their_own_clearance(): void
+    {
+        $admin = $this->member('super_admin', Classification::Confidential);
+
+        $this->invite('ok@example.test', 'ci_director', Classification::Confidential, $admin);
+        $this->assertInvalid(fn () => $this->invite('above@example.test', 'ci_director', Classification::Restricted, $admin), 'clearance');
+    }
+
+    public function test_production_password_hashing_reads_no_environment_variables(): void
+    {
+        // TASK-0017 #4: tests lower the Argon2id cost in tests/TestCase.php; the shipped config has fixed values.
+        $config = (string) file_get_contents(config_path('hashing.php'));
+        $this->assertStringNotContainsString('env(', $config);
+        $this->assertSame(['driver' => 'argon2id', 'memory' => 65536, 'time' => 3], ['driver' => (require config_path('hashing.php'))['driver'],
+            'memory' => (require config_path('hashing.php'))['argon']['memory'], 'time' => (require config_path('hashing.php'))['argon']['time']]);
     }
 
     public function test_weak_or_mismatched_passwords_keep_the_invitation_open(): void
@@ -214,6 +262,17 @@ class InvitationTest extends TestCase
         $this->assertNotNull($first);
         $this->assertNull($second);
         $this->assertSame(['First'], User::query()->pluck('name')->all());
+    }
+
+    /** An active account with the given role, created through the real invitation flow (system inviter). */
+    private function member(string $role, Classification $clearance): User
+    {
+        $email = 'member.'.str_replace('_', '-', $role).'@example.test';
+        $this->invite($email, $role, $clearance);
+        $user = $this->app->make(InvitationService::class)->accept($this->sentToken($email), "Member $role", self::PASSWORD);
+        $this->assertNotNull($user);
+
+        return $user;
     }
 
     private function invite(string $email, string $role = 'exec_reader', Classification $clearance = Classification::Internal, ?User $inviter = null): void

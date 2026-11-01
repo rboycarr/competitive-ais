@@ -20,8 +20,8 @@ use Spatie\Permission\Models\Role;
  *
  * - The token is 32 random bytes, sent once by email and stored only as its SHA-256; it expires after 72 hours
  *   and works once. A new invitation for the same address revokes the open ones.
- * - An inviting user cannot hand out a clearance above their own, and only a super_admin can invite a super_admin.
- *   The console command (bootstrap) acts as the system.
+ * - An inviting user needs user.manage and cannot hand out more than they hold (assertInviterMayGrant). The console
+ *   command (bootstrap) acts as the system.
  * - Accepting runs under a row lock, so two concurrent submissions cannot create two accounts.
  * - Both steps are audited in the same transaction (user.invited, user.activated). The email is sent after commit.
  */
@@ -49,12 +49,7 @@ class InvitationService
             throw ValidationException::withMessages(['role' => "Unknown role [$roleName]."]);
         }
         if ($inviter !== null) {
-            if (! $inviter->clearance->isAtLeast($clearance)) {
-                throw ValidationException::withMessages(['clearance' => 'You cannot grant a clearance above your own.']);
-            }
-            if ($roleName === 'super_admin' && ! $inviter->hasRole('super_admin')) {
-                throw ValidationException::withMessages(['role' => 'Only a super admin can invite a super admin.']);
-            }
+            $this->assertInviterMayGrant($inviter, $roleName, $clearance);
         }
         if (User::query()->where('email', $email)->exists()) {
             throw ValidationException::withMessages(['email' => 'An account with this email address already exists.']);
@@ -94,6 +89,33 @@ class InvitationService
         $this->db->connection()->afterCommit(fn () => Mail::to($email)->send(new InvitationMail($token, $expiresAt)));
 
         return $invitation;
+    }
+
+    /**
+     * An inviting user needs user.manage, cannot hand out a clearance above their own, and cannot hand out a role
+     * with permissions they do not hold themselves (TASK-0017 #1). A super_admin, who manages the platform, may
+     * invite any role; only a super_admin may invite a super_admin.
+     */
+    private function assertInviterMayGrant(User $inviter, string $roleName, Classification $clearance): void
+    {
+        if ($inviter->status !== 'active' || ! $inviter->hasPermissionTo('user.manage')) {
+            throw ValidationException::withMessages(['role' => 'You are not allowed to invite users.']);
+        }
+        if (! $inviter->clearance->isAtLeast($clearance)) {
+            throw ValidationException::withMessages(['clearance' => 'You cannot grant a clearance above your own.']);
+        }
+        if ($inviter->hasRole('super_admin')) {
+            return;
+        }
+        if ($roleName === 'super_admin') {
+            throw ValidationException::withMessages(['role' => 'Only a super admin can invite a super admin.']);
+        }
+
+        $roleGives = Role::findByName($roleName, 'web')->permissions->pluck('name')->all();
+        $inviterHas = $inviter->getAllPermissions()->pluck('name')->all();
+        if (array_diff($roleGives, $inviterHas) !== []) {
+            throw ValidationException::withMessages(['role' => 'You cannot invite someone with permissions you do not hold.']);
+        }
     }
 
     /**

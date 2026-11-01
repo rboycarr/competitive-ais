@@ -8,8 +8,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Parameters follow the OWASP minimum for Argon2id (memory 19 MiB, 2 passes,
-    | 1 lane) with more memory. Existing hashes are upgraded on login. Tests
-    | lower the cost through ARGON_MEMORY and ARGON_TIME (phpunit.xml only).
+    | 1 lane) with more memory. Existing hashes are upgraded on login. Fixed
+    | values, not environment variables (TASK-0017 #4); only tests/TestCase.php
+    | lowers them, in code.
     |
     */
 
@@ -22,9 +23,9 @@ return [
     ],
 
     'argon' => [
-        'memory' => (int) env('ARGON_MEMORY', 65536),
+        'memory' => 65536,
         'threads' => 1,
-        'time' => (int) env('ARGON_TIME', 3),
+        'time' => 3,
         'verify' => true,
     ],
 
