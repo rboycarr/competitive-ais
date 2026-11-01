@@ -11,10 +11,10 @@ use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Actions\InvitationService;
 use Modules\Identity\Http\Middleware\EnsureMfaEnrolled;
 use Modules\Identity\MfaRequirement;
-use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Classification;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
+use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
 /**

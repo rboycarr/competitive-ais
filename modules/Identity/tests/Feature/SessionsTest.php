@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Models\User;
-use Modules\Identity\Tests\Support\CreatesUsers;
+use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
 /**

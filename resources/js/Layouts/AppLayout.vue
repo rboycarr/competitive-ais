@@ -5,14 +5,17 @@ import { Head, Link, usePage } from '@inertiajs/vue3';
 defineProps<{ title: string }>();
 
 type Shared = {
-    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean } };
+    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean } };
     flash?: { status?: string | null };
 };
 
 const page = usePage<Shared>();
 const can = computed(() => page.props.auth?.can ?? {});
 const status = computed(() => page.props.flash?.status ?? null);
-// Links only; every admin action is authorized on the server (P1-13).
+// Links only; every action is authorized on the server (P1-13).
+const mainLinks = computed(() => [
+    can.value.competitorView ? { href: '/competitors', label: 'Competitors' } : null,
+].filter((link): link is { href: string; label: string } => link !== null));
 const adminLinks = computed(() => [
     can.value.userView ? { href: '/admin/users', label: 'Users' } : null,
     can.value.roleManage ? { href: '/admin/roles', label: 'Roles' } : null,
@@ -30,6 +33,9 @@ const adminLinks = computed(() => [
     <header class="border-b border-slate-200 bg-white">
         <div class="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3">
             <Link href="/" class="text-base font-semibold">Competitive-AIS</Link>
+            <nav v-if="mainLinks.length > 0" aria-label="Main" class="flex gap-4 text-sm">
+                <Link v-for="link in mainLinks" :key="link.href" :href="link.href" class="underline">{{ link.label }}</Link>
+            </nav>
             <nav v-if="adminLinks.length > 0" aria-label="Administration" class="flex gap-4 text-sm">
                 <Link v-for="link in adminLinks" :key="link.href" :href="link.href" class="underline">{{ link.label }}</Link>
             </nav>

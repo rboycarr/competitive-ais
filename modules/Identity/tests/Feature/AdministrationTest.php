@@ -12,9 +12,9 @@ use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Mail\InvitationMail;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
-use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Classification;
 use Spatie\Permission\Models\Role;
+use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
 /**

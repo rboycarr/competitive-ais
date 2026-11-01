@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Identity\Tests\Support;
+namespace Tests\Support;
 
 use Illuminate\Support\Str;
 use Modules\Identity\Models\User;

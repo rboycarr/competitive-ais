@@ -23,6 +23,8 @@ use Laravel\Fortify\Fortify;
 use Modules\Identity\Access\GrantAccessScope;
 use Modules\Identity\Actions\AuthenticateUser;
 use Modules\Identity\Console\InviteUser;
+use Modules\Identity\Contracts\UserDirectory;
+use Modules\Identity\Directory\EloquentUserDirectory;
 use Modules\Identity\Http\Middleware\EnsureActiveAccount;
 use Modules\Identity\Http\Middleware\EnsureMfaEnrolled;
 use Modules\Identity\Listeners\AuditAuthentication;
@@ -44,6 +46,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
 
         // Per request (and per queued job): the effective grants are cached only for that long (P1-15).
         $this->app->scoped(AccessScope::class, GrantAccessScope::class);
+        $this->app->bind(UserDirectory::class, EloquentUserDirectory::class);
     }
 
     public function boot(): void
@@ -159,6 +162,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
                     'teamManage' => $user->hasPermissionTo('team.manage'),
                     'grantManage' => $user->hasPermissionTo('grant.manage'),
                     'auditView' => $user->hasPermissionTo('audit.view'),
+                    'competitorView' => $user->checkPermissionTo('competitor.view'),
                 ] : [],
             ];
         });

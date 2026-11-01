@@ -232,6 +232,7 @@ return [
         // SELECT, INSERT, UPDATE for the app account: rows are revoked or closed, never deleted (P1-14).
         'no_delete' => [
             'access_grants',
+            'competitors', // archived, never deleted (P1-20)
         ],
 
         // No access for the app account.
