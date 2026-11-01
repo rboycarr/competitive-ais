@@ -53,6 +53,7 @@ AI approval never replaces human approval.
 | TASK-0018 | Verification of the TASK-0017 fix commit `d3c9519` | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/p1-10-invitations` @ `d3c9519` | **Reviewed: fixes complete, rejection of #2 sound, no new findings, recommendation "yes".** Merged into `main` as pull request #4 (PO, 2026-11-02) | `handoffs/TASK-0018-review.md` |
 | TASK-0019 | Review of P1-11 (login and TOTP), diff `main..feature/p1-11-login-mfa` | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/p1-11-login-mfa` @ `3efe41f` | **Reviewed: 1 high (timing), 1 medium (distributed throttling); recommendation "yes after fixes"; both fixed.** Fixes verified in TASK-0020 | `handoffs/TASK-0019-review.md` |
 | TASK-0020 | Verification of the TASK-0019 fix commit `341be2d` | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/p1-11-login-mfa` @ `341be2d` | **Reviewed: both fixes complete, no new findings, recommendation "yes".** Merged into `main` as pull request #5 (PO, 2026-11-02) | `handoffs/TASK-0020-review.md` |
+| TASK-0021 | Review of P1-12 (MFA for privileged permissions), diff `main..feature/p1-12-enforce-mfa` | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/p1-12-enforce-mfa` @ `fe01a2e` | **Reviewed: 1 high, 1 medium, 1 low; recommendation "no"; all accepted and fixed.** Pending: verification and PO merge | `handoffs/TASK-0021-review.md` |
 
 ## 4. Decision and disagreement log
 

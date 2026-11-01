@@ -22,7 +22,7 @@ class EnsureMfaEnrolled
         $user = $request->user();
         if (! $user instanceof User
             || $user->hasEnabledTwoFactorAuthentication()
-            || $request->is(...MfaRequirement::ENROLLMENT_PATHS)
+            || in_array($request->route()?->getName(), MfaRequirement::ENROLLMENT_ROUTES, true)
             || ! $user->requiresMfa()) {
             return $next($request);
         }

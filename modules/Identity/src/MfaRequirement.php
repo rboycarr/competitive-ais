@@ -18,18 +18,22 @@ final class MfaRequirement
     ];
 
     /**
-     * Paths a user who must enroll can still reach: the security page, Fortify's two-factor and password-confirmation
-     * endpoints, and sign-out.
+     * Named routes a user who must enroll can still reach: the security page, Fortify's two-factor and
+     * password-confirmation endpoints, and sign-out. Matched by route name, not path, so a new path under the same
+     * prefix is not let through (TASK-0021 #3); a test checks every name is registered.
      */
-    public const ENROLLMENT_PATHS = [
-        'user/security',
-        'user/two-factor-authentication',
-        'user/confirmed-two-factor-authentication',
-        'user/two-factor-qr-code',
-        'user/two-factor-secret-key',
-        'user/two-factor-recovery-codes',
-        'user/confirm-password',
-        'user/confirmed-password-status',
+    public const ENROLLMENT_ROUTES = [
+        'security.show',
+        'two-factor.enable',
+        'two-factor.confirm',
+        'two-factor.disable',
+        'two-factor.qr-code',
+        'two-factor.secret-key',
+        'two-factor.recovery-codes',
+        'two-factor.regenerate-recovery-codes',
+        'password.confirm',
+        'password.confirm.store',
+        'password.confirmation',
         'logout',
     ];
 }

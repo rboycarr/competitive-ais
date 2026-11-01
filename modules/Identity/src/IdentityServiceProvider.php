@@ -135,6 +135,8 @@ class IdentityServiceProvider extends ModuleServiceProvider
     {
         /** @var Kernel $kernel the bound HTTP kernel (resolving the concrete class would build a second one) */
         $kernel = $this->app->make(HttpKernel::class);
+        // Both route groups: API routes (/api/v1, Sanctum tokens later) are held to the same rule (TASK-0021 #2).
         $kernel->appendMiddlewareToGroup('web', EnsureMfaEnrolled::class);
+        $kernel->appendMiddlewareToGroup('api', EnsureMfaEnrolled::class);
     }
 }

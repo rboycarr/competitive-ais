@@ -5,6 +5,7 @@ namespace Modules\Identity\Tests\Feature;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Actions\InvitationService;
@@ -88,6 +89,63 @@ class MfaEnforcementTest extends TestCase
         $this->getJson('/user/two-factor-qr-code')->assertOk();
         $this->post('/logout')->assertRedirect();
         $this->assertGuest();
+    }
+
+    public function test_directly_assigned_privileged_permissions_need_two_factor_through_every_check(): void
+    {
+        // TASK-0021 #1: a permission given to the user directly, not through a role.
+        $user = $this->createUser('direct@example.test', 'exec_reader');
+        $user->givePermissionTo('user.manage');
+
+        $this->assertTrue($user->requiresMfa());
+        $this->assertFalse($user->hasDirectPermission('user.manage'));
+        $this->assertFalse($user->hasPermissionTo('user.manage'));
+        $this->assertFalse($user->hasAnyPermission(['user.manage', 'role.manage']));
+        $this->assertFalse($user->can('user.manage'));
+        $this->assertTrue($user->hasPermissionTo('intelligence.view'), 'The role\'s own permissions are unaffected.');
+
+        $this->enableTwoFactor($user);
+        $this->assertTrue($user->hasDirectPermission('user.manage'));
+        $this->assertTrue($user->can('user.manage'));
+    }
+
+    public function test_a_pending_secret_is_not_enough_and_turning_two_factor_off_withdraws_the_permissions(): void
+    {
+        $admin = $this->createUser('pending@example.test', 'super_admin');
+        $admin->forceFill(['two_factor_secret' => encrypt('JBSWY3DPEHPK3PXP')])->save();
+        $this->assertFalse($admin->refresh()->can('user.manage'), 'An unconfirmed secret does not count.');
+        $this->actingAs($admin)->get('/')->assertRedirect('/user/security');
+
+        $this->enableTwoFactor($admin);
+        $this->assertTrue($admin->can('user.manage'));
+
+        $admin->forceFill(['two_factor_secret' => null, 'two_factor_recovery_codes' => null, 'two_factor_confirmed_at' => null])->save();
+        $this->assertFalse($admin->refresh()->can('user.manage'));
+        $this->actingAs($admin)->get('/')->assertRedirect('/user/security');
+    }
+
+    public function test_api_routes_are_held_to_the_same_rule(): void
+    {
+        // TASK-0021 #2: the middleware runs in the api group too.
+        Route::middleware('api')->get('/api/v1/_test/privileged', fn () => 'ok');
+        $admin = $this->createUser('api@example.test', 'super_admin');
+
+        $this->actingAs($admin)->getJson('/api/v1/_test/privileged')->assertForbidden()
+            ->assertHeader('Content-Type', 'application/problem+json');
+        $this->actingAs($this->enableTwoFactor($admin))->getJson('/api/v1/_test/privileged')->assertOk();
+    }
+
+    public function test_the_allowlist_is_by_route_name_and_every_name_exists(): void
+    {
+        // TASK-0021 #3: a typo would silently block enrollment; a look-alike path must not be let through.
+        foreach (MfaRequirement::ENROLLMENT_ROUTES as $name) {
+            $this->assertTrue(Route::has($name), "Route [$name] is not registered.");
+        }
+
+        Route::middleware('web')->get('/user/security-anything', fn () => 'ok');
+        $admin = $this->createUser('lookalike@example.test', 'super_admin');
+        $this->actingAs($admin)->get('/user/security-anything')->assertRedirect('/user/security');
+        $this->actingAs($admin)->get('/user/security?x=1')->assertRedirect('/user/confirm-password');
     }
 
     public function test_an_unenrolled_super_admin_cannot_invite(): void

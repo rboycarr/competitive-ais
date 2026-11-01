@@ -33,6 +33,7 @@ class User extends Authenticatable
 {
     use HasRoles {
         hasPermissionTo as private roleGrantsPermission;
+        hasDirectPermission as private directlyGrantsPermission;
     }
     use Notifiable, TwoFactorAuthenticatable;
 
@@ -50,6 +51,26 @@ class User extends Authenticatable
             return false;
         }
 
+        return $this->mfaAllows($permission, $guardName);
+    }
+
+    /**
+     * The same rule for spatie's direct-permission check (TASK-0021 #1). hasAnyPermission, hasAllPermissions and
+     * checkPermissionTo go through hasPermissionTo. Authorize with can()/hasPermissionTo, never with the raw
+     * permission collections (getAllPermissions, getDirectPermissions), which list what is assigned.
+     *
+     * @param  string|int|Permission|\BackedEnum  $permission
+     */
+    public function hasDirectPermission($permission): bool
+    {
+        return $this->directlyGrantsPermission($permission) && $this->mfaAllows($permission);
+    }
+
+    /**
+     * @param  string|int|Permission|\BackedEnum  $permission
+     */
+    private function mfaAllows($permission, ?string $guardName = null): bool
+    {
         return ! in_array($this->filterPermission($permission, $guardName)->name, MfaRequirement::PRIVILEGED_PERMISSIONS, true)
             || $this->hasEnabledTwoFactorAuthentication();
     }
