@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 started**; O17 decided (SeaweedFS); P1-02, P1-09 and P1-04 done 2026-10-31. |
+| Status | Phase 0 approved 2026-10-31. Docker setup done and dependency list approved 2026-10-31. **Sprint 1.0 complete** 2026-11-01 (P1-01 to P1-09); Sprint 1.1 started; O17 decided (SeaweedFS). |
 | Owner | Product Owner (priorities, approvals); Claude Code (backlog maintenance) |
 | Related | `skills/10_ROADMAP_SKILLS.md`, `competitive-ais.md` §14, §17 |
 
@@ -44,7 +44,7 @@
 | P1-05 | As an auditor, every sensitive action leaves a tamper-evident record | `audit_events`, `audit_checkpoints`, `AuditLogger`, checkpoint + verification jobs; grants test passes | M | P1-04 (**done** 2026-11-01: merged after Codex reviews TASK-0010/0011; signed manifests are P1-50) |
 | P1-06 | As the platform, domain events reach consumers reliably | `outbox_events`, `OutboxPublisher`, `RelayOutboxJob` with idempotent handler test | S | P1-04 (**done** 2026-11-01: merged as pull request #1 after Codex reviews TASK-0012/0013) |
 | P1-07 | As a developer, CI blocks bad merges | Pipeline: Pint, Larastan, Pest (MySQL 8.4), migrate/rollback, Vitest, build, audits, gitleaks | M | P1-03, O1 (**done** 2026-10-31: `.github/workflows/ci.yml` with backend, frontend, secrets jobs; CI run #2 green on `28ca5c7` (run #1 failed: script modes and container uid, fixed); required-checks branch protection pending (PO); ESLint/vue-tsc arrive with the Vue setup; `docs/10` §1.4) |
-| P1-08 | As a user, the app has secure defaults | Security-headers middleware (CSP nonce), problem+json errors, request IDs, UTC config | S | P1-04 (**implemented** 2026-11-01 on `feature/p1-08-secure-defaults`; pending Codex review and PO merge) |
+| P1-08 | As a user, the app has secure defaults | Security-headers middleware (CSP nonce), problem+json errors, request IDs, UTC config | S | P1-04 (**done** 2026-11-01: merged as pull request #2 after Codex reviews TASK-0014/0015) |
 | P1-09 | As the platform, every DB connection runs with least privilege (TASK-0001 #14) | `cais_migrator`, `cais_app`, `cais_readonly`, `cais_retention` created by an init script (local, CI, staging); `db:apply-grants` command; feature tests connect as `cais_app`; tests prove UPDATE/DELETE fail on append-only tables and that every required INSERT succeeds; documented rollback | M | P1-02 (**done** 2026-10-31: accounts by init script; `db:apply-grants` + automatic run after migrations; 11 grant tests as `cais_app`/`cais_retention` on MySQL 8.4; rollback in `docs/02` §6; hardened after Codex reviews TASK-0003 to TASK-0009, merged 2026-11-01: exact account allowlist, table-by-table grant verification, 30 Pest tests) |
 
 ### Sprint 1.1 — Identity and access

@@ -21,6 +21,7 @@ use Modules\Platform\Console\RelayOutbox;
 use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
 use Modules\Platform\Http\Middleware\AssignRequestId;
+use Modules\Platform\Http\Middleware\HandleInertiaRequests;
 use Modules\Platform\Http\Middleware\SecurityHeaders;
 use Modules\Platform\Http\ProblemDetails;
 use Modules\Platform\Jobs\CreateAuditCheckpointJob;
@@ -79,6 +80,7 @@ class PlatformServiceProvider extends ModuleServiceProvider
         $kernel = $this->app->make(HttpKernel::class);
         $kernel->prependMiddleware(AssignRequestId::class);
         $kernel->pushMiddleware(SecurityHeaders::class);
+        $kernel->appendMiddlewareToGroup('web', HandleInertiaRequests::class);
 
         $this->callAfterResolving(ExceptionHandler::class, function (ExceptionHandler $handler): void {
             if ($handler instanceof Handler) {
