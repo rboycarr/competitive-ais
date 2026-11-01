@@ -16,6 +16,13 @@ interface UserDirectory
     public function activeHolders(string $permission): array;
 
     /**
+     * The user, if active and holding the permission, read under a shared lock on their row. Call inside the write
+     * transaction that relies on it: role and status changes lock the same row, so they cannot slip in between
+     * (TASK-0031 #2).
+     */
+    public function lockedActiveHolder(string $ulid, string $permission): ?UserSummary;
+
+    /**
      * Summaries by user ID, for display; unknown IDs are left out.
      *
      * @param  list<int>  $ids

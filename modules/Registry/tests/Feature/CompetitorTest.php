@@ -2,12 +2,14 @@
 
 namespace Modules\Registry\Tests\Feature;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
+use Modules\Registry\Actions\CompetitorService;
 use Modules\Registry\Models\Competitor;
 use Tests\Support\AuthorizationMatrix;
 use Tests\Support\CreatesUsers;
@@ -87,6 +89,40 @@ class CompetitorTest extends TestCase
             $this->actingAs($this->analyst)->post('/competitors', $this->form('Acme Foods', $overrides))->assertSessionHasErrors(trim($field));
         }
         $this->assertSame(0, Competitor::query()->count());
+    }
+
+    public function test_one_website_rule_for_the_request_and_the_service(): void
+    {
+        // TASK-0031 #3: a URL with an http(s) scheme and a host, checked the same way everywhere.
+        foreach (['https://', 'http://exa mple.com', 'https:///path-only', 'mailto:team@acme.example', 'acme.example'] as $bad) {
+            $this->actingAs($this->analyst)->post('/competitors', $this->form('Acme Foods', ['website' => $bad]))->assertSessionHasErrors('website');
+            $this->assertFalse(CompetitorService::isWebAddress($bad), $bad);
+        }
+        $this->actingAs($this->analyst)->post('/competitors', $this->form('Acme Foods', ['website' => 'https://acme.example/about?lang=en']))->assertSessionHasNoErrors();
+        $this->assertSame('https://acme.example/about?lang=en', Competitor::query()->sole()->website);
+    }
+
+    public function test_the_service_refuses_actors_without_competitor_manage(): void
+    {
+        $admin = $this->enableTwoFactor($this->createUser('admin@example.test', 'super_admin', clearance: Classification::Restricted));
+        $service = $this->app->make(CompetitorService::class);
+
+        $this->expectException(AuthorizationException::class);
+        $service->create($admin, ['name' => 'Acme Foods', 'classification' => 'internal']);
+    }
+
+    public function test_a_new_analyst_must_qualify_but_a_kept_one_stays(): void
+    {
+        $colleague = $this->createUser('colleague@example.test', 'ci_analyst');
+        $competitor = $this->competitor('Acme Foods', analyst: $colleague);
+        DB::table('users')->where('id', $colleague->id)->update(['status' => 'suspended']);
+
+        // Editing another field keeps the (now suspended) analyst; choosing them anew is refused.
+        $this->actingAs($this->analyst)->put("/competitors/{$competitor->ulid}", $this->form('Acme Foods Inc', ['analyst' => $colleague->ulid]))->assertSessionHasNoErrors();
+        $this->assertSame([$colleague->id, 'Acme Foods Inc'], [$competitor->refresh()->assigned_analyst_id, $competitor->name]);
+        $other = $this->competitor('Beta Snacks');
+        $this->actingAs($this->analyst)->put("/competitors/{$other->ulid}", $this->form('Beta Snacks', ['analyst' => $colleague->ulid]))->assertSessionHasErrors('analyst');
+        $this->assertNull($other->refresh()->assigned_analyst_id);
     }
 
     public function test_nobody_classifies_above_what_they_can_see_and_only_directors_lower_it(): void

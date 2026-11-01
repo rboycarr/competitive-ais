@@ -18,6 +18,13 @@ class EloquentUserDirectory implements UserDirectory
             ->all());
     }
 
+    public function lockedActiveHolder(string $ulid, string $permission): ?UserSummary
+    {
+        $user = User::query()->where('ulid', strtoupper($ulid))->sharedLock()->first();
+
+        return $user !== null && $user->status === 'active' && $user->checkPermissionTo($permission) ? $this->summary($user) : null;
+    }
+
     public function summaries(array $ids): array
     {
         if ($ids === []) {

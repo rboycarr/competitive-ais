@@ -21,7 +21,8 @@ use Modules\Registry\Models\Competitor;
  * - creating, editing and lifecycle changes need competitor.manage, and the entry must be visible to the actor;
  * - nobody classifies an entry above what they can see (AccessScope decides), and lowering a classification needs
  *   intelligence.publish (docs/07 §3: downgrades are a Director decision);
- * - the assigned analyst is an active holder of competitor.manage;
+ * - the assigned analyst is an active holder of competitor.manage when assigned, checked under a lock on the user row
+ *   (TASK-0031 #2); a later suspension leaves the assignment until someone changes it;
  * - every change is audited in the same transaction. Domain events (docs/03: CompetitorCreated, …) are published
  *   once they have a consumer, the Phase 2 search indexer: the outbox refuses events nobody handles.
  * Archiving is allowed for now: the guard against open intelligence items comes with those items (binding, docs/02).
@@ -56,7 +57,8 @@ class CompetitorService
         for ($attempt = 1; ; $attempt++) {
             $competitor->slug = $this->slug($competitor->name, $attempt);
             try {
-                return $this->db->transaction(function () use ($actor, $competitor): Competitor {
+                return $this->db->transaction(function () use ($actor, $competitor, $data): Competitor {
+                    $competitor->assigned_analyst_id = $this->analystId($data['analyst'] ?? null);
                     $competitor->save();
                     $this->audit->record('competitor.created', $competitor, ['lifecycle' => 'active', 'classification' => $competitor->classification->value], $this->actor($actor));
 
@@ -83,7 +85,9 @@ class CompetitorService
         $this->db->transaction(function () use ($actor, $competitor, $data): void {
             $locked = Competitor::query()->whereKey($competitor->id)->lockForUpdate()->firstOrFail();
             $before = $locked->classification;
+            $current = $locked->assigned_analyst_id;
             $locked->forceFill($this->attributes($data));
+            $locked->assigned_analyst_id = $this->analystId($data['analyst'] ?? null, $current);
             $changed = array_values(array_intersect(self::FIELDS, array_keys($locked->getDirty())));
             if ($changed === []) {
                 return;
@@ -129,7 +133,7 @@ class CompetitorService
         $text = fn (?string $value): ?string => ($value = trim((string) $value)) === '' ? null : $value;
         $name = $text($data['name']) ?? throw ValidationException::withMessages(['name' => 'A name is required.']);
         $website = $text($data['website'] ?? null);
-        if ($website !== null && ! preg_match('#^https?://[^\s/$.?\#].[^\s]*$#i', $website)) {
+        if ($website !== null && ! self::isWebAddress($website)) {
             throw ValidationException::withMessages(['website' => 'The website must be an http:// or https:// address.']);
         }
         $tier = $text($data['tier'] ?? null);
@@ -143,24 +147,32 @@ class CompetitorService
             'website' => $website,
             'hq_country' => ($country = $text($data['hq_country'] ?? null)) === null ? null : strtoupper($country),
             'tier' => $tier,
-            'assigned_analyst_id' => $this->analystId($text($data['analyst'] ?? null)),
             'classification' => Classification::tryFrom($data['classification']) ?? throw ValidationException::withMessages(['classification' => 'Unknown classification.']),
             'description' => $text($data['description'] ?? null),
         ];
     }
 
-    private function analystId(?string $ulid): ?int
+    /** One rule for every caller (TASK-0031 #3): a valid URL with an http or https scheme and a host. */
+    public static function isWebAddress(string $value): bool
     {
-        if ($ulid === null) {
+        $parts = filter_var($value, FILTER_VALIDATE_URL) === false ? false : parse_url($value);
+
+        return is_array($parts) && in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) && ($parts['host'] ?? '') !== '';
+    }
+
+    /** Inside the write transaction. Keeping the current analyst needs no check; a new one must qualify now. */
+    private function analystId(?string $ulid, ?int $current = null): ?int
+    {
+        $ulid = trim((string) $ulid);
+        if ($ulid === '') {
             return null;
         }
-        foreach ($this->users->activeHolders('competitor.manage') as $analyst) {
-            if (strtoupper($ulid) === $analyst->ulid) {
-                return $analyst->id;
-            }
+        if ($current !== null && ($this->users->summaries([$current])[$current]->ulid ?? null) === strtoupper($ulid)) {
+            return $current;
         }
 
-        throw ValidationException::withMessages(['analyst' => 'The analyst must be an active user who manages competitors.']);
+        return $this->users->lockedActiveHolder($ulid, 'competitor.manage')->id
+            ?? throw ValidationException::withMessages(['analyst' => 'The analyst must be an active user who manages competitors.']);
     }
 
     private function assertMayManage(Authenticatable $actor): void
@@ -185,6 +197,7 @@ class CompetitorService
         if ($attempt === 1 && ! Competitor::query()->where('slug', $base)->exists()) {
             return $base;
         }
+        // Suffixes start at 2 ("acme", "acme-2", …); a retry after a concurrent insert starts one higher.
         $suffix = $attempt + 1;
         while (Competitor::query()->where('slug', "$base-$suffix")->exists()) {
             $suffix++;
