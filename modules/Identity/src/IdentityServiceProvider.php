@@ -154,7 +154,8 @@ class IdentityServiceProvider extends ModuleServiceProvider
         /** @var Kernel $kernel the bound HTTP kernel (resolving the concrete class would build a second one) */
         $kernel = $this->app->make(HttpKernel::class);
         // Both route groups: API routes (/api/v1, Sanctum tokens later) are held to the same rules (TASK-0021 #2).
-        // Inactive accounts are signed out first (TASK-0023 #3), then two-factor enrollment is enforced.
+        // Inactive accounts are signed out first (TASK-0023 #3), then two-factor enrollment is enforced. Appending is
+        // idempotent: the kernel skips middleware already in the group (TASK-0024 #2).
         foreach (['web', 'api'] as $group) {
             $kernel->appendMiddlewareToGroup($group, EnsureActiveAccount::class);
             $kernel->appendMiddlewareToGroup($group, EnsureMfaEnrolled::class);

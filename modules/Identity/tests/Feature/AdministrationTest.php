@@ -3,8 +3,11 @@
 namespace Modules\Identity\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Route;
 use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Mail\InvitationMail;
 use Modules\Identity\Models\Team;
@@ -193,6 +196,25 @@ class AdministrationTest extends TestCase
             $this->assertGuest();
         }
         $this->actingAs($admin)->getJson('/admin/users')->assertUnauthorized()->assertHeader('Content-Type', 'application/problem+json');
+    }
+
+    public function test_a_suspended_account_is_refused_on_api_routes_whichever_guard_authenticated_it(): void
+    {
+        // TASK-0024 #1: not only the web session; a token-style guard (Sanctum later) is refused and forgets the user.
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        config(['auth.guards.token' => ['driver' => 'test-token', 'provider' => 'users']]);
+        Auth::viaRequest('test-token', fn (Request $request) => User::query()->where('email', $request->bearerToken())->first());
+        Route::middleware(['api', 'auth:token'])->get('/api/v1/_test/whoami', fn (Request $request) => $request->user()?->ulid);
+
+        $this->getJson('/api/v1/_test/whoami', ['Authorization' => 'Bearer analyst@example.test'])->assertOk()->assertSee($analyst->ulid);
+
+        DB::table('users')->where('id', $analyst->id)->update(['status' => 'suspended']);
+        Auth::forgetGuards();
+        $this->getJson('/api/v1/_test/whoami', ['Authorization' => 'Bearer analyst@example.test'])
+            ->assertUnauthorized()->assertHeader('Content-Type', 'application/problem+json');
+
+        $this->actingAs($analyst->refresh())->getJson('/api/v1/_test/whoami')->assertUnauthorized();
+        $this->assertGuest('web');
     }
 
     public function test_admins_without_two_factor_are_sent_to_enroll_first(): void
