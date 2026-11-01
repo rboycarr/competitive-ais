@@ -2,11 +2,13 @@
 
 namespace Modules\Identity\Tests\Feature;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia;
+use Modules\Identity\Actions\AccessGrantService;
 use Modules\Identity\Actions\TeamService;
 use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
@@ -151,6 +153,46 @@ class AccessGrantTest extends TestCase
         $this->assertNotNull($grant->revoked_at);
         $this->assertSame(['access_grant.created', 'access_grant.revoked'], DB::table('audit_events')->where('action', 'like', 'access_grant.%')->orderBy('id')->pluck('action')->all());
         $this->assertEquals(['grantee_type' => 'user', 'grantee' => $analyst->ulid], json_decode((string) DB::table('audit_events')->where('action', 'access_grant.revoked')->value('context'), true));
+    }
+
+    public function test_the_service_refuses_inactive_or_unenrolled_actors_without_the_routes(): void
+    {
+        // TASK-0025: the service checks the actor itself, not only the route middleware.
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $service = $this->app->make(AccessGrantService::class);
+        $unenrolled = $this->createUser('new-director@example.test', 'ci_director', clearance: Classification::Confidential);
+        $suspended = $this->enableTwoFactor($this->createUser('gone@example.test', 'ci_director', 'suspended', Classification::Confidential));
+
+        foreach ([$unenrolled, $suspended, $analyst] as $actor) {
+            try {
+                $service->grant($actor, $analyst->is($actor) ? $unenrolled : $analyst, Classification::Internal, false, 'Pricing study', null);
+                $this->fail("Granted as {$actor->email}.");
+            } catch (AuthorizationException) {
+                // expected
+            }
+        }
+        $grant = $service->grant($this->director, $analyst, Classification::Internal, false, 'Pricing study', null);
+        $this->expectException(AuthorizationException::class);
+        $service->revoke($suspended, $grant);
+    }
+
+    public function test_expiry_is_stored_in_utc_and_ends_at_the_exact_instant(): void
+    {
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $expires = now('UTC')->addDay()->startOfSecond()->toImmutable();
+
+        // Sent with a +08:00 offset; stored and compared in UTC.
+        $this->actingAs($this->director)->post('/admin/access-grants', $this->form($analyst, expires: $expires->setTimezone('Asia/Manila')->toIso8601String()))
+            ->assertSessionHasNoErrors();
+        $grant = AccessGrant::query()->sole();
+        $this->assertSame($expires->format('Y-m-d H:i:s'), substr((string) DB::table('access_grants')->value('expires_at'), 0, 19));
+
+        $this->travelTo($expires->subSecond());
+        $this->assertSame('active', $grant->status());
+        $this->assertTrue(AccessGrant::query()->active()->whereKey($grant->id)->exists());
+        $this->travelTo($expires);
+        $this->assertSame('expired', $grant->status());
+        $this->assertFalse(AccessGrant::query()->active()->whereKey($grant->id)->exists());
     }
 
     public function test_the_table_constraints_hold_without_the_service(): void
