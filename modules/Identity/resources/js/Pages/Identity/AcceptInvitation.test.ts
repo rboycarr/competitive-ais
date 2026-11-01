@@ -4,7 +4,16 @@ import { reactive } from 'vue';
 
 const post = vi.fn();
 const form = reactive({ name: '', password: '', password_confirmation: '', errors: {} as Record<string, string>, processing: false, post, reset: vi.fn() });
-vi.mock('@inertiajs/vue3', () => ({ Head: { render: () => null }, useForm: () => form }));
+vi.mock('@inertiajs/vue3', async () => {
+    const { defineComponent, h } = await import('vue');
+
+    return {
+        Head: { render: () => null },
+        Link: defineComponent({ props: { href: { type: String, required: true } }, setup: (props, { slots }) => () => h('a', { href: props.href }, slots.default?.()) }),
+        usePage: () => ({ props: {} }),
+        useForm: () => form,
+    };
+});
 
 const { default: AcceptInvitation } = await import('./AcceptInvitation.vue');
 const token = 'a'.repeat(64);

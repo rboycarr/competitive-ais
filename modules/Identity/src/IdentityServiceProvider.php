@@ -66,6 +66,14 @@ class IdentityServiceProvider extends ModuleServiceProvider
         $actions->define('auth.two_factor_failed');
         $actions->define('auth.recovery_codes_generated');
         $actions->define('auth.recovery_code_used');
+        $actions->define('role.assigned', ['role' => 'code']);
+        $actions->define('role.revoked', ['role' => 'code']);
+        $actions->define('role.created', ['role' => 'code', 'permissions' => 'code[]']);
+        $actions->define('role.permissions_changed', ['role' => 'code', 'added' => 'code[]', 'removed' => 'code[]']);
+        $actions->define('team.created', ['lead' => 'ulid']);
+        $actions->define('team.updated', ['fields' => 'code[]', 'lead' => 'ulid']);
+        $actions->define('team.member_added', ['member' => 'ulid']);
+        $actions->define('team.member_removed', ['member' => 'ulid']);
     }
 
     /**
@@ -115,8 +123,8 @@ class IdentityServiceProvider extends ModuleServiceProvider
     }
 
     /**
-     * The signed-in user's display data on every page, and whether they must still turn on two-factor authentication
-     * (P1-12); nothing else about the account is shared.
+     * The signed-in user's display data on every page, whether they must still turn on two-factor authentication
+     * (P1-12), which admin links to show (P1-13), and the last status message; nothing else about the account.
      */
     private function shareAuthenticatedUser(): void
     {
@@ -126,8 +134,17 @@ class IdentityServiceProvider extends ModuleServiceProvider
             return [
                 'user' => $user instanceof User ? ['ulid' => $user->ulid, 'name' => $user->name, 'email' => $user->email] : null,
                 'mfaRequired' => $user instanceof User && ! $user->hasEnabledTwoFactorAuthentication() && $user->requiresMfa(),
+                // Only decides which links to show; every action is authorized on the server (P1-13).
+                'can' => $user instanceof User ? [
+                    'userView' => $user->hasPermissionTo('user.view'),
+                    'roleManage' => $user->hasPermissionTo('role.manage'),
+                    'teamManage' => $user->hasPermissionTo('team.manage'),
+                ] : [],
             ];
         });
+        Inertia::share('flash', fn (Request $request): array => [
+            'status' => $request->hasSession() ? $request->session()->get('status') : null,
+        ]);
     }
 
     /** Users holding a privileged permission can only enroll or sign out until two-factor is on (P1-12). */

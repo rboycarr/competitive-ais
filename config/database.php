@@ -223,6 +223,8 @@ return [
             'role_has_permissions',
             'roles',
             'sessions',
+            'team_user',
+            'teams',
             'user_invitations',
             'users',
         ],

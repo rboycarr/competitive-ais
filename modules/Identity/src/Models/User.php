@@ -39,6 +39,12 @@ class User extends Authenticatable
 
     protected $guarded = ['*'];
 
+    /** Routes address users by ULID, never by the internal ID (docs/07 Input). */
+    public function getRouteKeyName(): string
+    {
+        return 'ulid';
+    }
+
     /**
      * A privileged permission counts only after two-factor authentication is confirmed (P1-12). Every permission
      * check goes through here: Gate abilities, policies, `can` middleware and direct calls.
