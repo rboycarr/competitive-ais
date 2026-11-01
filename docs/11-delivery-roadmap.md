@@ -55,8 +55,8 @@
 | P1-11 | As a user, I log in with password + TOTP MFA | Fortify; recovery codes; throttling; failed logins audited | M (**done** 2026-11-02: merged as pull request #5 after Codex reviews TASK-0019/0020) |
 | P1-12 | As the security owner, privileged users cannot work without MFA | `EnsureMfa` blocks privileged permissions until enrolled (test per permission) | S (**done** 2026-11-02: merged as pull request #6 after Codex reviews TASK-0021/0022) |
 | P1-13 | As an admin, I manage roles, permissions, and teams | Seeded roles (`docs/07`); role changes audited; cannot edit own roles | M (**done** 2026-11-01: merged as pull request #7 after Codex reviews TASK-0023/0024) |
-| P1-14 | As an admin, I grant scoped access with expiry | `access_grants` CRUD (revoke, never delete); self-grant blocked; audited | M (**implemented** 2026-11-01 on `feature/p1-14-access-grants`, scope `all` only until the registry exists (PO decision); pending Codex review and PO merge) |
-| P1-15 | As every module, visibility is decided in one place | `AccessScope` (`allows`, `applyTo`); matrix harness in `tests/Support`; 404 for hidden records | L |
+| P1-14 | As an admin, I grant scoped access with expiry | `access_grants` CRUD (revoke, never delete); self-grant blocked; audited | M (**done** 2026-11-01: merged as pull request #8 after Codex review TASK-0025; scope `all` only until the registry exists, PO decision) |
+| P1-15 | As every module, visibility is decided in one place | `AccessScope` (`allows`, `applyTo`); matrix harness in `tests/Support`; 404 for hidden records | L (**implemented** 2026-11-01 on `feature/p1-15-access-scope`; matrix: 4 clearances × 2 statuses × 7 grant variants × 4 classifications × 4 scope shapes, through `allows()`, `visibleTo()` and HTTP; pending Codex review and PO merge) |
 | P1-16 | As an auditor, I can search the audit trail | Read-only viewer; filters (actor, action, subject, date); `audit.view` only | M |
 | P1-17 | As a user, I can see and revoke my sessions | Sessions list; revoke others; audit | S |
 

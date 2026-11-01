@@ -20,12 +20,14 @@ use Laravel\Fortify\Events\TwoFactorAuthenticationConfirmed;
 use Laravel\Fortify\Events\TwoFactorAuthenticationDisabled;
 use Laravel\Fortify\Events\TwoFactorAuthenticationFailed;
 use Laravel\Fortify\Fortify;
+use Modules\Identity\Access\GrantAccessScope;
 use Modules\Identity\Actions\AuthenticateUser;
 use Modules\Identity\Console\InviteUser;
 use Modules\Identity\Http\Middleware\EnsureActiveAccount;
 use Modules\Identity\Http\Middleware\EnsureMfaEnrolled;
 use Modules\Identity\Listeners\AuditAuthentication;
 use Modules\Identity\Models\User;
+use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
 use Symfony\Component\HttpFoundation\Response;
@@ -36,6 +38,14 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class IdentityServiceProvider extends ModuleServiceProvider
 {
+    public function register(): void
+    {
+        parent::register();
+
+        // Per request (and per queued job): the effective grants are cached only for that long (P1-15).
+        $this->app->scoped(AccessScope::class, GrantAccessScope::class);
+    }
+
     public function boot(): void
     {
         parent::boot();
