@@ -36,6 +36,19 @@ final class CategoryTree
     }
 
     /**
+     * The categories below $rootId (not itself), through parent links. A move rewrites exactly these rows, so a corrupt
+     * row elsewhere whose path merely starts like the subtree's is never touched (TASK-0037).
+     *
+     * @return list<int>
+     */
+    public static function descendantIds(int $rootId): array
+    {
+        $rows = ProductCategory::query()->get(['id', 'parent_id'])->keyBy('id')->all();
+
+        return array_values(array_diff(self::subtree($rows, $rootId), [$rootId]));
+    }
+
+    /**
      * The root and everything below it, found through parent links, not paths: the paths are what is being checked.
      *
      * @param  array<int, ProductCategory>  $rows

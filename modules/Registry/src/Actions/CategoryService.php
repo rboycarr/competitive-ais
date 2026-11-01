@@ -101,17 +101,24 @@ class CategoryService
                 $oldChildPath = $locked->childPath();
                 $oldDepth = $locked->depth;
                 $newDepth = $parent === null ? 0 : $parent->depth + 1;
-                $deepest = (int) (ProductCategory::query()->where('path', 'like', $oldChildPath.'%')->max('depth') ?? $oldDepth);
+                // The subtree through parent links, not paths (TASK-0037): only these rows are rewritten and checked.
+                // A subtree that is already inconsistent is not moved; registry:verify-categories reports it.
+                if (($inconsistent = CategoryTree::inconsistencies($locked->id)) !== []) {
+                    throw new LogicException('Category '.$locked->id.' cannot move: inconsistent categories in its subtree: '.implode(', ', $inconsistent));
+                }
+                $descendants = CategoryTree::descendantIds($locked->id);
+                $deepest = (int) (ProductCategory::query()->whereKey($descendants)->max('depth') ?? $oldDepth);
                 if ($deepest - $oldDepth + $newDepth > ProductCategory::MAX_DEPTH) {
                     throw ValidationException::withMessages(['parent' => 'Categories go at most six levels deep, subcategories included.']);
                 }
 
                 $from = $locked->parent_id;
                 $locked->forceFill(['parent_id' => $parent?->id, 'path' => $parent?->childPath() ?? '/', 'depth' => $newDepth])->save();
-                $moved = $this->db->update(
-                    // `path` is ascii_bin (a 1000-character index fits); the bound prefix arrives as utf8mb4.
-                    'UPDATE product_categories SET path = CONCAT(CONVERT(? USING ascii) COLLATE ascii_bin, SUBSTRING(path, ?)), depth = CAST(depth AS SIGNED) + ?, updated_at = ? WHERE path LIKE ?',
-                    [$locked->childPath(), strlen($oldChildPath) + 1, $newDepth - $oldDepth, CarbonImmutable::now('UTC'), $oldChildPath.'%'],
+                $moved = $descendants === [] ? 0 : $this->db->update(
+                    // `path` is ascii_bin (a 1000-character index fits); the bound prefix arrives as utf8mb4. A descendant
+                    // whose path did not start with the old prefix comes out wrong and fails the check below.
+                    'UPDATE product_categories SET path = CONCAT(CONVERT(? USING ascii) COLLATE ascii_bin, SUBSTRING(path, ?)), depth = CAST(depth AS SIGNED) + ?, updated_at = ? WHERE id IN ('.implode(',', array_fill(0, count($descendants), '?')).')',
+                    [$locked->childPath(), strlen($oldChildPath) + 1, $newDepth - $oldDepth, CarbonImmutable::now('UTC'), ...$descendants],
                 );
                 // The CHECKs see single rows; compare the moved subtree with its parents before committing.
                 if (($inconsistent = CategoryTree::inconsistencies($locked->id)) !== []) {

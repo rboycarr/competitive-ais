@@ -210,6 +210,26 @@ class CategoryTest extends TestCase
         $this->assertSame(1, DB::table('audit_events')->where('action', 'category.moved')->count());
     }
 
+    public function test_a_move_rewrites_only_its_own_subtree(): void
+    {
+        $snacks = $this->category('Snacks');
+        $chips = $this->category('Chips', $snacks);
+        $food = $this->category('Food');
+        // TASK-0037: a corrupt row under Food whose path merely starts like the Snacks subtree.
+        $impostorPath = "/{$snacks->id}/{$food->id}/";
+        DB::table('product_categories')->insert(['name' => 'Impostor', 'parent_id' => $food->id, 'path' => $impostorPath, 'depth' => 2, 'created_at' => now(), 'updated_at' => now()]);
+        $impostor = ProductCategory::query()->where('name', 'Impostor')->sole();
+
+        $drinks = $this->category('Drinks');
+        $this->actingAs($this->director)->put("/admin/categories/{$snacks->id}/parent", ['parent' => $drinks->id])->assertSessionHasNoErrors()->assertRedirect();
+
+        $this->assertSame("/{$drinks->id}/{$snacks->id}/", $chips->refresh()->path);
+        $this->assertSame([$impostorPath, 2], [$impostor->refresh()->path, $impostor->depth]);
+        $this->assertEquals(['to_parent' => $drinks->id, 'subcategories' => 1],
+            json_decode((string) DB::table('audit_events')->where('action', 'category.moved')->value('context'), true));
+        $this->assertSame([$impostor->id], CategoryTree::inconsistencies());
+    }
+
     private function category(string $name, ?ProductCategory $parent = null): ProductCategory
     {
         $category = new ProductCategory;
