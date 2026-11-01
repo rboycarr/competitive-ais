@@ -93,7 +93,12 @@ class CompetitorAliasTest extends TestCase
             }
         }
 
-        foreach ([[' padded', 'brand'], ['two  spaces', 'brand'], ["tab\there", 'brand'], ['', 'brand'], ['Acme', 'nickname']] as [$alias, $type]) {
+        // The database holds the service's normal form too (TASK-0034 #1), whatever writes the row.
+        $this->assertSame('Acme Brands Co Ltd', CompetitorAliasService::normalize(" Acme\u{00A0}Brands\u{2028}Co\u{3000}\tLtd\u{0007}"));
+        foreach ([
+            [' padded', 'brand'], ['two  spaces', 'brand'], ["tab\there", 'brand'], ["no\u{00A0}break", 'brand'], ["line\u{2028}separator", 'brand'],
+            ["wide\u{3000}space", 'brand'], ["bell\u{0007}", 'brand'], ["\u{00A0}", 'brand'], ['', 'brand'], ['Acme', 'nickname'],
+        ] as [$alias, $type]) {
             try {
                 DB::table('competitor_aliases')->insert(['competitor_id' => $acme->id, 'alias' => $alias, 'alias_type' => $type, 'created_at' => now(), 'updated_at' => now()]);
                 $this->fail("The database accepted alias [$alias] of type [$type].");
@@ -132,6 +137,8 @@ class CompetitorAliasTest extends TestCase
         $this->actingAs($this->analyst)->delete("/competitors/{$acme->ulid}/aliases/{$betaAlias->id}")->assertNotFound();
         $this->actingAs($this->analyst)->delete("/competitors/{$acme->ulid}/aliases/{$alias->id}")->assertSessionHasNoErrors()->assertRedirect();
         $this->actingAs($this->analyst)->delete("/competitors/{$acme->ulid}/aliases/{$alias->id}")->assertNotFound();
+        // A second removal through a stale copy (e.g. a concurrent request) changes nothing and is not audited.
+        $this->app->make(CompetitorAliasService::class)->remove($this->analyst, $acme, $alias);
 
         $this->assertSame(['Beta Brands'], CompetitorAlias::query()->pluck('alias')->all());
         $audit = DB::table('audit_events')->where('action', 'competitor.alias_removed')->sole();

@@ -213,6 +213,8 @@ class CompetitorRelationshipTest extends TestCase
 
         $this->actingAs($this->analyst)->delete("/competitors/{$this->beta->ulid}/relationships/{$relationship->ulid}")->assertSessionHasNoErrors()->assertRedirect();
         $this->actingAs($this->analyst)->delete("/competitors/{$this->beta->ulid}/relationships/{$relationship->ulid}")->assertNotFound();
+        // A second removal through a stale copy (e.g. a concurrent request) changes nothing and is not audited.
+        $this->app->make(CompetitorRelationshipService::class)->remove($this->analyst, $this->beta, $relationship);
 
         $this->assertSame(0, CompetitorRelationship::query()->count());
         $audit = DB::table('audit_events')->where('action', 'competitor.relationship_removed')->sole();

@@ -25,10 +25,14 @@ return new class extends Migration
             $table->index('alias'); // lookup by alias (docs/03 CompetitorLookup)
         });
 
-        DB::statement("ALTER TABLE competitor_aliases
-            ADD CONSTRAINT competitor_aliases_type_check CHECK (alias_type IN ('brand', 'trade', 'former', 'abbreviation', 'local')),
-            ADD CONSTRAINT competitor_aliases_alias_check CHECK (CHAR_LENGTH(alias) > 0 AND alias = TRIM(alias)
-                AND alias NOT LIKE '%  %' AND NOT REGEXP_LIKE(alias, '[[:cntrl:]]'))");
+        // The normal form CompetitorAliasService::normalize() produces (TASK-0034 #1): trimmed, single ASCII spaces, and
+        // no other whitespace, separator or control character (checked once the ASCII spaces are taken out).
+        DB::statement(<<<'SQL'
+            ALTER TABLE competitor_aliases
+                ADD CONSTRAINT competitor_aliases_type_check CHECK (alias_type IN ('brand', 'trade', 'former', 'abbreviation', 'local')),
+                ADD CONSTRAINT competitor_aliases_alias_check CHECK (CHAR_LENGTH(alias) > 0 AND alias = TRIM(alias)
+                    AND alias NOT LIKE '%  %' AND NOT REGEXP_LIKE(REPLACE(alias, ' ', ''), '[\\s\\p{Z}\\p{Cc}]'))
+            SQL);
     }
 
     public function down(): void
