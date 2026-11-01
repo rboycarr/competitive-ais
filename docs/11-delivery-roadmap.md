@@ -51,7 +51,7 @@
 
 | ID | Story | Acceptance criteria | Size |
 |---|---|---|---|
-| P1-10 | As an admin, I invite users; there is no self-registration | Invite email (Mailpit); token hashed; 72 h expiry; single use; audit `user.invited`/`user.activated` | M |
+| P1-10 | As an admin, I invite users; there is no self-registration | Invite email (Mailpit); token hashed; 72 h expiry; single use; audit `user.invited`/`user.activated` | M (**implemented** 2026-11-02 on `feature/p1-10-invitations` after the frontend shell (pull request #3); pending Codex review and PO merge) |
 | P1-11 | As a user, I log in with password + TOTP MFA | Fortify; recovery codes; throttling; failed logins audited | M |
 | P1-12 | As the security owner, privileged users cannot work without MFA | `EnsureMfa` blocks privileged permissions until enrolled (test per permission) | S |
 | P1-13 | As an admin, I manage roles, permissions, and teams | Seeded roles (`docs/07`); role changes audited; cannot edit own roles | M |

@@ -31,7 +31,7 @@ logged() { "$@" 2>&1 | tee -a "$LOG"; }
 
 step "Pint (format)";               logged php vendor/bin/pint --test -v
 step "Larastan (level 8)";          php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
-step "Pest (MySQL 8.4, real accounts)"; migrator migrator php artisan test
+step "Pest (MySQL 8.4, real accounts)"; logged migrator migrator php artisan test
 
 step "Runtime containers hold no service secrets (TASK-0003 #1, TASK-0004 N2)"
 if out=$(php php artisan migrate:status 2>&1); then
@@ -59,7 +59,8 @@ step "Account hardening (seeded privileges are removed)"; bash scripts/ci/accoun
 step "Migrations: migrate -> rollback all -> migrate (test database)"
 test_db=$(grep -m1 '^DB_TEST_DATABASE=' .env | cut -d= -f2-); test_db=${test_db:-cais_test}
 [[ $test_db == *_test ]] || { echo "DB_TEST_DATABASE must end in _test" >&2; exit 1; }
-migrator -e DB_DATABASE="$test_db" migrator sh -c \
+# CACHE_STORE=array: CI starts only MySQL; the permission migrations clear spatie's cache, which is Valkey otherwise.
+logged migrator -e DB_DATABASE="$test_db" -e CACHE_STORE=array migrator sh -c \
   'php artisan migrate --no-interaction && php artisan migrate:reset --no-interaction && php artisan migrate --no-interaction && php artisan migrate:status'
 step "Composer audit";              php composer audit --no-interaction
 echo; echo "Backend checks passed."

@@ -21,7 +21,7 @@ class InertiaShellTest extends TestCase
 
         $this->get('/')
             ->assertOk()
-            ->assertInertia(fn (AssertableInertia $page) => $page->component('Platform/Home', shouldExist: false)->has('requestId'));
+            ->assertInertia(fn (AssertableInertia $page) => $page->component('Platform/Home')->has('requestId'));
     }
 
     public function test_inertia_visits_get_json_with_the_request_id(): void

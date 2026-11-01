@@ -46,7 +46,7 @@ class OutboxTest extends TestCase
         $events->define('probe.unhandled');
         $events->subscribe('probe.changed', OutboxProbeHandler::class);
 
-        $id = DB::table('users')->insertGetId(['name' => 'Aggregate', 'email' => 'aggregate@example.test', 'password' => 'x']);
+        $id = DB::table('users')->insertGetId(['ulid' => (string) Str::ulid(), 'name' => 'Aggregate', 'email' => 'aggregate@example.test', 'password' => 'x']);
         $this->aggregate = OutboxProbeAggregate::query()->findOrFail($id);
     }
 
