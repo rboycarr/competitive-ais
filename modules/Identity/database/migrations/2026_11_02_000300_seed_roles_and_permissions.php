@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use Spatie\Permission\PermissionRegistrar;
 
 /**
  * Phase 1 roles and permissions (docs/07 §3 matrix), as reference data in a migration so every environment has the
@@ -54,11 +55,15 @@ return new class extends Migration
                 ));
             }
         }
+
+        // Raw inserts bypass spatie's model events, so its permission cache is cleared explicitly.
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 
     public function down(): void
     {
         DB::table('roles')->whereIn('name', array_keys(self::ROLES))->where('guard_name', 'web')->delete();
         DB::table('permissions')->whereIn('name', self::PERMISSIONS)->where('guard_name', 'web')->delete();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 };
