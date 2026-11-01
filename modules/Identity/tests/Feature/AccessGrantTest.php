@@ -15,6 +15,7 @@ use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
+use RuntimeException;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
@@ -250,6 +251,34 @@ class AccessGrantTest extends TestCase
         $this->actingAs($this->director)->post('/admin/access-grants', ['competitor' => $acmeUlid] + $this->form($analyst))->assertSessionHasErrors('competitor');
         $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market'] + $this->form($analyst))->assertSessionHasErrors('scope');
         $this->assertSame(1, AccessGrant::query()->count());
+
+        // TASK-0033: a grant on a competitor the viewing admin cannot see shows no name.
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => 'competitor', 'competitor_id' => $hidden,
+            'max_classification' => 'internal', 'granted_by' => $this->director->id, 'reason' => 'Granted elsewhere', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $response = $this->actingAs($this->director)->get('/admin/access-grants')->assertInertia(fn (AssertableInertia $page) => $page->where('grants.0.competitor', 'A competitor you cannot see'));
+        $this->assertStringNotContainsString('Secret Co', (string) $response->getContent());
+    }
+
+    public function test_rolling_back_refuses_while_competitor_grants_exist(): void
+    {
+        // TASK-0033: down() checks before any DDL, so nothing changes and the grant stays a competitor grant.
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $acme = $this->competitor('Acme Foods');
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => 'competitor', 'competitor_id' => $acme,
+            'max_classification' => 'internal', 'granted_by' => $this->director->id, 'reason' => 'Rollback probe', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $migration = require base_path('modules/Identity/database/migrations/2026_11_07_000100_add_competitor_scope_to_access_grants.php');
+
+        try {
+            $migration->down();
+            $this->fail('The rollback ran although competitor grants exist.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Competitor-scoped access grants exist', $e->getMessage());
+        }
+        $this->assertSame(['competitor', $acme], [DB::table('access_grants')->value('scope_type'), (int) DB::table('access_grants')->value('competitor_id')]);
     }
 
     private function competitor(string $name, string $classification = 'internal'): int

@@ -5,7 +5,9 @@ namespace Modules\Identity\Tests\Feature;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use LogicException;
 use Modules\Identity\Actions\AccessGrantService;
 use Modules\Identity\Actions\TeamService;
@@ -183,6 +185,32 @@ class AccessScopeTest extends TestCase
             }
         }
         $this->fail("No matrix user $clearance/$status/$grant.");
+    }
+
+    public function test_separate_competitor_grants_together_cover_a_record_about_both(): void
+    {
+        // TASK-0033: all-of is satisfied by two grants, one per competitor, each at the record's level or above.
+        $user = $this->matrixUser('confidential', 'active', 'none');
+        $grantor = $this->matrixUser('restricted', 'active', 'none');
+        $scope = $this->app->make(AccessScope::class);
+        $record = $this->probes['confidential/competitors'];
+        $grant = fn (string $letter, string $level) => DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $user->id, 'scope_type' => 'competitor', 'competitor_id' => AuthorizationMatrix::competitorId($letter),
+            'max_classification' => $level, 'granted_by' => $grantor->id, 'reason' => 'Both competitors', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $grant('A', 'confidential');
+        $grant('B', 'internal'); // B only up to internal: not enough for a confidential record
+        $scope->forget();
+        $this->assertFalse($scope->allows($user, $record));
+        $this->assertNotContains('confidential/competitors', ProbeRecord::query()->visibleTo($user)->pluck('label')->all());
+        $this->assertContains('internal/competitors', ProbeRecord::query()->visibleTo($user)->pluck('label')->all());
+
+        $grant('B', 'confidential');
+        $scope->forget();
+        $this->assertTrue($scope->allows($user, $record));
+        $this->assertContains('confidential/competitors', ProbeRecord::query()->visibleTo($user)->pluck('label')->all());
+        $this->assertNotContains('confidential/competitor-and-market', ProbeRecord::query()->visibleTo($user)->pluck('label')->all());
     }
 
     public function test_unknown_users_and_unprepared_models_are_refused(): void
