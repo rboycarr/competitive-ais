@@ -95,13 +95,25 @@ class SessionsTest extends TestCase
     {
         // TASK-0029 #2: the other device's request read its session before the revocation and writes after it.
         $phone = $this->otherSession($this->user, 'Phone browser');
+        $signedIn = (string) json_encode([$this->app->make('auth')->guard('web')->getName() => $this->user->id, '_token' => Str::random(40)]); // config: session.serialization = json
+        DB::table('sessions')->where('id', $phone)->update(['payload' => base64_encode($signedIn)]);
+        $fromPhone = function () use ($phone) {
+            $this->flushSession();
+            $this->defaultCookies = [];
+            $this->app->make('auth')->forgetGuards();
+
+            return $this->withCookie((string) config('session.cookie'), $phone)->get('/user/security');
+        };
+        $fromPhone()->assertRedirect('/user/confirm-password'); // the phone is signed in
+
         $handler = $this->app->make('session')->driver('database')->getHandler();
         $handler->read($phone);
-
+        $this->app->make('auth')->forgetGuards();
         $this->asCurrentDevice()->delete('/user/sessions')->assertRedirect();
-        $handler->write($phone, serialize(['_token' => 'late write']));
+        $handler->write($phone, $signedIn);
 
         $this->assertFalse(DB::table('sessions')->where('id', $phone)->exists()); // an UPDATE of a missing row, no insert
+        $fromPhone()->assertRedirect('/login'); // TASK-0030: the phone's session cookie no longer signs anyone in
     }
 
     public function test_the_revoked_devices_remember_cookie_stops_working(): void
@@ -167,7 +179,7 @@ class SessionsTest extends TestCase
     private function otherSession(User $user, string $agent, string $ip = '10.0.0.1', int $minutesAgo = 5): string
     {
         $id = Str::random(40);
-        DB::table('sessions')->insert(['id' => $id, 'user_id' => $user->id, 'ip_address' => $ip, 'user_agent' => $agent, 'payload' => base64_encode(serialize([])), 'last_activity' => now()->subMinutes($minutesAgo)->getTimestamp()]);
+        DB::table('sessions')->insert(['id' => $id, 'user_id' => $user->id, 'ip_address' => $ip, 'user_agent' => $agent, 'payload' => base64_encode('[]'), 'last_activity' => now()->subMinutes($minutesAgo)->getTimestamp()]);
 
         return $id;
     }
