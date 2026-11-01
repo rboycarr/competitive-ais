@@ -81,6 +81,8 @@ class PlatformServiceProvider extends ModuleServiceProvider
         $kernel->prependMiddleware(AssignRequestId::class);
         $kernel->pushMiddleware(SecurityHeaders::class);
         $kernel->appendMiddlewareToGroup('web', HandleInertiaRequests::class);
+        // Inertia pages live in their module (docs/01 §3); tests check that a rendered page file exists there.
+        config(['inertia.pages.paths' => glob(base_path('modules/*/resources/js/Pages'), GLOB_ONLYDIR) ?: []]);
 
         $this->callAfterResolving(ExceptionHandler::class, function (ExceptionHandler $handler): void {
             if ($handler instanceof Handler) {

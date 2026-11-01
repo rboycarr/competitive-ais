@@ -169,7 +169,7 @@ class AuditTrailTest extends TestCase
 
     public function test_user_actor_subject_and_classification_are_recorded(): void
     {
-        $userId = DB::table('users')->insertGetId(['name' => 'Analyst', 'email' => 'analyst@example.test', 'password' => 'x']);
+        $userId = DB::table('users')->insertGetId(['ulid' => (string) Str::ulid(), 'name' => 'Analyst', 'email' => 'analyst@example.test', 'password' => 'x']);
         $subject = AuditProbeSubject::query()->findOrFail($userId);
 
         $ulid = DB::transaction(fn () => $this->logger()->record('probe.recorded', $subject, [], Actor::user($userId), Classification::Confidential));

@@ -4,6 +4,8 @@ namespace Tests;
 
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Application;
+use Illuminate\Foundation\Testing\DatabaseMigrations;
+use Illuminate\Foundation\Testing\RefreshDatabaseState;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use RuntimeException;
 
@@ -29,5 +31,21 @@ abstract class TestCase extends BaseTestCase
         $app->make(ConsoleKernel::class)->rerouteSymfonyCommandEvents();
 
         return $app;
+    }
+
+    /**
+     * Tests that need real commits (grants, audit, outbox) use DatabaseMigrations and roll every table back
+     * afterwards; the others use RefreshDatabase (migrate once, one transaction per test). After a
+     * DatabaseMigrations test, RefreshDatabase must migrate again, so its "already migrated" flag is reset.
+     */
+    protected function tearDown(): void
+    {
+        $usesMigrations = in_array(DatabaseMigrations::class, class_uses_recursive($this), true);
+
+        parent::tearDown();
+
+        if ($usesMigrations) {
+            RefreshDatabaseState::$migrated = false;
+        }
     }
 }
