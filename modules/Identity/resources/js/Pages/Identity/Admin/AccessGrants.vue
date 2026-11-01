@@ -5,14 +5,14 @@ import AppLayout from '@/Layouts/AppLayout.vue';
 
 type Option = { ulid: string; name: string };
 type GrantRow = {
-    ulid: string; granteeType: 'user' | 'team'; grantee: string | null; scope: string; maxClassification: string;
+    ulid: string; granteeType: 'user' | 'team'; grantee: string | null; scope: string; competitor: string | null; maxClassification: string;
     canExport: boolean; reason: string; grantedBy: string | null; grantedAt: string | null; expiresAt: string | null;
     revokedBy: string | null; revokedAt: string | null; status: 'active' | 'expired' | 'revoked';
 };
 
-const props = defineProps<{ grants: GrantRow[]; users: Option[]; teams: Option[]; classifications: string[]; canGrantExport: boolean }>();
+const props = defineProps<{ grants: GrantRow[]; users: Option[]; teams: Option[]; classifications: string[]; canGrantExport: boolean; competitors: Option[] }>();
 
-const form = useForm({ grantee_type: 'user', grantee: '', max_classification: '', can_export: false, reason: '', expires_at: '' });
+const form = useForm({ grantee_type: 'user', grantee: '', scope: 'all', competitor: '', max_classification: '', can_export: false, reason: '', expires_at: '' });
 const grantees = computed(() => (form.grantee_type === 'user' ? props.users : props.teams));
 const firstError = computed(() => Object.values(form.errors)[0] ?? null);
 const page = usePage<{ errors?: Record<string, string> }>();
@@ -24,7 +24,11 @@ function when(iso: string | null): string {
 
 function submit(): void {
     // The field holds local time; the server stores UTC.
-    form.transform((data) => ({ ...data, expires_at: data.expires_at === '' ? null : new Date(data.expires_at).toISOString() }))
+    form.transform((data) => ({
+        ...data,
+        competitor: data.scope === 'competitor' ? data.competitor : null,
+        expires_at: data.expires_at === '' ? null : new Date(data.expires_at).toISOString(),
+    }))
         .post('/admin/access-grants', { preserveScroll: true, onSuccess: () => form.reset() });
 }
 
@@ -57,7 +61,7 @@ function revoke(grant: GrantRow): void {
                 <tbody>
                     <tr v-for="grant in props.grants" :key="grant.ulid" class="border-b border-slate-100 align-top">
                         <td class="py-1 pr-3">{{ grant.grantee }} <span class="text-slate-600">({{ grant.granteeType }})</span></td>
-                        <td class="py-1 pr-3">{{ grant.scope }}<span v-if="grant.canExport">, export</span></td>
+                        <td class="py-1 pr-3">{{ grant.scope === 'competitor' ? grant.competitor : 'all records' }}<span v-if="grant.canExport">, export</span></td>
                         <td class="py-1 pr-3">{{ grant.maxClassification }}</td>
                         <td class="py-1 pr-3">{{ grant.reason }}</td>
                         <td class="py-1 pr-3">{{ when(grant.grantedAt) }} by {{ grant.grantedBy ?? '—' }}</td>
@@ -78,7 +82,7 @@ function revoke(grant: GrantRow): void {
 
         <section aria-labelledby="new-grant-heading" class="max-w-xl">
             <h2 id="new-grant-heading" class="mb-2 text-lg font-semibold">New grant</h2>
-            <p class="mb-3 text-sm text-slate-700">Opens all records up to the chosen classification, within each person's own clearance. Grants for single competitors or markets arrive with the registry.</p>
+            <p class="mb-3 text-sm text-slate-700">Opens records up to the chosen classification, within each person's own clearance: all records, or only the records about one competitor (a record about several competitors needs a grant for each). Market grants arrive with the market registry.</p>
             <form class="space-y-3" novalidate @submit.prevent="submit">
                 <fieldset>
                     <legend class="font-medium">Grant to</legend>
@@ -90,6 +94,18 @@ function revoke(grant: GrantRow): void {
                     <select id="grant-grantee" v-model="form.grantee" required class="mt-1 w-full rounded border border-slate-300 px-3 py-2" aria-describedby="grant-error">
                         <option value="" disabled>Choose…</option>
                         <option v-for="option in grantees" :key="option.ulid" :value="option.ulid">{{ option.name }}</option>
+                    </select>
+                </div>
+                <fieldset>
+                    <legend class="font-medium">Opens</legend>
+                    <label class="mr-4"><input v-model="form.scope" type="radio" value="all"> All records</label>
+                    <label><input v-model="form.scope" type="radio" value="competitor"> Records about one competitor</label>
+                </fieldset>
+                <div v-if="form.scope === 'competitor'">
+                    <label for="grant-competitor" class="block font-medium">Competitor</label>
+                    <select id="grant-competitor" v-model="form.competitor" required class="mt-1 w-full rounded border border-slate-300 px-3 py-2" aria-describedby="grant-error">
+                        <option value="" disabled>Choose…</option>
+                        <option v-for="competitor in props.competitors" :key="competitor.ulid" :value="competitor.ulid">{{ competitor.name }}</option>
                     </select>
                 </div>
                 <div>

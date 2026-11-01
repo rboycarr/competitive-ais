@@ -4,6 +4,7 @@ namespace Tests\Support;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use LogicException;
 use Modules\Identity\Models\User;
 use PHPUnit\Framework\Assert;
 
@@ -24,11 +25,20 @@ final class AuthorizationMatrix
 
     public const STATUSES = ['active', 'suspended'];
 
-    /** Grant variants: what the user holds (kind:classification). */
-    public const GRANTS = ['none', 'all:internal', 'all:confidential', 'all:restricted', 'expired:restricted', 'revoked:restricted', 'team:confidential'];
+    /** Grant variants: what the user holds (kind:classification, or competitor:A|B:classification, P1-20a). */
+    public const GRANTS = [
+        'none', 'all:internal', 'all:confidential', 'all:restricted', 'expired:restricted', 'revoked:restricted', 'team:confidential',
+        'competitor:A:confidential', 'competitor:B:restricted',
+    ];
 
-    /** Record scopes: competitor and market IDs (placeholders until the registry exists). */
-    public const SCOPES = ['unscoped' => [[], []], 'competitor' => [[1], []], 'market' => [[], [1]], 'both' => [[1, 2], [1]]];
+    /** Record scopes: competitors (A, B: real registry entries) and markets (placeholder ID until the market registry). */
+    public const SCOPES = [
+        'unscoped' => [[], []], 'competitor' => [['A'], []], 'competitor-b' => [['B'], []], 'competitors' => [['A', 'B'], []],
+        'market' => [[], [1]], 'competitor-and-market' => [['A'], [1]],
+    ];
+
+    /** @var array{A?: int, B?: int} competitor letter => ID, created by users() */
+    private static array $competitors = [];
 
     private const RANK = ['public' => 0, 'internal' => 1, 'confidential' => 2, 'restricted' => 3];
 
@@ -40,6 +50,13 @@ final class AuthorizationMatrix
     public static function users(): array
     {
         $grantor = self::makeUser('matrix-grantor', 'restricted', 'active');
+        self::$competitors = [];
+        foreach (['A', 'B'] as $letter) {
+            self::$competitors[$letter] = DB::table('competitors')->insertGetId([
+                'ulid' => (string) Str::ulid(), 'name' => "Matrix competitor $letter", 'slug' => 'matrix-competitor-'.strtolower($letter).'-'.Str::lower(Str::random(6)),
+                'lifecycle' => 'active', 'classification' => 'public', 'created_by' => $grantor->id, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
         $users = [];
         foreach (self::CLEARANCES as $clearance) {
             foreach (self::STATUSES as $status) {
@@ -54,22 +71,36 @@ final class AuthorizationMatrix
         return $users;
     }
 
-    /** @return list<array{label: string, classification: string, competitors: list<int>, markets: list<int>}> */
+    /**
+     * One record spec per classification and scope shape, with real competitor IDs: call users() first.
+     *
+     * @return list<array{label: string, classification: string, competitors: list<int>, markets: list<int>}>
+     */
     public static function records(): array
     {
         $records = [];
         foreach (self::CLEARANCES as $classification) {
             foreach (self::SCOPES as $scope => [$competitors, $markets]) {
-                $records[] = ['label' => "$classification/$scope", 'classification' => $classification, 'competitors' => $competitors, 'markets' => $markets];
+                $records[] = [
+                    'label' => "$classification/$scope", 'classification' => $classification,
+                    'competitors' => array_map(fn (string $letter): int => self::competitorId($letter), $competitors), 'markets' => $markets,
+                ];
             }
         }
 
         return $records;
     }
 
+    public static function competitorId(string $letter): int
+    {
+        return self::$competitors[$letter] ?? throw new LogicException('Call AuthorizationMatrix::users() first: it creates the competitors.');
+    }
+
     /**
      * docs/07 §3, as written: active account, classification within clearance, restricted only with a covering
-     * grant, scoped records only with a covering grant (all-of; only scope `all` exists before the registry).
+     * grant, scoped records only with a covering grant. A grant covers a record at or below its level: `all`
+     * (direct or team) any record; a competitor grant a record whose competitors are all that competitor and which
+     * has no market (all-of; market grants do not exist yet).
      *
      * @param  array{clearance: string, status: string, grant: string}  $user
      * @param  array{classification: string, competitors: list<int>, markets: list<int>}  $record
@@ -80,9 +111,20 @@ final class AuthorizationMatrix
             return false;
         }
 
-        [$kind, $level] = explode(':', $user['grant']) + [1 => null];
-        $covered = in_array($kind, ['all', 'team'], true) && $level !== null && self::RANK[$level] >= self::RANK[$record['classification']];
+        $parts = explode(':', $user['grant']);
+        $kind = $parts[0];
+        $level = end($parts);
+        $opens = $kind !== 'none' && self::RANK[$level] >= self::RANK[$record['classification']];
         $scoped = $record['competitors'] !== [] || $record['markets'] !== [];
+
+        if (in_array($kind, ['all', 'team'], true)) {
+            $covered = $opens;
+        } elseif ($kind === 'competitor') {
+            $mine = self::competitorId($parts[1]);
+            $covered = $opens && $scoped && $record['markets'] === [] && array_diff($record['competitors'], [$mine]) === [];
+        } else {
+            $covered = false; // none, expired, revoked
+        }
 
         return ($record['classification'] !== 'restricted' || $covered) && (! $scoped || $covered);
     }
@@ -125,7 +167,9 @@ final class AuthorizationMatrix
             return;
         }
 
-        [$kind, $level] = explode(':', $grant);
+        $parts = explode(':', $grant);
+        $kind = $parts[0];
+        $level = end($parts);
         $teamId = null;
         if ($kind === 'team') {
             $teamId = DB::table('teams')->insertGetId(['ulid' => (string) Str::ulid(), 'name' => 'Matrix team '.$user->id, 'created_at' => now(), 'updated_at' => now()]);
@@ -136,7 +180,8 @@ final class AuthorizationMatrix
             'ulid' => (string) Str::ulid(),
             'user_id' => $teamId === null ? $user->id : null,
             'team_id' => $teamId,
-            'scope_type' => 'all',
+            'scope_type' => $kind === 'competitor' ? 'competitor' : 'all',
+            'competitor_id' => $kind === 'competitor' ? self::competitorId($parts[1]) : null,
             'max_classification' => $level,
             'granted_by' => $grantor->id,
             'reason' => 'Authorization matrix',

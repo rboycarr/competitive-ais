@@ -89,7 +89,7 @@ class ProbeRecord extends Model implements Classifiable, Scoped
 
     public static function scopeRelations(): array
     {
-        return ['competitors', 'markets'];
+        return ['competitor' => ['competitors', 'competitor_id'], 'market' => ['markets', 'market_id']];
     }
 
     /** @return HasMany<ProbeCompetitorScope, $this> */

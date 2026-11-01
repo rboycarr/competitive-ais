@@ -14,32 +14,36 @@ use Modules\Identity\Models\AccessGrant;
 use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
+use Modules\Registry\Contracts\CompetitorLookup;
+use Modules\Registry\Contracts\CompetitorSummary;
 
 /** Admin › Access grants (P1-14, grant.manage): who may see what beyond their roles, until when; revoke, never delete. */
 class AccessGrantController
 {
-    public function index(Request $request): Response
+    public function index(Request $request, CompetitorLookup $competitors): Response
     {
         $actor = $this->actor($request);
+        $grants = AccessGrant::query()->with(['user:id,ulid,name', 'team:id,ulid,name', 'grantor:id,name', 'revoker:id,name'])->orderByDesc('id')->get();
+        // Competitor names only for competitors the admin can see (P1-20a).
+        $names = $competitors->summaries($actor, array_values(array_unique(array_filter($grants->pluck('competitor_id')->all()))));
 
         return Inertia::render('Identity/Admin/AccessGrants', [
-            'grants' => AccessGrant::query()->with(['user:id,ulid,name', 'team:id,ulid,name', 'grantor:id,name', 'revoker:id,name'])
-                ->orderByDesc('id')->get()
-                ->map(fn (AccessGrant $grant): array => [
-                    'ulid' => $grant->ulid,
-                    'granteeType' => $grant->user_id !== null ? 'user' : 'team',
-                    'grantee' => $grant->user->name ?? $grant->team?->name,
-                    'scope' => $grant->scope_type,
-                    'maxClassification' => $grant->max_classification->value,
-                    'canExport' => $grant->can_export,
-                    'reason' => $grant->reason,
-                    'grantedBy' => $grant->grantor?->name,
-                    'grantedAt' => $grant->created_at?->toIso8601ZuluString(),
-                    'expiresAt' => $grant->expires_at?->toIso8601ZuluString(),
-                    'revokedBy' => $grant->revoker?->name,
-                    'revokedAt' => $grant->revoked_at?->toIso8601ZuluString(),
-                    'status' => $grant->status(),
-                ])->all(),
+            'grants' => $grants->map(fn (AccessGrant $grant): array => [
+                'ulid' => $grant->ulid,
+                'granteeType' => $grant->user_id !== null ? 'user' : 'team',
+                'grantee' => $grant->user->name ?? $grant->team?->name,
+                'scope' => $grant->scope_type,
+                'competitor' => $grant->competitor_id === null ? null : ($names[$grant->competitor_id]->name ?? 'A competitor you cannot see'),
+                'maxClassification' => $grant->max_classification->value,
+                'canExport' => $grant->can_export,
+                'reason' => $grant->reason,
+                'grantedBy' => $grant->grantor?->name,
+                'grantedAt' => $grant->created_at?->toIso8601ZuluString(),
+                'expiresAt' => $grant->expires_at?->toIso8601ZuluString(),
+                'revokedBy' => $grant->revoker?->name,
+                'revokedAt' => $grant->revoked_at?->toIso8601ZuluString(),
+                'status' => $grant->status(),
+            ])->all(),
             // Grantees to choose from; the service refuses the actor and inactive users again.
             'users' => User::query()->where('status', 'active')->whereKeyNot($actor->id)->orderBy('name')->get(['id', 'ulid', 'name'])
                 ->map(fn (User $user): array => ['ulid' => $user->ulid, 'name' => $user->name])->all(),
@@ -50,6 +54,7 @@ class AccessGrantController
                 array_filter(Classification::cases(), fn (Classification $c): bool => $actor->clearance->isAtLeast($c)),
             )),
             'canGrantExport' => $actor->checkPermissionTo('export.run'),
+            'competitors' => array_map(fn (CompetitorSummary $c): array => ['ulid' => $c->ulid, 'name' => $c->name], $competitors->visibleTo($actor)),
         ]);
     }
 
@@ -71,6 +76,7 @@ class AccessGrantController
             (bool) $request->validated('can_export', false),
             (string) $request->validated('reason'),
             is_string($expiresAt) && $expiresAt !== '' ? CarbonImmutable::parse($expiresAt)->utc() : null,
+            $request->validated('scope') === 'competitor' ? (string) $request->validated('competitor') : null,
         );
 
         return back()->with('status', "Access granted to {$grantee->name}.");

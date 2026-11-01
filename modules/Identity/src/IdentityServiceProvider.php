@@ -89,7 +89,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
         $actions->define('team.member_added', ['member' => 'ulid']);
         $actions->define('team.member_removed', ['member' => 'ulid']);
         $actions->define('access_grant.created', [
-            'grantee_type' => 'code', 'grantee' => 'ulid', 'scope' => 'code', 'max_classification' => 'code', 'can_export' => 'bool',
+            'grantee_type' => 'code', 'grantee' => 'ulid', 'scope' => 'code', 'competitor' => 'ulid', 'max_classification' => 'code', 'can_export' => 'bool',
             'expires_at' => 'int', // Unix seconds
         ]);
         $actions->define('access_grant.revoked', ['grantee_type' => 'code', 'grantee' => 'ulid']);

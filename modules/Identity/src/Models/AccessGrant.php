@@ -11,13 +11,15 @@ use Modules\Platform\Classification;
 
 /**
  * What a user or team may see beyond their roles (P1-14, docs/02 §3.2, docs/07 §3), up to a classification and until
- * an optional expiry. Revoked, never deleted. Only scope `all` until the registry exists. No mass assignment.
+ * an optional expiry. Revoked, never deleted. Scope `all` or one competitor (P1-20a); markets follow P1-23. No mass
+ * assignment.
  *
  * @property int $id
  * @property string $ulid
  * @property ?int $user_id
  * @property ?int $team_id
  * @property string $scope_type
+ * @property ?int $competitor_id
  * @property Classification $max_classification
  * @property bool $can_export
  * @property int $granted_by
@@ -30,6 +32,8 @@ use Modules\Platform\Classification;
 class AccessGrant extends Model
 {
     public const SCOPE_ALL = 'all';
+
+    public const SCOPE_COMPETITOR = 'competitor';
 
     protected $guarded = ['*'];
 

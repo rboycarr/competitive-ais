@@ -4,6 +4,8 @@ namespace Modules\Registry;
 
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
+use Modules\Registry\Contracts\CompetitorLookup;
+use Modules\Registry\Lookup\EloquentCompetitorLookup;
 
 /**
  * Registry (M02–M04, docs/03): competitors (P1-20); aliases, relationships, products, markets and taxonomies follow in
@@ -12,6 +14,13 @@ use Modules\Platform\Support\ModuleServiceProvider;
  */
 class RegistryServiceProvider extends ModuleServiceProvider
 {
+    public function register(): void
+    {
+        parent::register();
+
+        $this->app->bind(CompetitorLookup::class, EloquentCompetitorLookup::class);
+    }
+
     public function boot(): void
     {
         parent::boot();
