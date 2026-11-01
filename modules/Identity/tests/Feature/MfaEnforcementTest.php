@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Actions\InvitationService;
+use Modules\Identity\Http\Middleware\EnsureMfaEnrolled;
 use Modules\Identity\MfaRequirement;
 use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Classification;
@@ -138,14 +139,41 @@ class MfaEnforcementTest extends TestCase
     public function test_the_allowlist_is_by_route_name_and_every_name_exists(): void
     {
         // TASK-0021 #3: a typo would silently block enrollment; a look-alike path must not be let through.
-        foreach (MfaRequirement::ENROLLMENT_ROUTES as $name) {
+        foreach (MfaRequirement::ENROLLMENT_ROUTES as $name => $uri) {
             $this->assertTrue(Route::has($name), "Route [$name] is not registered.");
+            $this->assertSame($uri, Route::getRoutes()->getByName($name)?->uri(), "Route [$name] has another URI.");
         }
 
         Route::middleware('web')->get('/user/security-anything', fn () => 'ok');
         $admin = $this->createUser('lookalike@example.test', 'super_admin');
         $this->actingAs($admin)->get('/user/security-anything')->assertRedirect('/user/security');
         $this->actingAs($admin)->get('/user/security?x=1')->assertRedirect('/user/confirm-password');
+    }
+
+    public function test_a_route_reusing_an_allowlisted_name_is_still_blocked(): void
+    {
+        // TASK-0022: the exemption needs the name and the URI of the real enrollment route.
+        Route::middleware('web')->get('/_test/privileged-with-borrowed-name', fn () => 'ok')->name('security.show.copy');
+        Route::middleware('web')->post('/_test/also-borrowed', fn () => 'ok')->name('logout');
+        Route::getRoutes()->refreshNameLookups();
+        $admin = $this->createUser('borrowed@example.test', 'super_admin');
+
+        $this->actingAs($admin)->get('/_test/privileged-with-borrowed-name')->assertRedirect('/user/security');
+        $this->actingAs($admin)->post('/_test/also-borrowed')->assertRedirect('/user/security');
+    }
+
+    public function test_every_application_route_runs_the_enforcement(): void
+    {
+        // TASK-0022: the guarantee holds only if no route sits outside the web and api groups. "up" is the
+        // unauthenticated health check.
+        $uncovered = [];
+        foreach (Route::getRoutes()->getRoutes() as $route) {
+            if ($route->uri() !== 'up' && ! in_array(EnsureMfaEnrolled::class, Route::gatherRouteMiddleware($route), true)) {
+                $uncovered[] = implode('|', $route->methods()).' '.$route->uri();
+            }
+        }
+
+        $this->assertSame([], $uncovered, 'Routes without EnsureMfaEnrolled.');
     }
 
     public function test_an_unenrolled_super_admin_cannot_invite(): void

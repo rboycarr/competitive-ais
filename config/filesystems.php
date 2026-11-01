@@ -33,7 +33,9 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // No HTTP route for local files: documents and evidence live in object storage (ADR-0007) and are
+            // downloaded through authorized, short-lived URLs (P1-34). Keeps every route behind web/api (TASK-0022).
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

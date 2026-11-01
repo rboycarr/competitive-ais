@@ -4,6 +4,7 @@ namespace Modules\Identity\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
 use Modules\Identity\MfaRequirement;
 use Modules\Identity\Models\User;
 use Modules\Platform\Http\PublicHttpException;
@@ -20,9 +21,13 @@ class EnsureMfaEnrolled
     public function handle(Request $request, Closure $next): Response
     {
         $user = $request->user();
+        $route = $request->route();
+        $isEnrollmentRoute = $route instanceof Route
+            && (MfaRequirement::ENROLLMENT_ROUTES[(string) $route->getName()] ?? null) === $route->uri();
+
         if (! $user instanceof User
             || $user->hasEnabledTwoFactorAuthentication()
-            || in_array($request->route()?->getName(), MfaRequirement::ENROLLMENT_ROUTES, true)
+            || $isEnrollmentRoute
             || ! $user->requiresMfa()) {
             return $next($request);
         }

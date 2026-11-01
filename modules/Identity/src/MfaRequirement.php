@@ -18,22 +18,22 @@ final class MfaRequirement
     ];
 
     /**
-     * Named routes a user who must enroll can still reach: the security page, Fortify's two-factor and
-     * password-confirmation endpoints, and sign-out. Matched by route name, not path, so a new path under the same
-     * prefix is not let through (TASK-0021 #3); a test checks every name is registered.
+     * Routes a user who must enroll can still reach: the security page, Fortify's two-factor and password-confirmation
+     * endpoints, and sign-out. A route passes only if both its name and its URI match (TASK-0021 #3, TASK-0022), so
+     * neither a look-alike path nor another route reusing one of these names is let through; tests check both.
      */
     public const ENROLLMENT_ROUTES = [
-        'security.show',
-        'two-factor.enable',
-        'two-factor.confirm',
-        'two-factor.disable',
-        'two-factor.qr-code',
-        'two-factor.secret-key',
-        'two-factor.recovery-codes',
-        'two-factor.regenerate-recovery-codes',
-        'password.confirm',
-        'password.confirm.store',
-        'password.confirmation',
-        'logout',
+        'security.show' => 'user/security',
+        'two-factor.enable' => 'user/two-factor-authentication',
+        'two-factor.disable' => 'user/two-factor-authentication',
+        'two-factor.confirm' => 'user/confirmed-two-factor-authentication',
+        'two-factor.qr-code' => 'user/two-factor-qr-code',
+        'two-factor.secret-key' => 'user/two-factor-secret-key',
+        'two-factor.recovery-codes' => 'user/two-factor-recovery-codes',
+        'two-factor.regenerate-recovery-codes' => 'user/two-factor-recovery-codes',
+        'password.confirm' => 'user/confirm-password',
+        'password.confirm.store' => 'user/confirm-password',
+        'password.confirmation' => 'user/confirmed-password-status',
+        'logout' => 'logout',
     ];
 }
