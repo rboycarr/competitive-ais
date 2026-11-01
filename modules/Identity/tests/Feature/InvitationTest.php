@@ -15,6 +15,7 @@ use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Actions\InvitationService;
 use Modules\Identity\Mail\InvitationMail;
 use Modules\Identity\Models\User;
+use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Classification;
 use Spatie\Permission\Models\Role;
 use Symfony\Component\HttpFoundation\Response;
@@ -26,7 +27,7 @@ use Tests\TestCase;
  */
 class InvitationTest extends TestCase
 {
-    use RefreshDatabase;
+    use CreatesUsers, RefreshDatabase;
 
     private const PASSWORD = 'correct horse battery staple';
 
@@ -264,7 +265,10 @@ class InvitationTest extends TestCase
         $this->assertSame(['First'], User::query()->pluck('name')->all());
     }
 
-    /** An active account with the given role, created through the real invitation flow (system inviter). */
+    /**
+     * An active account with the given role, created through the real invitation flow (system inviter), with
+     * two-factor on: privileged permissions such as user.manage need it (P1-12, MfaEnforcementTest).
+     */
     private function member(string $role, Classification $clearance): User
     {
         $email = 'member.'.str_replace('_', '-', $role).'@example.test';
@@ -272,7 +276,7 @@ class InvitationTest extends TestCase
         $user = $this->app->make(InvitationService::class)->accept($this->sentToken($email), "Member $role", self::PASSWORD);
         $this->assertNotNull($user);
 
-        return $user;
+        return $this->enableTwoFactor($user);
     }
 
     private function invite(string $email, string $role = 'exec_reader', Classification $clearance = Classification::Internal, ?User $inviter = null): void

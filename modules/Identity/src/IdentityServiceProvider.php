@@ -7,6 +7,8 @@ use Illuminate\Auth\Events\Lockout;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
@@ -20,6 +22,7 @@ use Laravel\Fortify\Events\TwoFactorAuthenticationFailed;
 use Laravel\Fortify\Fortify;
 use Modules\Identity\Actions\AuthenticateUser;
 use Modules\Identity\Console\InviteUser;
+use Modules\Identity\Http\Middleware\EnsureMfaEnrolled;
 use Modules\Identity\Listeners\AuditAuthentication;
 use Modules\Identity\Models\User;
 use Modules\Platform\Audit\AuditActions;
@@ -40,6 +43,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
         $this->defineAuditActions();
         $this->configureAuthentication();
         $this->shareAuthenticatedUser();
+        $this->enforceMfaEnrollment();
 
         RateLimiter::for('invitations', fn (Request $request) => Limit::perMinute(10)->by((string) $request->ip()));
 
@@ -110,15 +114,27 @@ class IdentityServiceProvider extends ModuleServiceProvider
         Event::listen(RecoveryCodeReplaced::class, [AuditAuthentication::class, 'recoveryCodeReplaced']);
     }
 
-    /** The signed-in user's display data on every page; nothing else about the account is shared. */
+    /**
+     * The signed-in user's display data on every page, and whether they must still turn on two-factor authentication
+     * (P1-12); nothing else about the account is shared.
+     */
     private function shareAuthenticatedUser(): void
     {
-        Inertia::share('auth', fn (Request $request): array => [
-            'user' => ($user = $request->user()) instanceof User ? [
-                'ulid' => $user->ulid,
-                'name' => $user->name,
-                'email' => $user->email,
-            ] : null,
-        ]);
+        Inertia::share('auth', function (Request $request): array {
+            $user = $request->user();
+
+            return [
+                'user' => $user instanceof User ? ['ulid' => $user->ulid, 'name' => $user->name, 'email' => $user->email] : null,
+                'mfaRequired' => $user instanceof User && ! $user->hasEnabledTwoFactorAuthentication() && $user->requiresMfa(),
+            ];
+        });
+    }
+
+    /** Users holding a privileged permission can only enroll or sign out until two-factor is on (P1-12). */
+    private function enforceMfaEnrollment(): void
+    {
+        /** @var Kernel $kernel the bound HTTP kernel (resolving the concrete class would build a second one) */
+        $kernel = $this->app->make(HttpKernel::class);
+        $kernel->appendMiddlewareToGroup('web', EnsureMfaEnrolled::class);
     }
 }

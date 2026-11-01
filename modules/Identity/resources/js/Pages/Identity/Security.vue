@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { router, useForm } from '@inertiajs/vue3';
+import { computed, ref } from 'vue';
+import { router, useForm, usePage } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 
 const props = defineProps<{ twoFactorEnabled: boolean; twoFactorPending: boolean }>();
+
+// P1-12: users with a privileged role are sent here until two-factor authentication is on.
+const page = usePage<{ auth?: { mfaRequired?: boolean } }>();
+const mfaRequired = computed(() => page.props.auth?.mfaRequired === true);
 
 const qrImage = ref<string | null>(null);
 const secretKey = ref<string | null>(null);
@@ -55,6 +59,10 @@ if (props.twoFactorPending) {
     <AppLayout title="Security">
         <section aria-labelledby="two-factor-heading" class="max-w-xl space-y-4">
             <h2 id="two-factor-heading" class="text-lg font-semibold">Two-factor authentication</h2>
+
+            <p v-if="mfaRequired" class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900" role="status">
+                Your role needs two-factor authentication. Turn it on to continue; until then only this page and sign-out are available.
+            </p>
 
             <template v-if="twoFactorEnabled">
                 <p class="text-slate-700">Two-factor authentication is on. You will be asked for a code from your authenticator app when you sign in.</p>
