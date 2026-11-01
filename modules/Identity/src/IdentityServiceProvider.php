@@ -9,7 +9,6 @@ use Illuminate\Auth\Events\Logout;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -19,6 +18,7 @@ use Laravel\Fortify\Events\TwoFactorAuthenticationConfirmed;
 use Laravel\Fortify\Events\TwoFactorAuthenticationDisabled;
 use Laravel\Fortify\Events\TwoFactorAuthenticationFailed;
 use Laravel\Fortify\Fortify;
+use Modules\Identity\Actions\AuthenticateUser;
 use Modules\Identity\Console\InviteUser;
 use Modules\Identity\Listeners\AuditAuthentication;
 use Modules\Identity\Models\User;
@@ -74,16 +74,16 @@ class IdentityServiceProvider extends ModuleServiceProvider
         Fortify::twoFactorChallengeView(fn () => Inertia::render('Identity/TwoFactorChallenge'));
         Fortify::confirmPasswordView(fn () => Inertia::render('Identity/ConfirmPassword'));
 
-        Fortify::authenticateUsing(function (Request $request): ?User {
-            $user = User::query()->where('email', Str::lower(trim((string) $request->input('email'))))->first();
+        Fortify::authenticateUsing(fn (Request $request): ?User => $this->app->make(AuthenticateUser::class)(
+            (string) $request->input('email'),
+            (string) $request->input('password'),
+        ));
 
-            return $user !== null && $user->status === 'active' && Hash::check((string) $request->input('password'), $user->password)
-                ? $user
-                : null;
-        });
-
+        // Login limits (TASK-0019 #2): per account from one IP, per account from all IPs (distributed guessing), and per
+        // IP (spraying many accounts). The per-account limit lets an attacker keep one account throttled while they
+        // keep trying; each refusal is audited, and the window is one minute.
         RateLimiter::for('login', function (Request $request) {
-            $account = Str::lower(trim((string) $request->input('email'))).'|'.$request->ip();
+            $email = Str::lower(trim((string) $request->input('email')));
             // The throttle middleware answers before Fortify runs, so the refusal is audited here (no Lockout event).
             $refuse = function (Request $request, array $headers): Response {
                 event(new Lockout($request));
@@ -92,7 +92,8 @@ class IdentityServiceProvider extends ModuleServiceProvider
             };
 
             return [
-                Limit::perMinute(5)->by('account:'.$account)->response($refuse),
+                Limit::perMinute(5)->by('account-ip:'.$email.'|'.$request->ip())->response($refuse),
+                Limit::perMinute(10)->by('account:'.$email)->response($refuse),
                 Limit::perMinute(30)->by('ip:'.$request->ip())->response($refuse),
             ];
         });

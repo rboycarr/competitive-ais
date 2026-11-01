@@ -2,10 +2,12 @@
 
 namespace Modules\Identity\Tests\Feature;
 
+use Illuminate\Contracts\Hashing\Hasher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia;
+use Modules\Identity\Actions\AuthenticateUser;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
 use PragmaRX\Google2FA\Google2FA;
@@ -72,6 +74,85 @@ class LoginTest extends TestCase
         foreach (['wrong password entirely', self::PASSWORD, 'nobody@example.test'] as $secret) {
             $this->assertStringNotContainsString($secret, (string) $everything);
         }
+    }
+
+    public function test_every_attempt_costs_exactly_one_password_hash_check(): void
+    {
+        // TASK-0019 #1: unknown and inactive accounts must not answer faster than a wrong password.
+        $this->user('active@example.test');
+        $this->user('suspended@example.test', 'suspended');
+        $this->user('gone@example.test', 'deactivated');
+        $hasher = new CountingHasher($this->app->make('hash'));
+        $this->app->instance(Hasher::class, $hasher);
+
+        foreach (['nobody@example.test' => true, 'suspended@example.test' => false, 'gone@example.test' => false, 'active@example.test' => false] as $email => $usesDummy) {
+            $hasher->reset();
+            $this->post('/login', ['email' => $email, 'password' => 'wrong password entirely'])->assertSessionHasErrors('email');
+            $this->assertCount(1, $hasher->checks(), "One hash check for [$email].");
+            $this->assertSame($usesDummy, ($hasher->checks()[0] ?? null) === AuthenticateUser::DUMMY_HASH, "Dummy hash only for unknown accounts [$email].");
+        }
+        $this->post('/login', ['email' => 'gone@example.test', 'password' => self::PASSWORD])->assertSessionHasErrors('email');
+        $this->assertGuest();
+    }
+
+    public function test_the_dummy_hash_costs_the_same_as_a_real_password_hash(): void
+    {
+        $production = (require config_path('hashing.php'))['argon'];
+        $info = password_get_info(AuthenticateUser::DUMMY_HASH);
+
+        $this->assertSame('argon2id', $info['algoName']);
+        $this->assertSame(
+            ['memory_cost' => $production['memory'], 'time_cost' => $production['time'], 'threads' => $production['threads']],
+            $info['options'],
+            'Regenerate AuthenticateUser::DUMMY_HASH when the Argon2id parameters change.',
+        );
+    }
+
+    public function test_guessing_one_account_from_many_ips_is_throttled_too(): void
+    {
+        // TASK-0019 #2: the per-account limit does not depend on the source IP.
+        $this->user('target@example.test');
+
+        foreach (range(1, 10) as $i) {
+            $this->withServerVariables(['REMOTE_ADDR' => "203.0.113.$i"])
+                ->post('/login', ['email' => 'target@example.test', 'password' => 'guess '.$i])->assertSessionHasErrors('email');
+        }
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.99'])
+            ->post('/login', ['email' => 'target@example.test', 'password' => self::PASSWORD])->assertStatus(429);
+        $this->assertGuest();
+    }
+
+    public function test_signing_in_starts_a_new_session(): void
+    {
+        $this->user('session@example.test');
+        $this->get('/login');
+        $before = $this->app['session']->getId();
+
+        $this->post('/login', ['email' => 'session@example.test', 'password' => self::PASSWORD])->assertRedirect('/');
+
+        $this->assertNotSame($before, $this->app['session']->getId());
+    }
+
+    public function test_two_factor_endpoints_refuse_guests(): void
+    {
+        $this->post('/user/two-factor-authentication')->assertRedirect('/login');
+        $this->delete('/user/two-factor-authentication')->assertRedirect('/login');
+        $this->getJson('/user/two-factor-qr-code')->assertUnauthorized();
+        $this->getJson('/user/two-factor-recovery-codes')->assertUnauthorized();
+        $this->get('/user/security')->assertRedirect('/login');
+    }
+
+    public function test_new_recovery_codes_replace_the_old_ones(): void
+    {
+        $user = $this->userWithTwoFactor('regen@example.test');
+        $old = $user->recoveryCodes();
+
+        $this->actingAs($user)->withSession(['auth.password_confirmed_at' => time()])->post('/user/two-factor-recovery-codes')->assertRedirect();
+
+        $new = $user->refresh()->recoveryCodes();
+        $this->assertCount(8, $new);
+        $this->assertSame([], array_intersect($old, $new));
+        $this->assertSame(1, DB::table('audit_events')->where('action', 'auth.recovery_codes_generated')->count());
     }
 
     public function test_logins_are_throttled_per_account_and_ip(): void
@@ -221,5 +302,51 @@ class LoginTest extends TestCase
         $google2fa = new Google2FA;
 
         return $google2fa->oathTotp($secret, $google2fa->getTimestamp() + $windowsAhead);
+    }
+}
+
+/** Records which hash each check compared against, and delegates to the real hasher. */
+final class CountingHasher implements Hasher
+{
+    /** @var list<string> */
+    private array $checks = [];
+
+    public function __construct(private readonly Hasher $inner) {}
+
+    public function reset(): void
+    {
+        $this->checks = [];
+    }
+
+    /** @return list<string> the hashes compared against since the last reset */
+    public function checks(): array
+    {
+        return $this->checks;
+    }
+
+    /** @param array<string, mixed> $options */
+    public function check(#[\SensitiveParameter] $value, $hashedValue, array $options = []): bool
+    {
+        $this->checks[] = (string) $hashedValue;
+
+        return $this->inner->check($value, $hashedValue, $options);
+    }
+
+    /** @return array<string, mixed> */
+    public function info($hashedValue): array
+    {
+        return $this->inner->info($hashedValue);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function make(#[\SensitiveParameter] $value, array $options = []): string
+    {
+        return $this->inner->make($value, $options);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function needsRehash($hashedValue, array $options = []): bool
+    {
+        return $this->inner->needsRehash($hashedValue, $options);
     }
 }
