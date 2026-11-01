@@ -163,6 +163,8 @@ class IdentityServiceProvider extends ModuleServiceProvider
                     'grantManage' => $user->hasPermissionTo('grant.manage'),
                     'auditView' => $user->hasPermissionTo('audit.view'),
                     'competitorView' => $user->checkPermissionTo('competitor.view'),
+                    'productView' => $user->checkPermissionTo('product.view'),
+                    'taxonomyManage' => $user->checkPermissionTo('taxonomy.manage'),
                 ] : [],
             ];
         });

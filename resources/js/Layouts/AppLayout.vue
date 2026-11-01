@@ -5,7 +5,7 @@ import { Head, Link, usePage } from '@inertiajs/vue3';
 defineProps<{ title: string }>();
 
 type Shared = {
-    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean } };
+    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean; productView?: boolean; taxonomyManage?: boolean } };
     flash?: { status?: string | null };
 };
 
@@ -15,12 +15,14 @@ const status = computed(() => page.props.flash?.status ?? null);
 // Links only; every action is authorized on the server (P1-13).
 const mainLinks = computed(() => [
     can.value.competitorView ? { href: '/competitors', label: 'Competitors' } : null,
+    can.value.productView ? { href: '/brands', label: 'Brands' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 const adminLinks = computed(() => [
     can.value.userView ? { href: '/admin/users', label: 'Users' } : null,
     can.value.roleManage ? { href: '/admin/roles', label: 'Roles' } : null,
     can.value.teamManage ? { href: '/admin/teams', label: 'Teams' } : null,
     can.value.grantManage ? { href: '/admin/access-grants', label: 'Access grants' } : null,
+    can.value.taxonomyManage ? { href: '/admin/categories', label: 'Categories' } : null,
     can.value.auditView ? { href: '/admin/audit', label: 'Audit log' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 </script>

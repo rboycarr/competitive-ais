@@ -13,6 +13,7 @@ use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\CompetitorAlias;
+use Modules\Registry\Support\Names;
 
 /**
  * Competitor aliases (P1-21, docs/03 Registry):
@@ -78,7 +79,7 @@ class CompetitorAliasService
     /** One rule for every caller: trim, and collapse whitespace and control characters to single spaces. */
     public static function normalize(string $alias): string
     {
-        return trim((string) preg_replace('/[\s\p{Z}\p{Cc}]+/u', ' ', $alias));
+        return Names::normalize($alias);
     }
 
     private function lockVisible(Authenticatable $actor, Competitor $competitor): Competitor
