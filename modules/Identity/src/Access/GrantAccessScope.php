@@ -55,6 +55,18 @@ class GrantAccessScope implements AccessScope
         if (! $model instanceof Classifiable || ! $model instanceof Scoped) {
             throw new LogicException($model::class.' must implement Classifiable and Scoped to be filtered by visibility.');
         }
+        // Conditions already on the query go into their own group first, so an earlier orWhere cannot bypass the
+        // filter ("a OR b AND visible" would show a). The visibleTo scope gets this from Eloquent; direct calls here.
+        $base = $query->getQuery();
+        if ($base->wheres !== []) {
+            $existing = $base->forNestedWhere();
+            $existing->wheres = $base->wheres;
+            $existing->bindings['where'] = $base->bindings['where'];
+            $base->wheres = [];
+            $base->bindings['where'] = [];
+            $base->addNestedWhereQuery($existing);
+        }
+
         if (! $this->isActiveUser($user)) {
             return $query->whereRaw('1 = 0');
         }

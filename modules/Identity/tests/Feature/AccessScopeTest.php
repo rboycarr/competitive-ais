@@ -8,7 +8,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use LogicException;
 use Modules\Identity\Actions\AccessGrantService;
+use Modules\Identity\Actions\TeamService;
 use Modules\Identity\Models\AccessGrant;
+use Modules\Identity\Models\Team;
 use Modules\Identity\Models\User;
 use Modules\Identity\Tests\Support\CreatesUsers;
 use Modules\Platform\Access\AccessScope;
@@ -133,6 +135,54 @@ class AccessScopeTest extends TestCase
         $grants->revoke($director, $grant);
         $this->assertFalse($scope->allows($analyst, $record));
         $this->assertSame(1, AccessGrant::query()->where('user_id', $analyst->id)->count()); // revoked, not deleted
+    }
+
+    public function test_existing_or_conditions_cannot_widen_the_filter(): void
+    {
+        // TASK-0026: "label = a OR label = b" followed by the filter must stay grouped, called directly or as a scope.
+        $user = $this->matrixUser('public', 'active', 'none');
+        $scope = $this->app->make(AccessScope::class);
+        $hidden = ['restricted/unscoped', 'public/competitor'];
+        $direct = $scope->applyTo(ProbeRecord::query()->where('label', $hidden[0])->orWhere('label', $hidden[1])->orWhere('label', 'public/unscoped'), $user);
+        $viaScope = ProbeRecord::query()->where('label', $hidden[0])->orWhere('label', 'public/unscoped')->visibleTo($user);
+
+        $this->assertSame(['public/unscoped'], $direct->pluck('label')->all());
+        $this->assertSame(['public/unscoped'], $viaScope->pluck('label')->all());
+    }
+
+    public function test_team_and_expiry_changes_apply_and_the_cache_lives_one_request(): void
+    {
+        $admin = $this->enableTwoFactor($this->createUser('admin@example.test', 'super_admin', clearance: Classification::Restricted));
+        $member = $this->matrixUser('confidential', 'active', 'team:confidential');
+        $scope = $this->app->make(AccessScope::class);
+        $record = $this->probes['internal/market'];
+        $this->assertTrue($scope->allows($member, $record));
+
+        // Leaving the team withdraws its grants in the same request (TeamService clears the cache).
+        $team = Team::query()->whereHas('members', fn ($q) => $q->whereKey($member->id))->sole();
+        $this->app->make(TeamService::class)->removeMember($admin, $team, $member);
+        $this->assertFalse($scope->allows($member, $record));
+
+        // A change that bypasses the actions is seen by the next request or job (scoped binding), not this one.
+        $direct = $this->matrixUser('confidential', 'active', 'all:confidential');
+        $this->assertTrue($scope->allows($direct, $record));
+        AccessGrant::query()->where('user_id', $direct->id)->update(['expires_at' => now('UTC')->addMinute()]);
+        $this->travel(1)->minutes();
+        $this->assertTrue($scope->allows($direct, $record), 'cached for this request');
+        $this->app->forgetScopedInstances();
+        $fresh = $this->app->make(AccessScope::class);
+        $this->assertNotSame($scope, $fresh);
+        $this->assertFalse($fresh->allows($direct, $record), 'expired at the exact instant, seen by the next request');
+    }
+
+    private function matrixUser(string $clearance, string $status, string $grant): User
+    {
+        foreach ($this->users as $entry) {
+            if ([$entry['clearance'], $entry['status'], $entry['grant']] === [$clearance, $status, $grant]) {
+                return $entry['user'];
+            }
+        }
+        $this->fail("No matrix user $clearance/$status/$grant.");
     }
 
     public function test_unknown_users_and_unprepared_models_are_refused(): void
