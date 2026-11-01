@@ -39,6 +39,12 @@ class User extends Authenticatable
 
     protected $guarded = ['*'];
 
+    /** Routes address users by ULID, never by the internal ID (docs/07 Input). */
+    public function getRouteKeyName(): string
+    {
+        return 'ulid';
+    }
+
     /**
      * A privileged permission counts only after two-factor authentication is confirmed (P1-12). Every permission
      * check goes through here: Gate abilities, policies, `can` middleware and direct calls.
@@ -47,7 +53,8 @@ class User extends Authenticatable
      */
     public function hasPermissionTo($permission, ?string $guardName = null): bool
     {
-        if (! $this->roleGrantsPermission($permission, $guardName)) {
+        // A suspended or deactivated account holds no permission at all (TASK-0023 #3).
+        if ($this->status !== 'active' || ! $this->roleGrantsPermission($permission, $guardName)) {
             return false;
         }
 
@@ -63,7 +70,7 @@ class User extends Authenticatable
      */
     public function hasDirectPermission($permission): bool
     {
-        return $this->directlyGrantsPermission($permission) && $this->mfaAllows($permission);
+        return $this->status === 'active' && $this->directlyGrantsPermission($permission) && $this->mfaAllows($permission);
     }
 
     /**
