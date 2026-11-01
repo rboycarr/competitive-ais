@@ -2,7 +2,9 @@
 
 namespace Modules\Platform\Tests\Feature;
 
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Vite;
+use Inertia\Inertia;
 use Inertia\Testing\AssertableInertia;
 use Modules\Platform\Http\Middleware\HandleInertiaRequests;
 use Tests\TestCase;
@@ -31,6 +33,18 @@ class InertiaShellTest extends TestCase
 
         $response->assertOk()->assertHeader('X-Inertia', 'true')->assertJsonPath('component', 'Platform/Home');
         $this->assertSame($response->headers->get('X-Request-Id'), $response->json('props.requestId'));
+    }
+
+    public function test_page_data_cannot_break_out_of_its_json_block(): void
+    {
+        $this->withoutVite();
+        Route::get('/_test/hostile-prop', fn () => Inertia::render('Platform/Home', ['note' => '</script><script>alert(1)</script>"\'<b>']));
+
+        $html = (string) $this->get('/_test/hostile-prop')->assertOk()->getContent();
+
+        $this->assertStringNotContainsString('<script>alert(1)', $html);
+        $this->assertSame(1, preg_match('#<script data-page="app" type="application/json">(.*?)</script>#s', $html, $m), 'Page data block not found.');
+        $this->assertSame('</script><script>alert(1)</script>"\'<b>', json_decode(html_entity_decode($m[1] ?? ''), true)['props']['note'] ?? null);
     }
 
     public function test_every_script_in_the_page_carries_the_nonce_or_is_not_executable(): void
