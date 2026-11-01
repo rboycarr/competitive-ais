@@ -37,6 +37,19 @@ class AuditActions
     }
 
     /**
+     * Every defined action, sorted (the audit viewer's action filter).
+     *
+     * @return list<string>
+     */
+    public function names(): array
+    {
+        $names = array_keys($this->actions);
+        sort($names);
+
+        return $names;
+    }
+
+    /**
      * @return array<string, string> key => type
      */
     public function context(string $action): array

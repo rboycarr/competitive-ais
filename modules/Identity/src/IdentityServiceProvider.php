@@ -34,7 +34,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Identity (M01, docs/03): users, invitations (P1-10), login with TOTP two-factor authentication (P1-11), roles,
- * permissions and teams (P1-13), access grants (P1-14).
+ * permissions and teams (P1-13), access grants (P1-14), visibility (P1-15), the audit log viewer (P1-16).
  */
 class IdentityServiceProvider extends ModuleServiceProvider
 {
@@ -90,6 +90,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
             'expires_at' => 'int', // Unix seconds
         ]);
         $actions->define('access_grant.revoked', ['grantee_type' => 'code', 'grantee' => 'ulid']);
+        $actions->define('audit.searched', ['filters' => 'code[]', 'next_page' => 'bool']);
     }
 
     /**
@@ -156,6 +157,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
                     'roleManage' => $user->hasPermissionTo('role.manage'),
                     'teamManage' => $user->hasPermissionTo('team.manage'),
                     'grantManage' => $user->hasPermissionTo('grant.manage'),
+                    'auditView' => $user->hasPermissionTo('audit.view'),
                 ] : [],
             ];
         });
