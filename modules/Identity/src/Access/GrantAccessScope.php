@@ -24,8 +24,8 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  *
  * A grant covers a record when it is active (neither revoked nor expired), held by the user directly or through a
  * team, and opens at least the record's classification: an `all` grant covers any record, a competitor grant the
- * records about that competitor (every competitor on a record must be covered; P1-20a). Inactive accounts see nothing, whatever their grants
- * (TASK-0025). Registered per request (scoped binding), so the grant cache never outlives a request or a job.
+ * records about that competitor (P1-20a), a market grant the records about that market (P1-23c); every competitor and
+ * every market on a record must be covered (all-of). Inactive accounts see nothing, whatever their grants (TASK-0025). Registered per request (scoped binding), so the grant cache never outlives a request or a job.
  */
 class GrantAccessScope implements AccessScope
 {
@@ -77,8 +77,9 @@ class GrantAccessScope implements AccessScope
         $relations = $model::scopeRelations();
 
         // One branch per classification the user may read. Within it: everything if an `all` grant opens that level;
-        // otherwise no market scope, every competitor scope covered by a competitor grant (all-of), and a restricted
-        // record must have at least one (its explicit grant). Unscoped records below restricted need no grant.
+        // otherwise every competitor scope covered by a competitor grant and every market scope by a market grant
+        // (all-of), and a restricted record must have at least one scope (its explicit grant). Unscoped records below
+        // restricted need no grant.
         return $query->where(function (Builder $visible) use ($user, $grants, $column, $relations): void {
             $visible->whereRaw('1 = 0'); // nothing unless a branch below matches
             foreach (Classification::cases() as $level) {
@@ -90,18 +91,24 @@ class GrantAccessScope implements AccessScope
                     if ($grants->coversAll($level)) {
                         return;
                     }
-                    if (isset($relations['market'])) {
-                        $q->whereDoesntHave($relations['market'][0]);
-                    }
-                    $covered = $grants->competitorsCovering($level);
-                    if (isset($relations['competitor'])) {
-                        [$relation, $idColumn] = $relations['competitor'];
-                        $q->whereDoesntHave($relation, fn (Builder $scope) => $covered === [] ? $scope : $scope->whereNotIn($idColumn, $covered));
-                        if ($level === Classification::Restricted) {
-                            $covered === [] ? $q->whereRaw('1 = 0') : $q->whereHas($relation);
+                    // Scopes that may appear on a visible record: those with covering grants at this level.
+                    $present = [];
+                    foreach (['competitor' => $grants->competitorsCovering($level), 'market' => $grants->marketsCovering($level)] as $type => $covered) {
+                        if (! isset($relations[$type])) {
+                            continue;
                         }
-                    } elseif ($level === Classification::Restricted) {
-                        $q->whereRaw('1 = 0');
+                        [$relation, $idColumn] = $relations[$type];
+                        $q->whereDoesntHave($relation, fn (Builder $scope) => $covered === [] ? $scope : $scope->whereNotIn($idColumn, $covered));
+                        if ($covered !== []) {
+                            $present[] = $relation;
+                        }
+                    }
+                    if ($level === Classification::Restricted) {
+                        $present === [] ? $q->whereRaw('1 = 0') : $q->where(function (Builder $scoped) use ($present): void {
+                            foreach ($present as $relation) {
+                                $scoped->orWhereHas($relation);
+                            }
+                        });
                     }
                 });
             }
@@ -127,16 +134,18 @@ class GrantAccessScope implements AccessScope
 
         $all = null;
         $competitors = [];
+        $markets = [];
         $higher = fn (?Classification $a, Classification $b): Classification => $a !== null && $a->isAtLeast($b) ? $a : $b;
-        foreach (AccessGrant::query()->active()->heldBy($user)->get(['scope_type', 'competitor_id', 'max_classification']) as $grant) {
+        foreach (AccessGrant::query()->active()->heldBy($user)->get(['scope_type', 'competitor_id', 'market_id', 'max_classification']) as $grant) {
             match ($grant->scope_type) {
                 AccessGrant::SCOPE_ALL => $all = $higher($all, $grant->max_classification),
                 AccessGrant::SCOPE_COMPETITOR => $competitors[(int) $grant->competitor_id] = $higher($competitors[(int) $grant->competitor_id] ?? null, $grant->max_classification),
+                AccessGrant::SCOPE_MARKET => $markets[(int) $grant->market_id] = $higher($markets[(int) $grant->market_id] ?? null, $grant->max_classification),
                 default => null, // a scope this code does not know opens nothing
             };
         }
 
-        return $this->grants[$user->id] = new GrantSet($all, $competitors);
+        return $this->grants[$user->id] = new GrantSet($all, $competitors, $markets);
     }
 
     public function forget(): void

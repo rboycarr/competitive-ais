@@ -62,8 +62,8 @@ class AccessScopeTest extends TestCase
 
     public function test_the_matrix_covers_every_combination(): void
     {
-        $this->assertCount(4 * 2 * 9, $this->users);
-        $this->assertCount(4 * 6, $this->records);
+        $this->assertCount(4 * 2 * 12, $this->users);
+        $this->assertCount(4 * 8, $this->records);
 
         // Both outcomes occur often, so a predicate that always answers the same cannot pass.
         $visible = 0;
@@ -96,7 +96,7 @@ class AccessScopeTest extends TestCase
     public function test_http_reads_return_404_for_hidden_records(): void
     {
         // Active users only: inactive sessions end before any read (EnsureActiveAccount, covered in AdministrationTest).
-        $users = array_values(array_filter($this->users, fn (array $u): bool => $u['status'] === 'active' && in_array($u['grant'], ['none', 'all:confidential', 'competitor:A:confidential'], true)));
+        $users = array_values(array_filter($this->users, fn (array $u): bool => $u['status'] === 'active' && in_array($u['grant'], ['none', 'all:confidential', 'competitor:A:confidential', 'market:M:confidential', 'pair:A:M:confidential'], true)));
 
         AuthorizationMatrix::assertMatrix($users, $this->records, function (User $user, array $record): bool {
             $status = $this->actingAs($user)->get('/_test/probes/'.$this->probes[$record['label']]->id)->getStatusCode();
