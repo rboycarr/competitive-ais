@@ -42,6 +42,8 @@ const props = {
     relationships: [relationship], relationTypes: ['subsidiary', 'brand_owner', 'joint_venture', 'partner', 'distributor'],
     precisions: ['day', 'month', 'year', 'unknown'], others: [relationship.other],
     products: [{ ulid: '01JPROD0000000000000000000', name: '<i>Crunch</i> 150 g', status: 'active' }],
+    tags: [{ id: 3, taxonomy: 'segment', name: '<i>Premium</i>' }],
+    tagOptions: [{ id: 3, taxonomy: 'segment', name: '<i>Premium</i>' }, { id: 4, taxonomy: 'segment', name: 'Value' }],
 };
 
 describe('Registry/Competitors/Show', () => {
@@ -102,10 +104,25 @@ describe('Registry/Competitors/Show', () => {
         expect(wrapper.findAll('#relationship-kind option').map((o) => o.attributes('value')).filter((v) => v?.startsWith('partner'))).toEqual(['partner:parent']);
     });
 
+    it('offers only tags not yet applied and asks before removing one', async () => {
+        const wrapper = mount(Show, { props });
+        expect(wrapper.findAll('#tag-choice option').map((o) => o.attributes('value'))).toEqual(['', '4']);
+        expect(wrapper.find('section[aria-labelledby="tags-heading"] i').exists()).toBe(false);
+        await wrapper.get('#tag-choice').setValue('4');
+        await wrapper.get('section[aria-labelledby="tags-heading"] form').trigger('submit');
+        expect(post).toHaveBeenLastCalledWith(`/competitors/${competitor.ulid}/tags`, expect.any(Object));
+
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
+        await wrapper.get('button[aria-label="Remove tag <i>Premium</i>"]').trigger('click');
+        expect(del).toHaveBeenLastCalledWith(`/competitors/${competitor.ulid}/tags/3`, expect.any(Object));
+        confirm.mockRestore();
+    });
+
     it('offers no changes to readers', () => {
         const wrapper = mount(Show, { props: { ...props, canManage: false, others: [] } });
         expect(wrapper.find('#alias-name').exists()).toBe(false);
         expect(wrapper.find('#relationship-kind').exists()).toBe(false);
+        expect(wrapper.find('#tag-choice').exists()).toBe(false);
         expect(wrapper.findAll('button').length).toBe(0);
     });
 });

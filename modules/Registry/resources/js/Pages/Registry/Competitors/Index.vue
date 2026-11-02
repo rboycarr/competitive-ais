@@ -5,15 +5,16 @@ import AppLayout from '@/Layouts/AppLayout.vue';
 import CompetitorForm, { type CompetitorFields } from './CompetitorForm.vue';
 
 type Option = { ulid: string; name: string };
-type Row = { ulid: string; name: string; lifecycle: string; tier: string | null; hqCountry: string | null; classification: string; analyst: string | null };
+type Tag = { id: number; taxonomy: string; name: string };
+type Row = { ulid: string; name: string; lifecycle: string; tier: string | null; hqCountry: string | null; classification: string; analyst: string | null; tags: Tag[] };
 
 const props = defineProps<{
-    competitors: Row[]; filters: { lifecycle?: string; tier?: string; analyst?: string };
+    competitors: Row[]; filters: { lifecycle?: string; tier?: string; analyst?: string; tag?: string }; tagOptions: Tag[];
     canManage: boolean; tiers: string[]; analysts: Option[]; classifications: string[];
 }>();
 
 const lifecycles = ['active', 'watch', 'dormant', 'archived'];
-const filter = reactive({ lifecycle: props.filters.lifecycle ?? '', tier: props.filters.tier ?? '', analyst: props.filters.analyst ?? '' });
+const filter = reactive({ lifecycle: props.filters.lifecycle ?? '', tier: props.filters.tier ?? '', analyst: props.filters.analyst ?? '', tag: props.filters.tag ?? '' });
 const blank: CompetitorFields = {
     name: '', legal_name: '', website: '', hq_country: '', tier: '', analyst: '', classification: props.classifications.includes('internal') ? 'internal' : (props.classifications[0] ?? ''), description: '',
 };
@@ -48,6 +49,13 @@ function applyFilters(): void {
                     <option v-for="analyst in props.analysts" :key="analyst.ulid" :value="analyst.ulid">{{ analyst.name }}</option>
                 </select>
             </div>
+            <div>
+                <label for="filter-tag" class="block text-sm font-medium">Tag</label>
+                <select id="filter-tag" v-model="filter.tag" class="mt-1 rounded border border-slate-300 px-2 py-1">
+                    <option value="">Any</option>
+                    <option v-for="tag in props.tagOptions" :key="tag.id" :value="String(tag.id)">{{ tag.taxonomy }} · {{ tag.name }}</option>
+                </select>
+            </div>
             <button type="submit" class="rounded bg-slate-900 px-4 py-1.5 text-white">Filter</button>
         </form>
 
@@ -61,6 +69,7 @@ function applyFilters(): void {
                         <th scope="col" class="py-1 pr-3">Tier</th>
                         <th scope="col" class="py-1 pr-3">HQ</th>
                         <th scope="col" class="py-1 pr-3">Analyst</th>
+                        <th scope="col" class="py-1 pr-3">Tags</th>
                         <th scope="col" class="py-1">Classification</th>
                     </tr>
                 </thead>
@@ -71,6 +80,7 @@ function applyFilters(): void {
                         <td class="py-1 pr-3">{{ competitor.tier ?? '—' }}</td>
                         <td class="py-1 pr-3">{{ competitor.hqCountry ?? '—' }}</td>
                         <td class="py-1 pr-3">{{ competitor.analyst ?? '—' }}</td>
+                        <td class="py-1 pr-3">{{ competitor.tags.length > 0 ? competitor.tags.map((tag) => tag.name).join(', ') : '—' }}</td>
                         <td class="py-1">{{ competitor.classification }}</td>
                     </tr>
                 </tbody>

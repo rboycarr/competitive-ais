@@ -19,10 +19,11 @@ use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\CompetitorAlias;
 use Modules\Registry\Models\CompetitorRelationship;
 use Modules\Registry\Models\Product;
+use Modules\Registry\Models\Tag;
 
 /**
  * Competitors (P1-20): list and profile for competitor.view holders, filtered by AccessScope (hidden entries are 404);
- * create, edit and lifecycle changes for competitor.manage holders.
+ * create, edit and lifecycle changes for competitor.manage holders. Tags (P1-23b) are shown and filtered on.
  */
 class CompetitorController
 {
@@ -39,6 +40,7 @@ class CompetitorController
             'lifecycle' => ['nullable', Rule::in(Competitor::LIFECYCLES)],
             'tier' => ['nullable', Rule::in(Competitor::TIERS)],
             'analyst' => ['nullable', 'string', 'ulid'],
+            'tag' => ['nullable', 'integer', 'min:1'],
         ]);
 
         $query = Competitor::query()->visibleTo($viewer)->orderBy('name');
@@ -52,7 +54,12 @@ class CompetitorController
             $match = array_values(array_filter($analysts, fn (UserSummary $a): bool => $a->ulid === strtoupper((string) $filters['analyst'])));
             $query->where('assigned_analyst_id', $match[0]->id ?? 0);
         }
+        if (isset($filters['tag'])) {
+            $query->whereExists(fn ($links) => $links->from('taggables')->where('tag_id', (int) $filters['tag'])
+                ->where('taggable_type', Tag::COMPETITOR)->whereColumn('taggable_id', 'competitors.id'));
+        }
         $competitors = $query->get();
+        $tags = $this->tagsOf(array_values($competitors->map(fn (Competitor $c): int => $c->id)->all()));
         $names = $this->users->summaries(array_values(array_unique(array_filter($competitors->pluck('assigned_analyst_id')->all()))));
 
         return Inertia::render('Registry/Competitors/Index', [
@@ -64,8 +71,10 @@ class CompetitorController
                 'hqCountry' => $c->hq_country,
                 'classification' => $c->classification->value,
                 'analyst' => $c->assigned_analyst_id !== null ? ($names[$c->assigned_analyst_id]->name ?? null) : null,
+                'tags' => $tags[$c->id] ?? [],
             ])->all(),
             'filters' => array_filter($filters),
+            'tagOptions' => $this->tagOptions(),
         ] + $this->formOptions($viewer, $analysts));
     }
 
@@ -92,6 +101,8 @@ class CompetitorController
             'lifecycles' => Competitor::LIFECYCLES,
             'aliases' => $competitor->aliases()->orderBy('alias')->get()->map(fn (CompetitorAlias $a): array => ['id' => $a->id, 'alias' => $a->alias, 'type' => $a->alias_type])->all(),
             'aliasTypes' => CompetitorAlias::TYPES,
+            'tags' => $this->tagsOf([$competitor->id])[$competitor->id] ?? [],
+            'tagOptions' => $this->tagOptions(),
             'relationships' => $this->relationships($viewer, $competitor),
             // Its products the viewer can see (P1-22b), for product.view holders.
             'products' => $this->gate->forUser($viewer)->allows('product.view')
@@ -159,6 +170,35 @@ class CompetitorController
         $competitors->setLifecycle($this->viewer($request), $competitor, (string) $validated['lifecycle']);
 
         return back()->with('status', "Lifecycle set to {$validated['lifecycle']}.");
+    }
+
+    /**
+     * Tags of the given competitors (which the caller has already filtered by visibility), by competitor ID.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, list<array{id: int, taxonomy: string, name: string}>>
+     */
+    private function tagsOf(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        $rows = Tag::query()->join('taggables', 'taggables.tag_id', '=', 'tags.id')
+            ->where('taggables.taggable_type', Tag::COMPETITOR)->whereIn('taggables.taggable_id', $ids)
+            ->orderBy('tags.taxonomy')->orderBy('tags.name')->get(['tags.id', 'tags.taxonomy', 'tags.name', 'taggables.taggable_id']);
+        $tags = [];
+        foreach ($rows as $row) {
+            $tags[(int) $row->getAttribute('taggable_id')][] = ['id' => $row->id, 'taxonomy' => $row->taxonomy, 'name' => $row->name];
+        }
+
+        return $tags;
+    }
+
+    /** @return list<array{id: int, taxonomy: string, name: string}> */
+    private function tagOptions(): array
+    {
+        return array_values(Tag::query()->orderBy('taxonomy')->orderBy('name')->get()
+            ->map(fn (Tag $t): array => ['id' => $t->id, 'taxonomy' => $t->taxonomy, 'name' => $t->name])->all());
     }
 
     /**

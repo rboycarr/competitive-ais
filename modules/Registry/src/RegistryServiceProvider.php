@@ -11,8 +11,8 @@ use Modules\Registry\Lookup\EloquentCompetitorLookup;
 
 /**
  * Registry (M02–M04, docs/03): competitors (P1-20), aliases and relationships (P1-21), brands and the category tree
- * (P1-22a), products and variants (P1-22b), currencies, markets and regions (P1-23a); channels, retailers and tags
- * follow in Sprint 1.2. Competitor entries are classified records without
+ * (P1-22a), products and variants (P1-22b), currencies, markets and regions (P1-23a), channels, retailers and tags
+ * (P1-23b). Competitor entries are classified records without
  * competitor/market scopes (PO decision 2026-11-01): classification and AccessScope decide who sees them.
  */
 class RegistryServiceProvider extends ModuleServiceProvider
@@ -65,6 +65,21 @@ class RegistryServiceProvider extends ModuleServiceProvider
         $audit->define('region.created', ['market' => 'ulid', 'level' => 'code', 'parent_id' => 'id']);
         $audit->define('region.renamed', ['market' => 'ulid']);
         $audit->define('region.removed', ['market' => 'ulid', 'level' => 'code', 'parent_id' => 'id']);
+        // P1-23b: unclassified reference data (internal); a currency has no ID, so its lower-cased code is the context.
+        $audit->define('currency.created', ['currency' => 'code', 'minor_units' => 'int']);
+        $audit->define('currency.updated', ['currency' => 'code', 'fields' => 'code[]']);
+        $audit->define('channel.created', ['channel_type' => 'code']);
+        $audit->define('channel.updated', ['fields' => 'code[]']);
+        $audit->define('channel.removed', ['channel_type' => 'code']);
+        $audit->define('retailer.created', ['market' => 'ulid', 'channel_id' => 'id']);
+        $audit->define('retailer.updated', ['fields' => 'code[]']);
+        $audit->define('retailer.removed', ['market' => 'ulid', 'channel_id' => 'id']);
+        $audit->define('tag.created', ['taxonomy' => 'code']);
+        $audit->define('tag.updated', ['fields' => 'code[]']);
+        $audit->define('tag.removed', ['taxonomy' => 'code']);
+        // Tagging is recorded on the competitor, with its classification.
+        $audit->define('competitor.tagged', ['tag_id' => 'id', 'taxonomy' => 'code']);
+        $audit->define('competitor.untagged', ['tag_id' => 'id', 'taxonomy' => 'code']);
         // Domain events (docs/03: CompetitorCreated, CompetitorUpdated, CompetitorArchived) are defined with their first
         // consumer, the Phase 2 search indexer; the outbox refuses events that no handler subscribes to.
     }

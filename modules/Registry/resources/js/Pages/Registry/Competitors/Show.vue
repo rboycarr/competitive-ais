@@ -5,6 +5,7 @@ import AppLayout from '@/Layouts/AppLayout.vue';
 import CompetitorForm, { type CompetitorFields } from './CompetitorForm.vue';
 import AliasesSection, { type Alias } from './AliasesSection.vue';
 import RelationshipsSection, { type Relationship } from './RelationshipsSection.vue';
+import TagsSection, { type Tag } from './TagsSection.vue';
 
 type Option = { ulid: string; name: string };
 type Competitor = {
@@ -14,7 +15,7 @@ type Competitor = {
 
 const props = defineProps<{
     competitor: Competitor; lifecycles: string[]; canManage: boolean; tiers: string[]; analysts: Option[]; classifications: string[];
-    aliases: Alias[]; aliasTypes: string[]; relationships: Relationship[]; relationTypes: string[]; precisions: string[]; others: Option[];
+    aliases: Alias[]; aliasTypes: string[]; tags: Tag[]; tagOptions: Tag[]; relationships: Relationship[]; relationTypes: string[]; precisions: string[]; others: Option[];
     products: { ulid: string; name: string; status: string }[];
 }>();
 
@@ -57,6 +58,7 @@ function setLifecycle(): void {
         </dl>
 
         <AliasesSection :competitor-ulid="props.competitor.ulid" :competitor-name="props.competitor.name" :aliases="props.aliases" :alias-types="props.aliasTypes" :can-manage="props.canManage" />
+        <TagsSection :competitor-ulid="props.competitor.ulid" :competitor-name="props.competitor.name" :tags="props.tags" :tag-options="props.tagOptions" :can-manage="props.canManage" />
         <section aria-labelledby="products-heading" class="mb-6 max-w-2xl">
             <h2 id="products-heading" class="mb-2 text-lg font-semibold">Products</h2>
             <ul v-if="props.products.length > 0" class="space-y-1 text-sm">

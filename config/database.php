@@ -213,6 +213,7 @@ return [
             'brands', // P1-22a: unused brands may be removed (audited)
             'cache',
             'cache_locks',
+            'channels', // P1-23b: channels no retailer uses may be removed (audited)
             'competitor_aliases', // P1-21: removing one is an audited correction
             'competitor_relationships', // P1-21: ended with valid_to; removing one is an audited correction
             'failed_jobs',
@@ -225,9 +226,12 @@ return [
             'permissions',
             'product_categories', // P1-22a: empty categories may be removed (audited)
             'regions', // P1-23a: regions without subregions may be removed (audited)
+            'retailers', // P1-23b: unused retailers may be removed (audited); prices will refer to them
             'role_has_permissions',
             'roles',
             'sessions',
+            'taggables', // P1-23b: untagging removes the link (audited)
+            'tags', // P1-23b: unused tags may be removed (audited)
             'team_user',
             'teams',
             'user_invitations',
@@ -238,14 +242,15 @@ return [
         'no_delete' => [
             'access_grants',
             'competitors', // archived, never deleted (P1-20)
+            'currencies', // edited by taxonomy managers, never deleted (P1-23b, PO decision O29)
             'markets', // grants and prices refer to them (P1-23a)
             'product_variants', // retired with a status (P1-22b)
             'products', // retired with a status (P1-22b)
         ],
 
-        // SELECT only for the app account: reference data that only migrations write (P1-23a).
+        // SELECT only for the app account: reference data that only migrations write (P1-23a). Empty since
+        // currencies became editable (P1-23b); the class stays for future reference tables and is tested by its probe.
         'read_only' => [
-            'currencies', // ISO 4217 subset, seeded by its migration
         ],
 
         // No access for the app account.
