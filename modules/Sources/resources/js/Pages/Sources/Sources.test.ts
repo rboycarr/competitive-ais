@@ -99,13 +99,22 @@ describe('Sources/Show', () => {
     });
 
     it('lists the policy history as text, linking only http(s) terms', () => {
-        const unsafe = { ...policy, version: 1, decision: 'needs_info', termsUrl: 'javascript:alert(1)', notes: '<img src=x onerror=alert(1)>' };
-        const wrapper = mount(Show, { props: { source: { ...source, currentPolicyVersion: 2 }, ...review, policies: [policy, unsafe] } });
-        expect(wrapper.text()).toContain('Version 2');
+        const unsafe = {
+            ...policy, version: 1, decision: 'needs_info', termsUrl: 'javascript:alert(1)', notes: '<img src=x onerror=alert(1)>',
+            termsSummary: '<b>terms</b>', containsPersonalData: true, personalDataBasis: '<i>basis</i>', decidedBy: '<u>Dee</u>',
+        };
+        const missingBasis = { ...policy, version: 3, decision: 'rejected', termsUrl: null, containsPersonalData: true, personalDataBasis: null };
+        const wrapper = mount(Show, { props: { source: { ...source, currentPolicyVersion: 2 }, ...review, policies: [missingBasis, policy, unsafe] } });
+        expect(wrapper.findAll('dd')[1]?.text()).toBe('Version 2'); // "Policy in force"
         expect(wrapper.text()).toContain('Version 2: Approved');
         expect(wrapper.text()).toContain('Version 1: Needs more information');
-        expect(wrapper.find('img').exists()).toBe(false);
-        expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
+        expect(wrapper.text()).toContain('Lawful basis: not recorded');
+        for (const tag of ['img', 'b', 'i', 'u']) {
+            expect(wrapper.find(tag).exists()).toBe(false);
+        }
+        for (const text of ['<img src=x onerror=alert(1)>', '<b>terms</b>', 'Lawful basis: <i>basis</i>', '<u>Dee</u>']) {
+            expect(wrapper.text()).toContain(text);
+        }
         expect(wrapper.findAll('a[target="_blank"]').map((a) => a.attributes('href'))).toEqual(['https://news.example/feed', 'https://news.example/terms']);
     });
 });

@@ -167,7 +167,7 @@ function decide(): void {
                         <dt class="font-medium">Allowed cadence</dt><dd>{{ policy.allowedCadence ?? '—' }}</dd>
                         <dt class="font-medium">Requests per hour</dt><dd>{{ policy.rateBudgetPerHour ?? '—' }}</dd>
                         <dt class="font-medium">Retention</dt><dd>{{ policy.retentionDays === null ? '—' : `${policy.retentionDays} days` }}</dd>
-                        <dt class="font-medium">Personal data</dt><dd class="whitespace-pre-line">{{ policy.containsPersonalData ? `Yes. Lawful basis: ${policy.personalDataBasis ?? '—'}` : 'No' }}</dd>
+                        <dt class="font-medium">Personal data</dt><dd class="whitespace-pre-line">{{ policy.containsPersonalData ? `Yes. Lawful basis: ${policy.personalDataBasis ?? 'not recorded'}` : 'No' }}</dd>
                         <dt class="font-medium">Notes</dt><dd class="whitespace-pre-line">{{ policy.notes ?? '—' }}</dd>
                     </dl>
                 </li>

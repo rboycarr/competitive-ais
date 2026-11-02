@@ -148,6 +148,41 @@ class SourcePolicyTest extends TestCase
         $this->actingAs($internal)->post("/sources/{$source->ulid}/policies", $this->decision('approved'))->assertNotFound();
         $this->assertSame(0, SourcePolicy::query()->count());
         $this->assertSame('policy_review', $source->fresh()?->status);
+
+        // Once decided, the history is shown only with its source (TASK-0059).
+        $this->actingAs($this->director)->post("/sources/{$source->ulid}/policies", $this->decision('approved'))->assertSessionHasNoErrors();
+        $this->actingAs($internal)->get("/sources/{$source->ulid}")->assertNotFound();
+        $this->actingAs($this->director)->get("/sources/{$source->ulid}")->assertInertia(fn (AssertableInertia $page) => $page->has('policies', 1));
+    }
+
+    public function test_direct_calls_with_malformed_input_get_validation_errors(): void
+    {
+        $source = $this->propose('Trade news');
+        app(SourcePolicyService::class)->submit($this->analyst, $source);
+        $valid = $this->decision('approved');
+        $without = fn (string $key): array => array_diff_key($valid, [$key => true]);
+
+        foreach ([
+            ['contains_personal_data', $without('contains_personal_data')],
+            ['contains_personal_data', ['contains_personal_data' => 'yes'] + $valid],
+            ['contains_personal_data', ['contains_personal_data' => 1] + $valid],
+            ['decision', $without('decision')],
+            ['decision', $without('based_on_version')],
+            ['decision', ['based_on_version' => '0'] + $valid],
+            ['decision', ['based_on_version' => -1] + $valid],
+            ['robots_decision', $without('robots_decision')],
+            ['notes', ['notes' => ['array']] + $valid],
+            ['rate_budget_per_hour', ['rate_budget_per_hour' => '60'] + $valid],
+        ] as [$field, $data]) {
+            try {
+                // @phpstan-ignore argument.type (deliberately malformed)
+                app(SourcePolicyService::class)->decide($this->director, $source, $data);
+                $this->fail("Expected a validation error for $field: ".json_encode($data));
+            } catch (ValidationException $e) {
+                $this->assertArrayHasKey($field, $e->errors(), (string) json_encode($data));
+            }
+        }
+        $this->assertSame(0, SourcePolicy::query()->count());
     }
 
     public function test_a_decision_needs_its_review_and_a_current_view(): void
@@ -216,6 +251,19 @@ class SourcePolicyTest extends TestCase
 
     public function test_the_database_holds_the_review_rules(): void
     {
+        // The policy in force is held by a foreign key that includes a STORED generated column (MySQL allows foreign keys
+        // on stored, not virtual, generated columns); the migration created it as designed (TASK-0059 #1).
+        $this->assertSame(
+            [['current_policy_id', 'id'], ['id', 'source_id'], ['current_policy_decision', 'decision']],
+            array_map(fn (object $c): array => array_values((array) $c), DB::select(
+                "SELECT COLUMN_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE()
+                 AND TABLE_NAME = 'sources' AND CONSTRAINT_NAME = 'sources_current_policy_foreign' AND REFERENCED_TABLE_NAME = 'source_policies' ORDER BY ORDINAL_POSITION",
+            )),
+        );
+        $this->assertSame('STORED GENERATED', DB::selectOne(
+            "SELECT EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sources' AND COLUMN_NAME = 'current_policy_decision'",
+        )?->EXTRA);
+
         $source = $this->source('Probe', status: 'policy_review');
         $other = $this->source('Other probe', status: 'policy_review');
         $row = fn (array $overrides = []): array => $overrides + [

@@ -73,7 +73,7 @@ class SourceController
     {
         $viewer = $this->viewer($request);
         $this->access->ensureVisible($viewer, $source);
-        $policies = SourcePolicy::query()->where('source_id', $source->id)->orderByDesc('version')->get();
+        $policies = $source->policies()->orderByDesc('version')->get(); // after the visibility check: see Source::policies()
         $names = $this->users->summaries(array_values(array_unique([$source->owner_id, $source->proposed_by, ...$policies->pluck('decided_by')->all()])));
         $viewerId = (int) $viewer->getAuthIdentifier();
         $can = $this->gate->forUser($viewer);

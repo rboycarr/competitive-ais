@@ -68,9 +68,11 @@ class SourcePolicyService
             throw new AuthorizationException('You are not allowed to decide source policies.');
         }
         $attributes = $this->attributes($data);
+        $basedOn = $attributes['based_on_version'];
+        unset($attributes['based_on_version']);
         $actorId = (int) $actor->getAuthIdentifier();
 
-        return $this->db->transaction(function () use ($actor, $actorId, $source, $data, $attributes): SourcePolicy {
+        return $this->db->transaction(function () use ($actor, $actorId, $source, $basedOn, $attributes): SourcePolicy {
             $source = $this->locked($actor, $source);
             if ($source->proposed_by === $actorId) {
                 throw new AuthorizationException('You proposed this source, so another director must decide its policy.');
@@ -79,7 +81,7 @@ class SourcePolicyService
                 throw ValidationException::withMessages(['decision' => 'Only a source awaiting policy review can be decided.']);
             }
             $latest = (int) SourcePolicy::query()->where('source_id', $source->id)->max('version');
-            if ($latest !== $data['based_on_version']) {
+            if ($latest !== $basedOn) {
                 throw ValidationException::withMessages(['decision' => "This source's policy changed while you were reviewing it; reload the page and review it again."]);
             }
             if ($attributes['decision'] === 'approved' && in_array($source->method, SourcePolicy::ROBOTS_BOUND_METHODS, true)
@@ -149,13 +151,27 @@ class SourcePolicyService
             return $value;
         };
 
-        $decision = $data['decision'];
+        // Direct callers get validation errors too, never a type error (TASK-0059 #2).
+        $decision = $data['decision'] ?? null;
         if (! in_array($decision, SourcePolicy::DECISIONS, true)) {
             throw ValidationException::withMessages(['decision' => 'Unknown decision.']);
         }
-        $robots = $data['robots_decision'];
+        $basedOn = $data['based_on_version'] ?? null;
+        if (! is_int($basedOn) || $basedOn < 0) {
+            throw ValidationException::withMessages(['decision' => 'The policy version this decision is based on is missing.']);
+        }
+        $robots = $data['robots_decision'] ?? null;
         if (! in_array($robots, SourcePolicy::ROBOTS, true)) {
             throw ValidationException::withMessages(['robots_decision' => 'Unknown robots decision.']);
+        }
+        $personal = $data['contains_personal_data'] ?? null;
+        if (! is_bool($personal)) {
+            throw ValidationException::withMessages(['contains_personal_data' => 'Say whether the source contains personal data.']);
+        }
+        foreach (['terms_url', 'terms_summary', 'terms_reviewed_on', 'license', 'allowed_cadence', 'personal_data_basis', 'notes'] as $field) {
+            if (isset($data[$field]) && ! is_string($data[$field])) {
+                throw ValidationException::withMessages([$field => 'Give text.']);
+            }
         }
         $termsUrl = $text('terms_url', 2048);
         if ($termsUrl !== null) {
@@ -168,7 +184,6 @@ class SourcePolicyService
         }
         $summary = $text('terms_summary');
         $notes = $text('notes');
-        $personal = $data['contains_personal_data'];
         $basis = $personal ? $text('personal_data_basis') : null;
 
         $missing = match (true) {
@@ -184,6 +199,7 @@ class SourcePolicyService
 
         return [
             'decision' => $decision,
+            'based_on_version' => $basedOn,
             'terms_url' => $termsUrl,
             'terms_summary' => $summary,
             'terms_reviewed_on' => $reviewedOn,
