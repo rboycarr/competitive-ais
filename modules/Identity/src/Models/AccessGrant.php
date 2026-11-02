@@ -11,7 +11,7 @@ use Modules\Platform\Classification;
 
 /**
  * What a user or team may see beyond their roles (P1-14, docs/02 §3.2, docs/07 §3), up to a classification and until
- * an optional expiry. Revoked, never deleted. Scope `all` or one competitor (P1-20a); markets follow P1-23. No mass
+ * an optional expiry. Revoked, never deleted. Scope `all`, one competitor (P1-20a) or one market (P1-23c). No mass
  * assignment.
  *
  * @property int $id
@@ -20,6 +20,7 @@ use Modules\Platform\Classification;
  * @property ?int $team_id
  * @property string $scope_type
  * @property ?int $competitor_id
+ * @property ?int $market_id
  * @property Classification $max_classification
  * @property bool $can_export
  * @property int $granted_by
@@ -34,6 +35,8 @@ class AccessGrant extends Model
     public const SCOPE_ALL = 'all';
 
     public const SCOPE_COMPETITOR = 'competitor';
+
+    public const SCOPE_MARKET = 'market';
 
     protected $guarded = ['*'];
 

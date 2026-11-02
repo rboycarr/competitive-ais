@@ -62,8 +62,8 @@ class AccessScopeTest extends TestCase
 
     public function test_the_matrix_covers_every_combination(): void
     {
-        $this->assertCount(4 * 2 * 9, $this->users);
-        $this->assertCount(4 * 6, $this->records);
+        $this->assertCount(4 * 2 * 12, $this->users);
+        $this->assertCount(4 * 8, $this->records);
 
         // Both outcomes occur often, so a predicate that always answers the same cannot pass.
         $visible = 0;
@@ -96,7 +96,7 @@ class AccessScopeTest extends TestCase
     public function test_http_reads_return_404_for_hidden_records(): void
     {
         // Active users only: inactive sessions end before any read (EnsureActiveAccount, covered in AdministrationTest).
-        $users = array_values(array_filter($this->users, fn (array $u): bool => $u['status'] === 'active' && in_array($u['grant'], ['none', 'all:confidential', 'competitor:A:confidential'], true)));
+        $users = array_values(array_filter($this->users, fn (array $u): bool => $u['status'] === 'active' && in_array($u['grant'], ['none', 'all:confidential', 'competitor:A:confidential', 'market:M:confidential', 'pair:A:M:confidential'], true)));
 
         AuthorizationMatrix::assertMatrix($users, $this->records, function (User $user, array $record): bool {
             $status = $this->actingAs($user)->get('/_test/probes/'.$this->probes[$record['label']]->id)->getStatusCode();
@@ -110,6 +110,26 @@ class AccessScopeTest extends TestCase
             $lists[$entry['user']->id] = $this->actingAs($entry['user'])->getJson('/_test/probes')->assertOk()->json();
         }
         AuthorizationMatrix::assertMatrix($users, $this->records, fn (User $user, array $record): bool => in_array($record['label'], $lists[$user->id], true), 'GET /_test/probes');
+    }
+
+    public function test_a_record_about_a_competitor_and_a_market_opens_only_up_to_the_lower_of_both_grants(): void
+    {
+        // TASK-0044: the matrix's A+M pair holds both grants at one level; here they differ (A confidential, M internal).
+        $analyst = $this->createUser('levels@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        $grantor = $this->createUser('levels-grantor@example.test', 'ci_director', clearance: Classification::Restricted);
+        foreach ([['competitor', AuthorizationMatrix::competitorId('A'), null, 'confidential'], ['market', null, AuthorizationMatrix::marketId('M'), 'internal']] as [$scope, $competitor, $market, $level]) {
+            DB::table('access_grants')->insert([
+                'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => $scope, 'competitor_id' => $competitor, 'market_id' => $market,
+                'max_classification' => $level, 'granted_by' => $grantor->id, 'reason' => 'Level probe', 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+        $scope = $this->app->make(AccessScope::class);
+        $listed = ProbeRecord::query()->visibleTo($analyst)->pluck('label')->all();
+
+        foreach (['internal/competitor-and-market' => true, 'confidential/competitor-and-market' => false, 'confidential/competitor' => true, 'confidential/market' => false, 'internal/market' => true] as $label => $visible) {
+            $this->assertSame($visible, $scope->allows($analyst, $this->probes[$label]), "allows() for $label");
+            $this->assertSame($visible, in_array($label, $listed, true), "visibleTo() for $label");
+        }
     }
 
     public function test_super_admins_get_no_bypass(): void

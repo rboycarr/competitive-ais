@@ -16,16 +16,19 @@ use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
 use Modules\Registry\Contracts\CompetitorLookup;
 use Modules\Registry\Contracts\CompetitorSummary;
+use Modules\Registry\Contracts\MarketLookup;
+use Modules\Registry\Contracts\MarketSummary;
 
 /** Admin › Access grants (P1-14, grant.manage): who may see what beyond their roles, until when; revoke, never delete. */
 class AccessGrantController
 {
-    public function index(Request $request, CompetitorLookup $competitors): Response
+    public function index(Request $request, CompetitorLookup $competitors, MarketLookup $markets): Response
     {
         $actor = $this->actor($request);
         $grants = AccessGrant::query()->with(['user:id,ulid,name', 'team:id,ulid,name', 'grantor:id,name', 'revoker:id,name'])->orderByDesc('id')->get();
         // Competitor names only for competitors the admin can see (P1-20a).
         $names = $competitors->summaries($actor, array_values(array_unique(array_filter($grants->pluck('competitor_id')->all()))));
+        $marketNames = $markets->summaries(array_values(array_unique(array_filter($grants->pluck('market_id')->all()))));
 
         return Inertia::render('Identity/Admin/AccessGrants', [
             'grants' => $grants->map(fn (AccessGrant $grant): array => [
@@ -34,6 +37,7 @@ class AccessGrantController
                 'grantee' => $grant->user->name ?? $grant->team?->name,
                 'scope' => $grant->scope_type,
                 'competitor' => $grant->competitor_id === null ? null : ($names[$grant->competitor_id]->name ?? 'A competitor you cannot see'),
+                'market' => $grant->market_id === null ? null : $this->marketLabel($marketNames[$grant->market_id] ?? null),
                 'maxClassification' => $grant->max_classification->value,
                 'canExport' => $grant->can_export,
                 'reason' => $grant->reason,
@@ -55,6 +59,7 @@ class AccessGrantController
             )),
             'canGrantExport' => $actor->checkPermissionTo('export.run'),
             'competitors' => array_map(fn (CompetitorSummary $c): array => ['ulid' => $c->ulid, 'name' => $c->name], $competitors->visibleTo($actor)),
+            'markets' => array_map(fn (MarketSummary $m): array => ['ulid' => $m->ulid, 'name' => $this->marketLabel($m)], $markets->all()),
         ]);
     }
 
@@ -77,6 +82,7 @@ class AccessGrantController
             (string) $request->validated('reason'),
             is_string($expiresAt) && $expiresAt !== '' ? CarbonImmutable::parse($expiresAt)->utc() : null,
             $request->validated('scope') === 'competitor' ? (string) $request->validated('competitor') : null,
+            $request->validated('scope') === 'market' ? (string) $request->validated('market') : null,
         );
 
         return back()->with('status', "Access granted to {$grantee->name}.");
@@ -87,6 +93,11 @@ class AccessGrantController
         $grants->revoke($this->actor($request), $grant);
 
         return back()->with('status', 'Access grant revoked.');
+    }
+
+    private function marketLabel(?MarketSummary $market): string
+    {
+        return $market === null ? 'Unknown market' : "{$market->code} · {$market->name}";
     }
 
     private function actor(Request $request): User

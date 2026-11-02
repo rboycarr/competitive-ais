@@ -7,6 +7,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
 use Modules\Identity\Actions\AccessGrantService;
 use Modules\Identity\Actions\TeamService;
@@ -211,7 +212,10 @@ class AccessGrantTest extends TestCase
             'no grantee' => ['user_id' => null],
             'competitor scope without a competitor' => ['scope_type' => 'competitor'],
             'all scope with a competitor' => ['competitor_id' => $this->competitor('Acme Foods')],
-            'market scope before the market registry' => ['scope_type' => 'market'],
+            'market scope without a market' => ['scope_type' => 'market'],
+            'all scope with a market' => ['market_id' => $this->market('PH')],
+            'competitor scope with a market too' => ['scope_type' => 'competitor', 'competitor_id' => $this->competitor('Beta Snacks'), 'market_id' => $this->market('SG')],
+            'market scope with a competitor too' => ['scope_type' => 'market', 'market_id' => $this->market('MY'), 'competitor_id' => $this->competitor('Gamma Foods')],
             'unknown classification' => ['max_classification' => 'secret'],
             'revoked without revoker' => ['revoked_at' => now('UTC')],
             'blank reason' => ['reason' => '  '],
@@ -249,7 +253,7 @@ class AccessGrantTest extends TestCase
         $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'competitor', 'competitor' => $hiddenUlid] + $this->form($analyst))->assertSessionHasErrors('competitor');
         $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'competitor'] + $this->form($analyst))->assertSessionHasErrors('competitor');
         $this->actingAs($this->director)->post('/admin/access-grants', ['competitor' => $acmeUlid] + $this->form($analyst))->assertSessionHasErrors('competitor');
-        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market'] + $this->form($analyst))->assertSessionHasErrors('scope');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'region'] + $this->form($analyst))->assertSessionHasErrors('scope');
         $this->assertSame(1, AccessGrant::query()->count());
 
         // TASK-0033: a grant on a competitor the viewing admin cannot see shows no name.
@@ -279,6 +283,71 @@ class AccessGrantTest extends TestCase
             $this->assertStringContainsString('Competitor-scoped access grants exist', $e->getMessage());
         }
         $this->assertSame(['competitor', $acme], [DB::table('access_grants')->value('scope_type'), (int) DB::table('access_grants')->value('competitor_id')]);
+    }
+
+    public function test_a_grant_can_open_one_market(): void
+    {
+        // P1-23c, the same way as competitor grants.
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $ph = $this->market('PH');
+        $phUlid = (string) DB::table('markets')->where('id', $ph)->value('ulid');
+        $acmeUlid = (string) DB::table('competitors')->where('id', $this->competitor('Acme Foods'))->value('ulid');
+
+        $this->actingAs($this->director)->get('/admin/access-grants')->assertInertia(fn (AssertableInertia $page) => $page
+            ->where('markets', [['ulid' => $phUlid, 'name' => 'PH · Synthetic PH']]));
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market', 'market' => $phUlid] + $this->form($analyst))->assertSessionHasNoErrors()->assertRedirect();
+
+        $grant = AccessGrant::query()->sole();
+        $this->assertSame(['market', null, $ph], [$grant->scope_type, $grant->competitor_id, $grant->market_id]);
+        $grants = $this->app->make(AccessScope::class)->effectiveGrants($analyst);
+        $this->assertSame([[], [$ph => Classification::Confidential]], [$grants->competitors, $grants->markets]);
+        $this->assertEquals(['grantee_type' => 'user', 'grantee' => $analyst->ulid, 'scope' => 'market', 'market' => $phUlid, 'max_classification' => 'confidential', 'can_export' => false],
+            json_decode((string) DB::table('audit_events')->where('action', 'access_grant.created')->value('context'), true));
+        $this->actingAs($this->director)->get('/admin/access-grants')->assertInertia(fn (AssertableInertia $page) => $page
+            ->where('grants.0.scope', 'market')->where('grants.0.market', 'PH · Synthetic PH')->where('grants.0.competitor', null));
+
+        // A missing or unknown market, a market with another scope, or a competitor and a market at once: refused.
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market'] + $this->form($analyst))->assertSessionHasErrors('market');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market', 'market' => (string) Str::ulid()] + $this->form($analyst))->assertSessionHasErrors(['market' => 'Unknown market.']);
+        $this->actingAs($this->director)->post('/admin/access-grants', ['market' => $phUlid] + $this->form($analyst))->assertSessionHasErrors('market');
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'competitor', 'competitor' => $acmeUlid, 'market' => $phUlid] + $this->form($analyst))->assertSessionHasErrors('market');
+        try {
+            $this->app->make(AccessGrantService::class)->grant($this->director, $analyst, Classification::Internal, false, 'Both at once', null, $acmeUlid, $phUlid);
+            $this->fail('A grant named a competitor and a market.');
+        } catch (ValidationException $e) {
+            $this->assertSame(['scope' => ['A grant opens one competitor or one market, not both.']], $e->errors());
+        }
+        $this->assertSame(1, AccessGrant::query()->count());
+
+        // MarketLookup::find() accepts the ULID in any case (TASK-0045).
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market', 'market' => strtolower($phUlid)] + $this->form($analyst))->assertSessionHasNoErrors()->assertRedirect();
+        $this->assertSame(2, AccessGrant::query()->where('market_id', $ph)->count());
+    }
+
+    public function test_rolling_back_refuses_while_market_grants_exist(): void
+    {
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $ph = $this->market('PH');
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => 'market', 'market_id' => $ph,
+            'max_classification' => 'internal', 'granted_by' => $this->director->id, 'reason' => 'Rollback probe', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $migration = require base_path('modules/Identity/database/migrations/2026_11_13_000100_add_market_scope_to_access_grants.php');
+
+        try {
+            $migration->down();
+            $this->fail('The rollback ran although market grants exist.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Market-scoped access grants exist', $e->getMessage());
+        }
+        $this->assertSame(['market', $ph], [DB::table('access_grants')->value('scope_type'), (int) DB::table('access_grants')->value('market_id')]);
+    }
+
+    private function market(string $code): int
+    {
+        return DB::table('markets')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'code' => $code, 'name' => "Synthetic $code", 'country' => 'PH', 'default_currency' => 'USD', 'created_at' => now(), 'updated_at' => now(),
+        ]);
     }
 
     private function competitor(string $name, string $classification = 'internal'): int
