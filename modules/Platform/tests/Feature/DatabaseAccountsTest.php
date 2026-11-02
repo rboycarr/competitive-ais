@@ -251,6 +251,8 @@ class DatabaseAccountsTest extends TestCase
             $this->fail('Expected apply() to reject the unclassified table.');
         } catch (RuntimeException $e) {
             $this->assertStringContainsString(self::UNCLASSIFIED_PROBE, $e->getMessage());
+            // The remedy names every class (TASK-0040 #2).
+            $this->assertStringContainsString('mutable, append_only, no_delete, read_only, app_excluded', $e->getMessage());
         }
 
         $this->assertDenied(fn () => DB::table(self::UNCLASSIFIED_PROBE)->count());
@@ -355,6 +357,7 @@ class DatabaseAccountsTest extends TestCase
             $this->assertDenied(fn () => DB::table($table)->whereRaw('1 = 0')->update([$column => DB::raw("`$column`")])); // @phpstan-ignore argument.type (column name read from the schema)
             $this->assertDenied(fn () => DB::table($table)->whereRaw('1 = 0')->delete());
             $this->assertDenied(fn () => DB::statement("truncate table `$table`"));
+            $this->assertDenied(fn () => DB::statement("insert into `$table` select * from `$table` where 1 = 0")); // TASK-0040: inserts on the real tables too
             $checked++;
         }
 

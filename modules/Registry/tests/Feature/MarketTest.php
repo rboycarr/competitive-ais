@@ -51,6 +51,7 @@ class MarketTest extends TestCase
         $this->actingAs($admin)->get('/admin/markets')->assertOk()->assertInertia(fn (AssertableInertia $page) => $page->component('Registry/Admin/Markets'));
         $this->actingAs($this->director)->get("/admin/markets/{$market->ulid}")->assertOk()->assertInertia(fn (AssertableInertia $page) => $page->component('Registry/Admin/Market'));
         $this->actingAs($this->director)->delete("/admin/markets/{$market->ulid}")->assertStatus(405); // never deleted
+        $this->actingAs($this->director)->get('/admin/markets/'.Str::ulid())->assertNotFound();
         $this->assertSame(1, Region::query()->count());
     }
 

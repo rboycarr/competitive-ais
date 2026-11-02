@@ -106,6 +106,7 @@
 |---|---|---|---|
 | P1-50 | As an auditor, audit tampering is detectable even by someone with DB access | Lag-windowed checkpoints; Ed25519-signed manifests exported to the audit-anchor bucket; verification against exported manifests; `late_commit` handling (supplementary checkpoints); business-transaction duration capped below the lag window and monitored, with an alert (TASK-0010 #4); key-rotation runbook | M |
 | P1-51 | As an operator, I can restore the whole system | Restore drill covering MySQL, DB grants, MinIO versions and object-lock metadata, evidence hash sample; result logged | M |
+| P1-52 | As the platform, fields documented as fixed cannot change even through direct SQL | Database-enforced immutability (triggers or column-level privileges, decided with the init script) for market code, competitor slug, product and brand owner, region level; a direct-UPDATE test per field (TASK-0040 #1; until then MarketService, CompetitorService, ProductService and BrandService keep them fixed, and references use IDs, not these fields) | M |
 | P1-46 | As any user, I see a dashboard of what I am allowed to see | Tiles per `docs/03`; definitions in tooltips; visibility-filtered | M |
 | P1-24 | (stretch) As a user, I can quickly find a competitor or product | Header quick search (MySQL FULLTEXT, visibility-filtered); moves to Phase 2 search if time is short | S |
 | P1-47 | As the team, the exit journey is proven end to end | Playwright J1 + J6; axe clean on core pages; all gates G1–G6 signed off | M |
