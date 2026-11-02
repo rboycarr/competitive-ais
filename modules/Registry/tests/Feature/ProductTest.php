@@ -146,6 +146,9 @@ class ProductTest extends TestCase
         }
         $listed = array_column($this->actingAs($this->analyst)->get('/products')->inertiaProps('products'), 'ulid');
         $this->assertCount(6, $listed); // public, internal, confidential × own, A
+        // Filtering by the hidden competitor reveals nothing (TASK-0039): the same empty list as an unknown one.
+        $hiddenUlid = (string) DB::table('competitors')->where('id', $hidden)->value('ulid');
+        $this->assertSame([], $this->actingAs($this->analyst)->get("/products?owner=$hiddenUlid")->assertOk()->inertiaProps('products'));
         $secret = $products['internal/unscoped']['B'];
         $this->actingAs($this->analyst)->put("/products/$secret", $this->form('Renamed'))->assertNotFound();
         $this->actingAs($this->analyst)->post("/products/$secret/variants", ['sku' => 'X', 'name' => 'X', 'pack_size' => '1', 'pack_unit' => 'g', 'pack_count' => 1, 'status' => 'active'])->assertNotFound();
