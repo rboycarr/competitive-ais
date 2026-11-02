@@ -44,6 +44,7 @@ final class Concurrently
         }
         $start = microtime(true) + 0.5; // every child is forked well before this
         $pids = [];
+        $unreaped = []; // children not yet reaped: the only process IDs this class may still signal (TASK-0047)
 
         try {
             foreach ($tasks as $i => $task) {
@@ -54,16 +55,15 @@ final class Concurrently
                 if ($pid === 0) {
                     self::child($task, $start, "$dir/$i.json");
                 }
-                $pids[$i] = $pid;
+                $pids[$i] = $unreaped[$i] = $pid;
             }
 
-            return self::collect($pids, $dir, $start + $timeout);
+            return self::collect($pids, $unreaped, $dir, $start + $timeout);
         } finally {
-            foreach ($pids as $pid) { // only those still running: collect() reaps the others
-                if (pcntl_waitpid($pid, $status, WNOHANG) === 0) {
-                    posix_kill($pid, SIGKILL);
-                    pcntl_waitpid($pid, $status);
-                }
+            // Normally empty: collect() reaps every child. Left only if forking or collecting failed part-way.
+            foreach ($unreaped as $pid) {
+                posix_kill($pid, SIGKILL);
+                pcntl_waitpid($pid, $status);
             }
             array_map('unlink', glob("$dir/*") ?: []);
             @rmdir($dir);
@@ -89,31 +89,37 @@ final class Concurrently
     }
 
     /**
+     * Reaps every child, killing those still running at the deadline. Each reaped child leaves $unreaped at once, so
+     * no process ID is signalled after it was reaped (it could belong to another process by then).
+     *
      * @param  array<int, int>  $pids  task index => process ID
+     * @param  array<int, int>  $unreaped  task index => process ID of children not yet reaped
      * @return list<array{outcome: string, message: string}>
      */
-    private static function collect(array $pids, string $dir, float $deadline): array
+    private static function collect(array $pids, array &$unreaped, string $dir, float $deadline): array
     {
-        $running = $pids;
-        while ($running !== [] && microtime(true) < $deadline) {
-            foreach ($running as $i => $pid) {
-                if (pcntl_waitpid($pid, $status, WNOHANG) !== 0) {
-                    unset($running[$i]);
+        while ($unreaped !== [] && microtime(true) < $deadline) {
+            foreach ($unreaped as $i => $pid) {
+                if (pcntl_waitpid($pid, $status, WNOHANG) !== 0) { // ended (or not ours any more): reaped
+                    unset($unreaped[$i]);
                 }
             }
             usleep(10_000);
         }
-        foreach ($running as $pid) {
+        $timedOut = [];
+        foreach ($unreaped as $i => $pid) { // still running at the deadline, and still our child: not yet reaped
             posix_kill($pid, SIGKILL);
             pcntl_waitpid($pid, $status);
+            unset($unreaped[$i]);
+            $timedOut[$i] = true;
         }
 
         $results = [];
         foreach (array_keys($pids) as $i) {
-            $json = isset($running[$i]) ? false : @file_get_contents("$dir/$i.json");
+            $json = isset($timedOut[$i]) ? false : @file_get_contents("$dir/$i.json");
             /** @var array{outcome: string, message: string}|null $result */
             $result = is_string($json) ? json_decode($json, true) : null;
-            $results[$i] = $result ?? (isset($running[$i])
+            $results[$i] = $result ?? (isset($timedOut[$i])
                 ? ['outcome' => self::TIMEOUT, 'message' => 'The task was still running at the deadline and was killed.']
                 : ['outcome' => self::NO_RESULT, 'message' => 'The task process ended without reporting.']);
         }

@@ -182,6 +182,14 @@ class RegistryConcurrencyTest extends TestCase
             $results = Concurrently::run(array_map(fn (Competitor $c) => fn () => app(CompetitorTagService::class)->tag($this->director, $c, $tag->id), $competitors));
             $this->assertSame(array_fill(0, self::WORKERS, 'ok'), array_column($results, 'outcome'), "round $round: ".json_encode($results));
             $this->assertSame(self::WORKERS, DB::table('taggables')->where('tag_id', $tag->id)->count());
+
+            // One competitor tagged by every request: all succeed (tagging is idempotent), one link, audited once.
+            $same = $competitors[0];
+            $other = app(TagService::class)->create($this->director, 'segment', "Mass $round");
+            $results = Concurrently::run(array_fill(0, self::WORKERS, fn () => app(CompetitorTagService::class)->tag($this->director, $same, $other->id)));
+            $this->assertSame(array_fill(0, self::WORKERS, 'ok'), array_column($results, 'outcome'), "duplicate round $round: ".json_encode($results));
+            $this->assertSame(1, DB::table('taggables')->where('tag_id', $other->id)->count());
+            $this->assertSame(1, DB::table('audit_events')->where('action', 'competitor.tagged')->where('context->tag_id', $other->id)->count());
         }
     }
 
