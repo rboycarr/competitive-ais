@@ -112,6 +112,26 @@ class AccessScopeTest extends TestCase
         AuthorizationMatrix::assertMatrix($users, $this->records, fn (User $user, array $record): bool => in_array($record['label'], $lists[$user->id], true), 'GET /_test/probes');
     }
 
+    public function test_a_record_about_a_competitor_and_a_market_opens_only_up_to_the_lower_of_both_grants(): void
+    {
+        // TASK-0044: the matrix's A+M pair holds both grants at one level; here they differ (A confidential, M internal).
+        $analyst = $this->createUser('levels@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        $grantor = $this->createUser('levels-grantor@example.test', 'ci_director', clearance: Classification::Restricted);
+        foreach ([['competitor', AuthorizationMatrix::competitorId('A'), null, 'confidential'], ['market', null, AuthorizationMatrix::marketId('M'), 'internal']] as [$scope, $competitor, $market, $level]) {
+            DB::table('access_grants')->insert([
+                'ulid' => (string) Str::ulid(), 'user_id' => $analyst->id, 'scope_type' => $scope, 'competitor_id' => $competitor, 'market_id' => $market,
+                'max_classification' => $level, 'granted_by' => $grantor->id, 'reason' => 'Level probe', 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+        $scope = $this->app->make(AccessScope::class);
+        $listed = ProbeRecord::query()->visibleTo($analyst)->pluck('label')->all();
+
+        foreach (['internal/competitor-and-market' => true, 'confidential/competitor-and-market' => false, 'confidential/competitor' => true, 'confidential/market' => false, 'internal/market' => true] as $label => $visible) {
+            $this->assertSame($visible, $scope->allows($analyst, $this->probes[$label]), "allows() for $label");
+            $this->assertSame($visible, in_array($label, $listed, true), "visibleTo() for $label");
+        }
+    }
+
     public function test_super_admins_get_no_bypass(): void
     {
         $admin = $this->enableTwoFactor($this->createUser('admin@example.test', 'super_admin', clearance: Classification::Restricted));
