@@ -4,6 +4,7 @@ namespace Modules\Registry\Http\Controllers;
 
 use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -74,7 +75,9 @@ class CompetitorController
                 'tags' => $tags[$c->id] ?? [],
             ])->all(),
             'filters' => array_filter($filters),
-            'tagOptions' => $this->tagOptions(),
+            // The filter offers only tags that competitors the viewer can see carry (TASK-0042 #1).
+            'tagOptions' => $this->tagOptions(Tag::query()->whereExists(fn ($links) => $links->from('taggables')->whereColumn('taggables.tag_id', 'tags.id')
+                ->where('taggable_type', Tag::COMPETITOR)->whereIn('taggable_id', Competitor::query()->visibleTo($viewer)->select('id')))),
         ] + $this->formOptions($viewer, $analysts));
     }
 
@@ -102,7 +105,8 @@ class CompetitorController
             'aliases' => $competitor->aliases()->orderBy('alias')->get()->map(fn (CompetitorAlias $a): array => ['id' => $a->id, 'alias' => $a->alias, 'type' => $a->alias_type])->all(),
             'aliasTypes' => CompetitorAlias::TYPES,
             'tags' => $this->tagsOf([$competitor->id])[$competitor->id] ?? [],
-            'tagOptions' => $this->tagOptions(),
+            // The whole catalog only for those who can apply tags (TASK-0042 #1).
+            'tagOptions' => $this->gate->forUser($viewer)->allows('competitor.manage') ? $this->tagOptions(Tag::query()) : [],
             'relationships' => $this->relationships($viewer, $competitor),
             // Its products the viewer can see (P1-22b), for product.view holders.
             'products' => $this->gate->forUser($viewer)->allows('product.view')
@@ -194,10 +198,13 @@ class CompetitorController
         return $tags;
     }
 
-    /** @return list<array{id: int, taxonomy: string, name: string}> */
-    private function tagOptions(): array
+    /**
+     * @param  Builder<Tag>  $tags
+     * @return list<array{id: int, taxonomy: string, name: string}>
+     */
+    private function tagOptions(Builder $tags): array
     {
-        return array_values(Tag::query()->orderBy('taxonomy')->orderBy('name')->get()
+        return array_values($tags->orderBy('taxonomy')->orderBy('name')->get()
             ->map(fn (Tag $t): array => ['id' => $t->id, 'taxonomy' => $t->taxonomy, 'name' => $t->name])->all());
     }
 

@@ -136,6 +136,27 @@ class TagTest extends TestCase
         $this->actingAs($this->analyst)->get('/competitors?tag=abc')->assertSessionHasErrors('tag');
     }
 
+    public function test_tag_options_reveal_only_what_the_viewer_may_see_or_apply(): void
+    {
+        $reader = $this->createUser('reader@example.test', 'exec_reader');
+        $used = $this->tag('segment', 'Premium');
+        $hiddenOnly = $this->tag('strategy', 'Exit Planned');
+        $this->tag('segment', 'Unused');
+        $visible = $this->competitor('Acme Foods');
+        $this->link($used, $visible);
+        $this->link($hiddenOnly, $this->competitor('Secret Snacks', Classification::Confidential));
+        $option = fn (Tag $t): array => ['id' => $t->id, 'taxonomy' => $t->taxonomy, 'name' => $t->name];
+
+        // The list filter: tags carried by competitors the viewer can see, for readers and managers alike.
+        foreach ([$reader, $this->analyst] as $viewer) {
+            $this->actingAs($viewer)->get('/competitors')->assertInertia(fn (AssertableInertia $page) => $page->where('tagOptions', [$option($used)]));
+        }
+        // The profile: a reader sees the competitor's tags but not the catalog; a manager gets the catalog to apply from.
+        $this->actingAs($reader)->get("/competitors/{$visible->ulid}")->assertInertia(fn (AssertableInertia $page) => $page
+            ->where('tags', [$option($used)])->where('tagOptions', []));
+        $this->actingAs($this->analyst)->get("/competitors/{$visible->ulid}")->assertInertia(fn (AssertableInertia $page) => $page->has('tagOptions', 3));
+    }
+
     public function test_a_tag_in_use_is_kept_by_the_service_and_the_database(): void
     {
         $tag = $this->tag('segment', 'Premium');
