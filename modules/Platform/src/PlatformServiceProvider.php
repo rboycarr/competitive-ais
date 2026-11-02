@@ -44,11 +44,12 @@ use Throwable;
 class PlatformServiceProvider extends ModuleServiceProvider
 {
     /**
-     * Commands that change or inspect the schema; they run as the migrator account (P1-09, docs/02 §6).
+     * Commands that change or inspect the schema, and feature:switch (the app account can only read feature flags,
+     * TASK-0053 #1); they run as the migrator account (P1-09, docs/02 §6).
      */
     private const MIGRATOR_COMMANDS = [
         'migrate', 'migrate:fresh', 'migrate:install', 'migrate:refresh', 'migrate:reset',
-        'migrate:rollback', 'migrate:status', 'schema:dump',
+        'migrate:rollback', 'migrate:status', 'schema:dump', 'feature:switch',
     ];
 
     private ?string $connectionBeforeMigratorCommand = null;

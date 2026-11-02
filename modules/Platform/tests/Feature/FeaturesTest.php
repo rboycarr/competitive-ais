@@ -19,9 +19,9 @@ use Tests\TestCase;
 
 /**
  * Feature flags (docs/01, docs/10, TASK-0053): one global row per flag, stored off by its migration; the app account
- * only reads them; the audited feature:switch command writes on the migrator account, one switch at a time; only a
- * stored true is on; workers read the stored state before every job. Switches commit on the migrator connection,
- * so the class uses DatabaseMigrations.
+ * only reads them; the audited feature:switch command runs as the migrator account, one switch at a time; a flag is
+ * on only when stored true and its last audited switch agrees; workers read the stored state before every job.
+ * Switches commit on the migrator connection, so the class uses DatabaseMigrations.
  */
 class FeaturesTest extends TestCase
 {
@@ -30,10 +30,12 @@ class FeaturesTest extends TestCase
     /** MySQL ER_TABLEACCESS_DENIED_ERROR */
     private const ACCESS_DENIED = 1142;
 
+    private const MIGRATOR = 'migrator';
+
     protected function tearDown(): void
     {
         // The rollback after each test refuses while a flag is on (TASK-0053 #5).
-        DB::connection(Features::WRITER)->table('features')->update(['value' => 'false']);
+        DB::connection(self::MIGRATOR)->table('features')->update(['value' => 'false']);
 
         parent::tearDown();
     }
@@ -62,6 +64,7 @@ class FeaturesTest extends TestCase
             fn () => DB::table('features')->insert(['name' => 'other', 'scope' => '__laravel_global', 'value' => 'true']),
             fn () => DB::table('features')->delete(),
             fn () => $this->app->make(FeatureManager::class)->store()->globally()->activate(Features::COLLECTION),
+            fn () => $features->switch(Features::COLLECTION, true), // outside feature:switch, on the app account
         ] as $write) {
             try {
                 $write();
@@ -73,7 +76,7 @@ class FeaturesTest extends TestCase
 
         // A hand-edited value must stay JSON, or every read would fail.
         try {
-            DB::connection(Features::WRITER)->table('features')->update(['value' => 'on']);
+            DB::connection(self::MIGRATOR)->table('features')->update(['value' => 'on']);
             $this->fail('A value that is not JSON was stored.');
         } catch (QueryException $e) {
             $this->assertStringContainsString('features_value_check', $e->getMessage());
@@ -103,20 +106,15 @@ class FeaturesTest extends TestCase
 
     public function test_switching_needs_the_migrator_account(): void
     {
-        $migrator = config('database.connections.'.Features::WRITER);
-        config(['database.connections.'.Features::WRITER => null]);
+        $migrator = config('database.connections.'.self::MIGRATOR);
+        config(['database.connections.'.self::MIGRATOR => null]);
         try {
-            $this->command('feature:switch collection on')
-                ->expectsOutputToContain('Switching a flag needs the migrator account: docker compose run --rm migrator php artisan feature:switch collection on')
-                ->assertFailed();
-            try {
-                $this->app->make(Features::class)->switch(Features::COLLECTION, true);
-                $this->fail('A flag was switched without the migrator account.');
-            } catch (RuntimeException $e) {
-                $this->assertStringContainsString('needs the migrator account', $e->getMessage());
-            }
+            Artisan::call('feature:switch', ['flag' => 'collection', 'state' => 'on']);
+            $this->fail('A flag was switched without the migrator account.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('[feature:switch] needs the migrator account, which is only available in the migrator service', $e->getMessage());
         } finally {
-            config(['database.connections.'.Features::WRITER => $migrator]);
+            config(['database.connections.'.self::MIGRATOR => $migrator]);
         }
         $this->assertSame(['false'], DB::table('features')->pluck('value')->all());
         $this->assertSame(0, DB::table('audit_events')->count());
@@ -142,13 +140,10 @@ class FeaturesTest extends TestCase
     {
         $features = $this->app->make(Features::class);
         $this->assertFalse($features->enabled(Features::COLLECTION));
-        $this->mock(AuditLogger::class, function ($audit): void {
-            $audit->shouldReceive('on')->andReturnSelf();
-            $audit->shouldReceive('record')->andThrow(new RuntimeException('audit unavailable'));
-        });
+        $this->mock(AuditLogger::class, fn ($audit) => $audit->shouldReceive('record')->andThrow(new RuntimeException('audit unavailable')));
 
         try {
-            $this->app->make(Features::class)->switch(Features::COLLECTION, true);
+            $this->asMigrator(fn () => $this->app->make(Features::class)->switch(Features::COLLECTION, true));
             $this->fail('The switch went through without an audit row.');
         } catch (RuntimeException $e) {
             $this->assertSame('audit unavailable', $e->getMessage());
@@ -161,17 +156,17 @@ class FeaturesTest extends TestCase
     public function test_concurrent_switches_run_one_after_the_other(): void
     {
         // Four "on" at once: one change, one audit row (TASK-0053 #2).
-        $results = Concurrently::run(array_fill(0, 4, fn () => app(Features::class)->switch(Features::COLLECTION, true)));
+        $results = Concurrently::run(array_fill(0, 4, fn () => $this->asMigrator(fn () => app(Features::class)->switch(Features::COLLECTION, true))));
         $this->assertSame(['ok', 'ok', 'ok', 'ok'], array_column($results, 'outcome'));
         $this->assertSame([true], $this->switchedStates());
 
         // Mixed requests: every audited change is a real transition, and the last one is the stored state.
         foreach (range(1, 3) as $round) {
             $results = Concurrently::run([
-                fn () => app(Features::class)->switch(Features::COLLECTION, false),
-                fn () => app(Features::class)->switch(Features::COLLECTION, true),
-                fn () => app(Features::class)->switch(Features::COLLECTION, false),
-                fn () => app(Features::class)->switch(Features::COLLECTION, true),
+                fn () => $this->asMigrator(fn () => app(Features::class)->switch(Features::COLLECTION, false)),
+                fn () => $this->asMigrator(fn () => app(Features::class)->switch(Features::COLLECTION, true)),
+                fn () => $this->asMigrator(fn () => app(Features::class)->switch(Features::COLLECTION, false)),
+                fn () => $this->asMigrator(fn () => app(Features::class)->switch(Features::COLLECTION, true)),
             ]);
             $this->assertSame(['ok', 'ok', 'ok', 'ok'], array_column($results, 'outcome'), "round $round");
         }
@@ -187,11 +182,11 @@ class FeaturesTest extends TestCase
     public function test_a_worker_reads_the_stored_state_before_every_job(): void
     {
         $features = $this->app->make(Features::class);
-        $features->switch(Features::COLLECTION, true);
+        $this->asMigrator(fn () => $features->switch(Features::COLLECTION, true));
         $this->assertTrue($features->enabled(Features::COLLECTION));
 
         // The stored value changes elsewhere; this process keeps its earlier read until the next job starts.
-        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'false']);
+        DB::connection(self::MIGRATOR)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'false']);
         $this->assertTrue($features->enabled(Features::COLLECTION));
 
         event(new JobProcessing('sync', new SyncJob($this->app, '{"job":"probe"}', 'sync', 'default')));
@@ -201,7 +196,7 @@ class FeaturesTest extends TestCase
     public function test_a_flag_changed_without_the_audited_command_reads_as_off_and_is_reported(): void
     {
         // Directly on the migrator account, e.g. through Pennant in the migrator service: no audit row (TASK-0054 #2).
-        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'true']);
+        DB::connection(self::MIGRATOR)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'true']);
         $features = $this->app->make(Features::class);
         $this->assertFalse($features->enabled(Features::COLLECTION));
         $this->assertFalse($features->matchesAuditTrail(Features::COLLECTION));
@@ -212,12 +207,35 @@ class FeaturesTest extends TestCase
         $this->command('feature:switch collection on')->expectsOutputToContain('The [collection] feature is now on.')->assertSuccessful();
         $this->assertTrue($features->enabled(Features::COLLECTION));
         $this->command('feature:status')->expectsOutputToContain('collection | on')->assertSuccessful();
-        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'false']);
+        DB::connection(self::MIGRATOR)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'false']);
         $this->assertFalse($features->matchesAuditTrail(Features::COLLECTION));
         $this->assertFalse($features->enabled(Features::COLLECTION));
         $this->command('feature:switch collection off')->expectsOutputToContain('The [collection] feature is now off.')->assertSuccessful();
         $this->assertTrue($features->matchesAuditTrail(Features::COLLECTION));
         $this->assertSame([true, false], $this->switchedStates());
+    }
+
+    public function test_the_audit_lookup_follows_the_index_without_sorting(): void
+    {
+        // A few switches, then the lookup enabled() runs, explained as sent (TASK-0055 #1).
+        $this->asMigrator(function (): void {
+            foreach ([true, false, true] as $on) {
+                $this->app->make(Features::class)->switch(Features::COLLECTION, $on);
+            }
+        });
+        $this->app->make(FeatureManager::class)->flushCache();
+        $lookups = [];
+        DB::listen(function ($query) use (&$lookups): void {
+            if (str_contains($query->sql, 'audit_events')) {
+                $lookups[] = [$query->sql, $query->bindings];
+            }
+        });
+        $this->assertTrue($this->app->make(Features::class)->enabled(Features::COLLECTION));
+        $this->assertCount(1, $lookups);
+
+        $plan = (array) DB::selectOne('EXPLAIN '.$lookups[0][0], $lookups[0][1]);
+        $this->assertSame('audit_events_action_occurred_at_index', $plan['key']);
+        $this->assertStringNotContainsString('filesort', (string) $plan['Extra']);
     }
 
     public function test_pennant_purge_is_refused_and_the_rollback_waits_until_every_flag_is_off(): void
@@ -230,7 +248,7 @@ class FeaturesTest extends TestCase
         }
         $this->assertSame(1, DB::table('features')->count());
 
-        $this->app->make(Features::class)->switch(Features::COLLECTION, true);
+        $this->asMigrator(fn () => $this->app->make(Features::class)->switch(Features::COLLECTION, true));
         $migration = require base_path('modules/Platform/database/migrations/2026_11_15_000100_create_features_table.php');
         try {
             $migration->down();
@@ -239,6 +257,20 @@ class FeaturesTest extends TestCase
             $this->assertSame('A feature flag is on; switch it off with feature:switch before rolling back.', $e->getMessage());
         }
         $this->assertTrue($this->app->make(Features::class)->enabled(Features::COLLECTION));
+    }
+
+    /**
+     * Runs as the migrator account, as feature:switch does (PlatformServiceProvider::MIGRATOR_COMMANDS).
+     */
+    private function asMigrator(callable $call): mixed
+    {
+        $previous = DB::getDefaultConnection();
+        DB::setDefaultConnection(self::MIGRATOR);
+        try {
+            return $call();
+        } finally {
+            DB::setDefaultConnection($previous);
+        }
     }
 
     private function command(string $command): PendingCommand

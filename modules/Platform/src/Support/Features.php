@@ -9,13 +9,13 @@ use Laravel\Pennant\FeatureManager;
 use Laravel\Pennant\GlobalScope;
 use LogicException;
 use Modules\Platform\Audit\AuditLogger;
-use RuntimeException;
 
 /**
  * Feature flags (docs/01, docs/10), one global row per flag in the `features` table. Read through Laravel Pennant;
  * the app account can only read the table (grant class read_only, TASK-0053 #1), so nothing in the running app can
- * switch a flag. Every flag is off until an operator runs `php artisan feature:switch` in the migrator service, which
- * writes on the migrator account and audits feature.switched in the same transaction. Only a stored true counts as
+ * switch a flag. Every flag is off until an operator runs `php artisan feature:switch` in the migrator service: like
+ * the schema commands, it runs on the migrator account (PlatformServiceProvider::MIGRATOR_COMMANDS), so switch()
+ * writes and audits feature.switched in one transaction there, and is refused anywhere else. Only a stored true counts as
  * on (Pennant's own active() accepts any value but false), and only while the flag's last feature.switched audit row
  * also says on: a row changed some other way, e.g. directly on the migrator account, reads as off and is reported by
  * feature:status (TASK-0054 #2). An unknown flag is a programming error, not "off", so a typo cannot quietly disable
@@ -29,9 +29,6 @@ final class Features
     public const KNOWN = [
         self::COLLECTION => 'Phase 3 automated collection; while off, sources are collected manually only (P1-30)',
     ];
-
-    /** The only connection that may write flags; configured only in the migrator service (docs/02 §6). */
-    public const WRITER = 'migrator';
 
     public function __construct(
         private readonly FeatureManager $pennant,
@@ -73,8 +70,11 @@ final class Features
     /** The state the flag's last feature.switched audit row set; off when it was never switched. */
     private function lastAudited(string $flag, ?ConnectionInterface $connection = null): bool
     {
+        // Newest first along the (action, occurred_at) index, which also holds the id: the scan stops at this flag's
+        // latest switch without sorting (TASK-0055 #1).
         $context = ($connection ?? $this->db->connection())->table('audit_events')
-            ->where('action', 'feature.switched')->where('context->flag', $flag)->orderByDesc('id')->value('context');
+            ->where('action', 'feature.switched')->where('context->flag', $flag)
+            ->orderByDesc('occurred_at')->orderByDesc('id')->value('context');
         $context = is_string($context) ? json_decode($context, true) : null;
 
         return is_array($context) && ($context['enabled'] ?? null) === true;
@@ -82,18 +82,14 @@ final class Features
 
     /**
      * Switches a flag for everyone and audits it; false when the flag already had that state (nothing is recorded).
-     * The flag's row is locked first, so concurrent switches run one after the other and each audited change is a
-     * real transition (TASK-0053 #2).
+     * Runs on the default connection, which is the migrator account only during feature:switch; on the app account the
+     * database refuses (read_only). The flag's row is locked first, so concurrent switches run one after the other
+     * and each audited change is a real transition (TASK-0053 #2).
      */
     public function switch(string $flag, bool $on): bool
     {
         self::known($flag);
-        if (! is_array(config('database.connections.'.self::WRITER))) {
-            throw new RuntimeException('Switching a feature flag needs the migrator account, which is only available in the migrator service: '
-                ."docker compose run --rm migrator php artisan feature:switch $flag ".($on ? 'on' : 'off'));
-        }
-
-        $writer = $this->db->connection(self::WRITER);
+        $writer = $this->db->connection();
         $scope = $this->pennant->serializeScope(new GlobalScope);
         try {
             return $writer->transaction(function () use ($writer, $flag, $scope, $on): bool {
@@ -108,7 +104,7 @@ final class Features
                 }
 
                 $writer->table('features')->where('id', $row->id)->update(['value' => json_encode($on), 'updated_at' => now()]);
-                $this->audit->on(self::WRITER)->record('feature.switched', context: ['flag' => $flag, 'enabled' => $on]);
+                $this->audit->record('feature.switched', context: ['flag' => $flag, 'enabled' => $on]);
 
                 return true;
             });

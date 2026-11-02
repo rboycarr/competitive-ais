@@ -24,8 +24,8 @@ class SourceCollectionFlagTest extends TestCase
     protected function tearDown(): void
     {
         // The rollbacks after each test refuse while a flag is on or a source exists.
-        DB::connection(Features::WRITER)->table('features')->update(['value' => 'false']);
-        DB::connection(Features::WRITER)->table('sources')->delete();
+        DB::connection('migrator')->table('features')->update(['value' => 'false']);
+        DB::connection('migrator')->table('sources')->delete();
 
         parent::tearDown();
     }
@@ -44,9 +44,9 @@ class SourceCollectionFlagTest extends TestCase
         $this->actingAs($analyst)->post('/sources', $feed)->assertSessionHasNoErrors();
 
         // Changed without the audited command: read as off.
-        DB::connection(Features::WRITER)->table('features')->update(['value' => 'false']);
+        DB::connection('migrator')->table('features')->update(['value' => 'false']);
         $this->assertSame(0, Artisan::call('feature:switch', ['flag' => 'collection', 'state' => 'off']));
-        DB::connection(Features::WRITER)->table('features')->update(['value' => 'true']);
+        DB::connection('migrator')->table('features')->update(['value' => 'true']);
         $this->actingAs($analyst)->post('/sources', ['name' => 'Feed 2'] + $feed)
             ->assertSessionHasErrors(['method' => 'Only manual collection is available while automated collection is switched off.']);
 
