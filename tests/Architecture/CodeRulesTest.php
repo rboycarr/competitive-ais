@@ -42,3 +42,24 @@ test('only reviewed files use the taggables table', function () {
 
     expect($users)->toBe($allowed);
 });
+
+// Feature flags are read only through Modules\Platform\Support\Features, which counts only a stored true as on;
+// Pennant's own active() accepts any value but false, and its facade would skip the unknown-flag check.
+test('only Platform reads Pennant', function () {
+    $allowed = [
+        'modules/Platform/src/PlatformServiceProvider.php', // defines the defaults, forgets cached values per job
+        'modules/Platform/src/Support/Features.php',
+    ];
+    $root = dirname(__DIR__, 2);
+    $users = [];
+    foreach ([...glob("$root/modules/*/src", GLOB_ONLYDIR) ?: [], ...glob("$root/modules/*/routes", GLOB_ONLYDIR) ?: [], "$root/app", "$root/routes"] as $dir) {
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)) as $file) {
+            if ($file->getExtension() === 'php' && preg_match('/Laravel\\\\Pennant|\bFeature::|@feature/', (string) file_get_contents($file->getPathname())) === 1) {
+                $users[] = str_replace('\\', '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+    }
+    sort($users);
+
+    expect($users)->toBe($allowed);
+});

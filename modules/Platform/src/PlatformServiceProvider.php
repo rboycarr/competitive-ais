@@ -12,12 +12,16 @@ use Illuminate\Database\Events\NoPendingMigrations;
 use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Laravel\Pennant\FeatureManager;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
 use Modules\Platform\Console\CreateAuditCheckpoint;
 use Modules\Platform\Console\RelayOutbox;
+use Modules\Platform\Console\ShowFeatures;
+use Modules\Platform\Console\SwitchFeature;
 use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
 use Modules\Platform\Http\Middleware\AssignRequestId;
@@ -28,22 +32,24 @@ use Modules\Platform\Jobs\CreateAuditCheckpointJob;
 use Modules\Platform\Jobs\RelayOutboxJob;
 use Modules\Platform\Jobs\VerifyAuditChainJob;
 use Modules\Platform\Outbox\OutboxEvents;
+use Modules\Platform\Support\Features;
 use Modules\Platform\Support\ModuleServiceProvider;
 use RuntimeException;
 use Throwable;
 
 /**
  * Shared kernel (docs/01 §3): database accounts and grants, the audit trail (P1-05), the transactional outbox
- * (P1-06), and secure HTTP defaults (P1-08); AccessScope in a later story.
+ * (P1-06), secure HTTP defaults (P1-08) and feature flags; AccessScope in a later story.
  */
 class PlatformServiceProvider extends ModuleServiceProvider
 {
     /**
-     * Commands that change or inspect the schema; they run as the migrator account (P1-09, docs/02 §6).
+     * Commands that change or inspect the schema, and feature:switch (the app account can only read feature flags,
+     * TASK-0053 #1); they run as the migrator account (P1-09, docs/02 §6).
      */
     private const MIGRATOR_COMMANDS = [
         'migrate', 'migrate:fresh', 'migrate:install', 'migrate:refresh', 'migrate:reset',
-        'migrate:rollback', 'migrate:status', 'schema:dump',
+        'migrate:rollback', 'migrate:status', 'schema:dump', 'feature:switch',
     ];
 
     private ?string $connectionBeforeMigratorCommand = null;
@@ -62,12 +68,36 @@ class PlatformServiceProvider extends ModuleServiceProvider
         DB::prohibitDestructiveCommands($this->app->isProduction());
 
         if ($this->app->runningInConsole()) {
-            $this->commands([ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, RelayOutbox::class]);
+            $this->commands([
+                ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, RelayOutbox::class,
+                ShowFeatures::class, SwitchFeature::class,
+            ]);
         }
 
         $this->runSchemaCommandsAsMigrator();
         $this->scheduleJobs();
         $this->secureHttpDefaults();
+        $this->featureFlags();
+    }
+
+    /**
+     * Pennant stores the flags (docs/10); Support\Features reads and switches them. Pennant forgets its cached values
+     * only after a job succeeds, so a worker would keep a flag's old state after a failed job: forget them before
+     * every job instead, so each job reads the stored state. Pennant's purge command would delete flag rows without
+     * an audit row, so it is refused (TASK-0053 #4).
+     */
+    private function featureFlags(): void
+    {
+        $this->callAfterResolving(FeatureManager::class, fn (FeatureManager $pennant) => Features::defineDefaults($pennant));
+        Event::listen(JobProcessing::class, fn () => $this->app->make(FeatureManager::class)->flushCache());
+        Event::listen(CommandStarting::class, function (CommandStarting $event): void {
+            if ($event->command === 'pennant:purge') {
+                throw new RuntimeException('pennant:purge is disabled: feature flags change only through the audited feature:switch command.');
+            }
+        });
+
+        // Codes only: the flag's name and its new state.
+        $this->app->make(AuditActions::class)->define('feature.switched', ['flag' => 'code', 'enabled' => 'bool']);
     }
 
     /**

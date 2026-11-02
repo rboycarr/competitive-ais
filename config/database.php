@@ -249,9 +249,10 @@ return [
             'sources', // retired, never deleted: policies and evidence refer to them (P1-30)
         ],
 
-        // SELECT only for the app account: reference data that only migrations write (P1-23a). Empty since
-        // currencies became editable (P1-23b); the class stays for future reference tables and is tested by its probe.
+        // SELECT only for the app account: data that only the migrator account writes (P1-23a).
         'read_only' => [
+            'features', // Pennant feature flags: rows stored by their migration, switched only by the audited
+            // feature:switch command on the migrator account (P1-30a, TASK-0053 #1)
         ],
 
         // No access for the app account.
