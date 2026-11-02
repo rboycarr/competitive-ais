@@ -58,4 +58,10 @@ describe('Sources/Show', () => {
         const unsafe = mount(Show, { props: { source: { ...source, baseUrl: 'javascript:alert(1)' } } });
         expect(unsafe.find('a[target="_blank"]').exists()).toBe(false);
     });
+
+    it('shows every stored text as text', () => {
+        const wrapper = mount(Show, { props: { source: { ...source, name: '<b>Feed</b>', host: '<i>x</i>', description: '<img src=x onerror=alert(1)>' } } });
+        expect(wrapper.find('b').exists() || wrapper.find('i').exists() || wrapper.find('img').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
+    });
 });

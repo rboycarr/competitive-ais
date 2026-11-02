@@ -9,7 +9,9 @@ use Illuminate\Support\Facades\Schema;
  * Sources (P1-30, docs/02 §3.4, docs/04 §2). Retired, never deleted (grant class no_delete): policy versions and
  * evidence will refer to them. Two differences from the ERD: `proposed_by` records who proposed the source, so the
  * policy review (P1-31) can refuse the proposer as approver; `current_policy_id` comes with `source_policies` in P1-31.
- * The base URL is stored and shown, never fetched; `host` is its domain (lower case, punycode), set by the app.
+ * The base URL is stored and shown, never fetched; `host` is its domain (lower case, punycode), set by the app. The
+ * CHECKs hold the same URL rules as SourceService (TASK-0050 #2): no user name or password, no query string or
+ * fragment, a domain-shaped host (two or more labels, not numeric) that matches the URL's authority.
  */
 return new class extends Migration
 {
@@ -42,8 +44,11 @@ return new class extends Migration
             ADD CONSTRAINT sources_reliability_check CHECK (default_reliability IN ('A', 'B', 'C', 'D', 'E', 'F')),
             ADD CONSTRAINT sources_classification_check CHECK (classification IN ('public', 'internal', 'confidential', 'restricted')),
             ADD CONSTRAINT sources_name_check CHECK (CHAR_LENGTH(TRIM(name)) > 0),
-            ADD CONSTRAINT sources_base_url_check CHECK (base_url IS NULL OR base_url REGEXP '^https?://'),
-            ADD CONSTRAINT sources_host_check CHECK ((base_url IS NULL) = (host IS NULL) AND (host IS NULL OR host REGEXP '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$')),
+            ADD CONSTRAINT sources_base_url_check CHECK (base_url IS NULL OR (base_url REGEXP '^https?://[^/@]+(/|$)' AND base_url NOT REGEXP '[?#]')),
+            ADD CONSTRAINT sources_host_check CHECK ((base_url IS NULL) = (host IS NULL) AND (host IS NULL OR (
+                host REGEXP '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' AND host NOT REGEXP '[.][0-9]+$'))),
+            ADD CONSTRAINT sources_host_match_check CHECK (host IS NULL OR REGEXP_LIKE(base_url,
+                CONCAT('^https?://', REPLACE(CONVERT(host USING utf8mb4), '.', '[.]'), '[.]?(:[0-9]{1,5})?(/|$)'), 'i')),
             ADD CONSTRAINT sources_collection_url_check CHECK (method = 'manual' OR base_url IS NOT NULL)");
     }
 

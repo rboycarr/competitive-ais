@@ -104,7 +104,7 @@ function propose(): void {
                 <div>
                     <label for="source-url" class="block font-medium">Base URL (optional)</label>
                     <input id="source-url" v-model="form.base_url" type="url" inputmode="url" maxlength="2048" placeholder="https://" aria-describedby="source-url-help" :aria-invalid="form.errors.base_url ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
-                    <p id="source-url-help" class="mt-1 text-xs text-slate-600">An http(s) address on a domain name. Never include a user name, password or access key.</p>
+                    <p id="source-url-help" class="mt-1 text-xs text-slate-600">An http(s) address on a domain name, without a query string (?…) or fragment (#…). Never include a user name, password, key or token.</p>
                 </div>
                 <div class="grid gap-3 sm:grid-cols-3">
                     <div>

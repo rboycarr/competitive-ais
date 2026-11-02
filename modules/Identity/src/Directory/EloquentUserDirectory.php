@@ -2,14 +2,18 @@
 
 namespace Modules\Identity\Directory;
 
-use Illuminate\Contracts\Auth\Authenticatable;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Identity\Contracts\UserSummary;
 use Modules\Identity\Models\User;
+use Modules\Platform\Access\AccessScope;
+use Modules\Platform\Access\Classifiable;
+use Modules\Platform\Access\Scoped;
 
 /** UserDirectory over the users table (P1-20). */
 class EloquentUserDirectory implements UserDirectory
 {
+    public function __construct(private readonly AccessScope $access) {}
+
     public function activeHolders(string $permission): array
     {
         // hasPermissionTo, not a query scope: it applies the two-factor rule for privileged permissions (P1-12).
@@ -37,9 +41,11 @@ class EloquentUserDirectory implements UserDirectory
             ->all();
     }
 
-    public function account(int $id): ?Authenticatable
+    public function maySee(int $id, Classifiable&Scoped $record): bool
     {
-        return User::query()->find($id);
+        $user = User::query()->find($id);
+
+        return $user !== null && $this->access->allows($user, $record);
     }
 
     private function summary(User $user): UserSummary

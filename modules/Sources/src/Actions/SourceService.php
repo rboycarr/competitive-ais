@@ -23,7 +23,8 @@ use Modules\Sources\Models\Source;
  *   it (P1-31, where the proposer cannot approve);
  * - the collection method must be `manual` while the `collection` flag is off (docs/04 acceptance criteria);
  *   automated methods also need a base URL;
- * - the base URL is an http(s) address on a domain name, without a user name or password; it is stored, never fetched;
+ * - the base URL is an http(s) address on a domain name, without a user name, password, query string or fragment
+ *   (where keys and tokens travel, TASK-0050 #1); it is stored, never fetched;
  * - nobody classifies a source above what they can see, and the owner (an active holder of source.propose, checked
  *   under a lock on the user row; the proposer by default) must be able to see it too;
  * - audited in the same transaction, with codes only (no names or URLs in the audit context).
@@ -122,6 +123,8 @@ class SourceService
         $problem = match (true) {
             ! WebAddress::isValid($baseUrl) => 'The base URL must be an http:// or https:// address.',
             WebAddress::hasCredentials($baseUrl) => 'The base URL must not contain a user name or password.',
+            // Access keys and signed links travel in query strings; a base URL never needs one (TASK-0050 #1).
+            str_contains($baseUrl, '?') || str_contains($baseUrl, '#') => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
             WebAddress::domain($baseUrl) === null => 'The base URL must use a domain name, not an IP address or a local name.',
             default => null,
         };
@@ -141,8 +144,7 @@ class SourceService
         }
         $owner = $this->users->lockedActiveHolder($ulid, 'source.propose')
             ?? throw ValidationException::withMessages(['owner' => 'The owner must be an active user who proposes sources.']);
-        $account = $this->users->account($owner->id);
-        if ($account === null || ! $this->access->allows($account, $source)) {
+        if (! $this->users->maySee($owner->id, $source)) {
             throw ValidationException::withMessages(['owner' => 'The owner must be able to see a source with this classification.']);
         }
 

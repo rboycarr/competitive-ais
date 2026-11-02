@@ -99,7 +99,7 @@ class SourceTest extends TestCase
         $this->actingAs($this->analyst)->get('/sources')->assertInertia(fn (AssertableInertia $page) => $page->where('methods', ['manual']));
 
         // Not even a direct call gets past it, and anything but exactly true is off.
-        foreach ([false, null, 'true', 1] as $value) {
+        foreach ([false, null, 'true', 'false', 1, 0, '1'] as $value) {
             config(['features.collection' => $value]);
             try {
                 app(SourceService::class)->propose($this->analyst, ['name' => 'Direct', 'source_type' => 'rss', 'method' => 'rss', 'base_url' => 'https://feeds.example/', 'classification' => 'internal']);
@@ -146,6 +146,9 @@ class SourceTest extends TestCase
             'http://[::1]/' => 'The base URL must use a domain name, not an IP address or a local name.',
             'http://localhost/' => 'The base URL must use a domain name, not an IP address or a local name.',
             'http://10.0.0.1.:8080/' => 'The base URL must use a domain name, not an IP address or a local name.',
+            'https://api.example/feed?api_key=secret' => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
+            'https://api.example/feed?' => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
+            'https://api.example/feed#token=secret' => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
         ] as $url => $message) {
             $this->actingAs($this->analyst)->post('/sources', $this->form('Bad', ['base_url' => $url]))->assertSessionHasErrors(['base_url' => $message]);
         }
@@ -229,13 +232,32 @@ class SourceTest extends TestCase
                 $this->assertStringContainsString("sources_{$check}_check", $e->getMessage());
             }
         }
-        foreach (['News.Example', '-news.example'] as $host) {
-            try {
-                DB::table('sources')->insert($row(['host' => $host]));
-                $this->fail("The database accepted the host $host.");
-            } catch (QueryException $e) {
-                $this->assertStringContainsString('sources_host_check', $e->getMessage());
+        // The same URL and host rules as the service (TASK-0050 #2).
+        foreach ([
+            'base_url' => ['https://user:pass@news.example/', 'https://token@news.example/', 'https://news.example/feed?api_key=secret', 'https://news.example/#token', 'https://news.example?x'],
+            'host' => ['News.Example', '-news.example', 'news-.example', 'localhost', 'news..example', '.news.example', 'news.example.', '10.0.0.1'],
+        ] as $check => $values) {
+            foreach ($values as $value) {
+                $probe = $check === 'host' ? ['host' => $value, 'base_url' => "https://$value/"] : ['base_url' => $value];
+                try {
+                    DB::table('sources')->insert($row($probe));
+                    $this->fail("The database accepted the $check $value.");
+                } catch (QueryException $e) {
+                    $this->assertMatchesRegularExpression('/sources_(base_url|host|host_match)_check/', $e->getMessage(), "$check $value");
+                }
             }
+        }
+        foreach ([['https://other.example/', 'news.example'], ['https://news.example.evil.example/', 'news.example'], ['https://xnews.example/', 'news.example'], ['https://news.example', 'ews.example']] as [$url, $host]) {
+            try {
+                DB::table('sources')->insert($row(['base_url' => $url, 'host' => $host]));
+                $this->fail("The database accepted host $host for $url.");
+            } catch (QueryException $e) {
+                $this->assertStringContainsString('sources_host_match_check', $e->getMessage());
+            }
+        }
+        // What the service stores passes: upper-case address, trailing dot, port, punycode.
+        foreach ([['HTTPS://News.Example./market', 'news.example'], ['https://news.example:8443', 'news.example'], ['https://xn--bcher-kva.example/a/b', 'xn--bcher-kva.example']] as [$url, $host]) {
+            DB::table('sources')->insert($row(['base_url' => $url, 'host' => $host]));
         }
 
         // The app account cannot delete sources (grant class no_delete).

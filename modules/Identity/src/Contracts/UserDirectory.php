@@ -2,7 +2,8 @@
 
 namespace Modules\Identity\Contracts;
 
-use Illuminate\Contracts\Auth\Authenticatable;
+use Modules\Platform\Access\Classifiable;
+use Modules\Platform\Access\Scoped;
 
 /**
  * Read-only access to users for other modules (ADR-0001: modules use each other's Contracts only), e.g. the Registry
@@ -33,8 +34,9 @@ interface UserDirectory
     public function summaries(array $ids): array;
 
     /**
-     * The account by user ID, only to ask AccessScope or the Gate what that user may see or do (e.g. whether a source's
-     * owner can see the source, P1-30); null for an unknown ID. Not for reading profile fields: use summaries().
+     * Whether the user with this ID may see the record, decided by AccessScope (e.g. whether a source's owner can see
+     * the source, P1-30). False for an unknown ID. Answers yes or no only: the User model stays in Identity
+     * (TASK-0050 #3).
      */
-    public function account(int $id): ?Authenticatable;
+    public function maySee(int $id, Classifiable&Scoped $record): bool;
 }
