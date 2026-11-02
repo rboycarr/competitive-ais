@@ -25,6 +25,10 @@ const adminLinks = computed(() => [
     can.value.grantManage ? { href: '/admin/access-grants', label: 'Access grants' } : null,
     can.value.taxonomyManage ? { href: '/admin/categories', label: 'Categories' } : null,
     can.value.taxonomyManage ? { href: '/admin/markets', label: 'Markets' } : null,
+    can.value.taxonomyManage ? { href: '/admin/currencies', label: 'Currencies' } : null,
+    can.value.taxonomyManage ? { href: '/admin/channels', label: 'Channels' } : null,
+    can.value.taxonomyManage ? { href: '/admin/retailers', label: 'Retailers' } : null,
+    can.value.taxonomyManage ? { href: '/admin/tags', label: 'Tags' } : null,
     can.value.auditView ? { href: '/admin/audit', label: 'Audit log' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 </script>

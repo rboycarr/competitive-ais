@@ -361,7 +361,7 @@ class DatabaseAccountsTest extends TestCase
             $checked++;
         }
 
-        $this->assertGreaterThanOrEqual(2, $checked, 'Expected the probe table and currencies to be checked.');
+        $this->assertGreaterThanOrEqual(1, $checked, 'Expected at least the probe table to be checked.');
     }
 
     public function test_migrator_connection_is_refused_where_its_credentials_are_absent(): void

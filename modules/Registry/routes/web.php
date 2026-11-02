@@ -3,11 +3,16 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Registry\Http\Controllers\BrandController;
 use Modules\Registry\Http\Controllers\CategoryController;
+use Modules\Registry\Http\Controllers\ChannelController;
 use Modules\Registry\Http\Controllers\CompetitorAliasController;
 use Modules\Registry\Http\Controllers\CompetitorController;
 use Modules\Registry\Http\Controllers\CompetitorRelationshipController;
+use Modules\Registry\Http\Controllers\CompetitorTagController;
+use Modules\Registry\Http\Controllers\CurrencyController;
 use Modules\Registry\Http\Controllers\MarketController;
 use Modules\Registry\Http\Controllers\ProductController;
+use Modules\Registry\Http\Controllers\RetailerController;
+use Modules\Registry\Http\Controllers\TagController;
 use Modules\Registry\Http\Controllers\VariantController;
 
 // Competitors (P1-20). Reading needs competitor.view, changes competitor.manage; the service and AccessScope check
@@ -27,6 +32,9 @@ Route::middleware('auth')->group(function () {
         Route::post('/competitors/{competitor}/relationships', [CompetitorRelationshipController::class, 'store'])->name('competitors.relationships.store');
         Route::put('/competitors/{competitor}/relationships/{relationship}', [CompetitorRelationshipController::class, 'update'])->name('competitors.relationships.update');
         Route::delete('/competitors/{competitor}/relationships/{relationship}', [CompetitorRelationshipController::class, 'destroy'])->name('competitors.relationships.destroy');
+        // Tags (P1-23b): untagging removes the link, audited by the service.
+        Route::post('/competitors/{competitor}/tags', [CompetitorTagController::class, 'store'])->name('competitors.tags.store');
+        Route::delete('/competitors/{competitor}/tags/{tag}', [CompetitorTagController::class, 'destroy'])->name('competitors.tags.destroy')->whereNumber('tag');
     });
 
     // Brands (P1-22a): ours and visible competitors'; BrandService checks the owner's visibility again.
@@ -49,7 +57,8 @@ Route::middleware('auth')->group(function () {
         Route::put('/products/{product}/variants/{variant}', [VariantController::class, 'update'])->name('products.variants.update');
     });
 
-    // Admin › Categories (P1-22a) and Markets (P1-23a): shared taxonomy for taxonomy.manage holders.
+    // Admin › Categories (P1-22a), Markets (P1-23a), Currencies, Channels, Retailers and Tags (P1-23b): shared taxonomy
+    // for taxonomy.manage holders.
     Route::middleware('can:taxonomy.manage')->prefix('admin')->name('admin.')->group(function () {
         Route::get('/categories', [CategoryController::class, 'index'])->name('categories.index');
         Route::post('/categories', [CategoryController::class, 'store'])->name('categories.store');
@@ -65,5 +74,22 @@ Route::middleware('auth')->group(function () {
         Route::post('/markets/{market}/regions', [MarketController::class, 'storeRegion'])->name('markets.regions.store');
         Route::put('/markets/{market}/regions/{region}', [MarketController::class, 'updateRegion'])->name('markets.regions.update')->whereNumber('region');
         Route::delete('/markets/{market}/regions/{region}', [MarketController::class, 'destroyRegion'])->name('markets.regions.destroy')->whereNumber('region');
+
+        // Currencies are never deleted; channels and tags in use and retailers referred to are kept by their services.
+        Route::get('/currencies', [CurrencyController::class, 'index'])->name('currencies.index');
+        Route::post('/currencies', [CurrencyController::class, 'store'])->name('currencies.store');
+        Route::put('/currencies/{currency}', [CurrencyController::class, 'update'])->name('currencies.update')->where('currency', '[A-Z]{3}');
+        Route::get('/channels', [ChannelController::class, 'index'])->name('channels.index');
+        Route::post('/channels', [ChannelController::class, 'store'])->name('channels.store');
+        Route::put('/channels/{channel}', [ChannelController::class, 'update'])->name('channels.update')->whereNumber('channel');
+        Route::delete('/channels/{channel}', [ChannelController::class, 'destroy'])->name('channels.destroy')->whereNumber('channel');
+        Route::get('/retailers', [RetailerController::class, 'index'])->name('retailers.index');
+        Route::post('/retailers', [RetailerController::class, 'store'])->name('retailers.store');
+        Route::put('/retailers/{retailer}', [RetailerController::class, 'update'])->name('retailers.update');
+        Route::delete('/retailers/{retailer}', [RetailerController::class, 'destroy'])->name('retailers.destroy');
+        Route::get('/tags', [TagController::class, 'index'])->name('tags.index');
+        Route::post('/tags', [TagController::class, 'store'])->name('tags.store');
+        Route::put('/tags/{tag}', [TagController::class, 'update'])->name('tags.update')->whereNumber('tag');
+        Route::delete('/tags/{tag}', [TagController::class, 'destroy'])->name('tags.destroy')->whereNumber('tag');
     });
 });
