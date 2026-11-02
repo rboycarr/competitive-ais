@@ -319,6 +319,9 @@ class AccessGrantTest extends TestCase
         }
         $this->assertSame(1, AccessGrant::query()->count());
 
+        // MarketLookup::find() accepts the ULID in any case (TASK-0045).
+        $this->actingAs($this->director)->post('/admin/access-grants', ['scope' => 'market', 'market' => strtolower($phUlid)] + $this->form($analyst))->assertSessionHasNoErrors()->assertRedirect();
+        $this->assertSame(2, AccessGrant::query()->where('market_id', $ph)->count());
     }
 
     public function test_rolling_back_refuses_while_market_grants_exist(): void
