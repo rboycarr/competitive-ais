@@ -17,10 +17,12 @@ use Modules\Platform\Support\Features;
 use Modules\Sources\Actions\SourceService;
 use Modules\Sources\Http\Requests\ProposeSourceRequest;
 use Modules\Sources\Models\Source;
+use Modules\Sources\Models\SourcePolicy;
 
 /**
  * Sources (P1-30): list and detail for source.view holders, filtered by AccessScope (hidden sources are 404); the
- * proposal form for source.propose holders.
+ * proposal form for source.propose holders. The detail page shows the policy history and, when allowed, the submit
+ * button and the decision form (P1-31a).
  */
 class SourceController
 {
@@ -71,7 +73,10 @@ class SourceController
     {
         $viewer = $this->viewer($request);
         $this->access->ensureVisible($viewer, $source);
-        $names = $this->users->summaries(array_values(array_unique([$source->owner_id, $source->proposed_by])));
+        $policies = $source->policies()->orderByDesc('version')->get(); // after the visibility check: see Source::policies()
+        $names = $this->users->summaries(array_values(array_unique([$source->owner_id, $source->proposed_by, ...$policies->pluck('decided_by')->all()])));
+        $viewerId = (int) $viewer->getAuthIdentifier();
+        $can = $this->gate->forUser($viewer);
 
         return Inertia::render('Sources/Show', [
             'source' => [
@@ -88,7 +93,34 @@ class SourceController
                 'proposedAt' => $source->created_at?->toIso8601ZuluString(),
                 'classification' => $source->classification->value,
                 'description' => $source->description,
+                'currentPolicyVersion' => $policies->firstWhere('id', $source->current_policy_id)?->version,
             ],
+            // Newest first; the policy follows its source's visibility. SourcePolicyService checks every action again.
+            'policies' => $policies->map(fn (SourcePolicy $p): array => [
+                'version' => $p->version,
+                'decision' => $p->decision,
+                'termsUrl' => $p->terms_url,
+                'termsSummary' => $p->terms_summary,
+                'termsReviewedOn' => $p->terms_reviewed_on?->format('Y-m-d'),
+                'robotsDecision' => $p->robots_decision,
+                'license' => $p->license,
+                'allowedCadence' => $p->allowed_cadence,
+                'rateBudgetPerHour' => $p->rate_budget_per_hour,
+                'retentionDays' => $p->retention_days,
+                'containsPersonalData' => $p->contains_personal_data,
+                'personalDataBasis' => $p->personal_data_basis,
+                'notes' => $p->notes,
+                'decidedBy' => $names[$p->decided_by]->name ?? null,
+                'decidedAt' => $p->decided_at->toIso8601ZuluString(),
+            ])->all(),
+            'canSubmit' => $source->status === 'proposed' && $can->allows('source.propose')
+                && in_array($viewerId, [$source->owner_id, $source->proposed_by], true),
+            'canDecide' => $source->status === 'policy_review' && $viewerId !== $source->proposed_by && $can->allows('source.approve'),
+            'decidingOwnProposal' => $source->status === 'policy_review' && $viewerId === $source->proposed_by && $can->allows('source.approve'),
+            'basedOnVersion' => (int) ($policies->first()->version ?? 0),
+            'decisions' => SourcePolicy::DECISIONS,
+            'robotsDecisions' => SourcePolicy::ROBOTS,
+            'robotsBound' => in_array($source->method, SourcePolicy::ROBOTS_BOUND_METHODS, true),
         ]);
     }
 

@@ -7,5 +7,12 @@ const METHODS: Record<string, string> = {
     manual: 'Manual', rss: 'Feed (RSS/Atom)', api: 'API', http_fetch: 'HTTP fetch', browser: 'Headless browser',
 };
 
-export const typeLabel = (type: string): string => TYPES[type] ?? type;
+const DECISIONS: Record<string, string> = { approved: 'Approved', rejected: 'Rejected', needs_info: 'Needs more information' };
+const ROBOTS: Record<string, string> = {
+    allowed: 'Allowed', disallowed: 'Disallowed', not_applicable: 'Not applicable', not_reviewed: 'Not reviewed',
+};
+
+export const decisionLabel = (decision: string): string => DECISIONS[decision] ?? decision;
+export const robotsLabel = (robots: string): string => ROBOTS[robots] ?? robots;
+export const typeLabel =(type: string): string => TYPES[type] ?? type;
 export const methodLabel = (method: string): string => METHODS[method] ?? method;

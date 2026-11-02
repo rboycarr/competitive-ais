@@ -48,20 +48,73 @@ describe('Sources/Index', () => {
 });
 
 describe('Sources/Show', () => {
-    const source = { ...row, baseUrl: 'https://news.example/feed', proposedBy: 'Ana', proposedAt: '2026-11-02T08:00:00Z', description: null };
+    const source = { ...row, baseUrl: 'https://news.example/feed', proposedBy: 'Ana', proposedAt: '2026-11-02T08:00:00Z', description: null, currentPolicyVersion: null };
+    const review = {
+        policies: [], canSubmit: false, canDecide: false, decidingOwnProposal: false, basedOnVersion: 0,
+        decisions: ['approved', 'rejected', 'needs_info'], robotsDecisions: ['allowed', 'disallowed', 'not_applicable', 'not_reviewed'], robotsBound: false,
+    };
+    const policy = {
+        version: 2, decision: 'approved', termsUrl: 'https://news.example/terms', termsSummary: 'Synthetic terms.', termsReviewedOn: '2026-11-01',
+        robotsDecision: 'not_applicable', license: null, allowedCadence: null, rateBudgetPerHour: null, retentionDays: 365, containsPersonalData: false,
+        personalDataBasis: null, notes: null, decidedBy: 'Dee', decidedAt: '2026-11-03T08:00:00Z',
+    };
 
     it('links only http(s) base URLs, safely', () => {
-        const link = mount(Show, { props: { source } }).get('a[target="_blank"]');
+        const link = mount(Show, { props: { source, ...review } }).get('a[target="_blank"]');
         expect(link.attributes('href')).toBe('https://news.example/feed');
         expect(link.attributes('rel')).toBe('noopener noreferrer nofollow');
 
-        const unsafe = mount(Show, { props: { source: { ...source, baseUrl: 'javascript:alert(1)' } } });
+        const unsafe = mount(Show, { props: { source: { ...source, baseUrl: 'javascript:alert(1)' }, ...review } });
         expect(unsafe.find('a[target="_blank"]').exists()).toBe(false);
     });
 
     it('shows every stored text as text', () => {
-        const wrapper = mount(Show, { props: { source: { ...source, name: '<b>Feed</b>', host: '<i>x</i>', description: '<img src=x onerror=alert(1)>' } } });
+        const wrapper = mount(Show, { props: { source: { ...source, name: '<b>Feed</b>', host: '<i>x</i>', description: '<img src=x onerror=alert(1)>' }, ...review } });
         expect(wrapper.find('b').exists() || wrapper.find('i').exists() || wrapper.find('img').exists()).toBe(false);
         expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
+    });
+
+    it('offers submitting only when allowed and posts it', async () => {
+        expect(mount(Show, { props: { source, ...review } }).text()).not.toContain('Submit for policy review');
+        const wrapper = mount(Show, { props: { source, ...review, canSubmit: true } });
+        await wrapper.get('#submit-heading ~ button').trigger('click');
+        expect(post).toHaveBeenCalledWith(`/sources/${source.ulid}/submit`, expect.any(Object));
+    });
+
+    it('shows the decision form only to a director who may decide, and posts the decision', async () => {
+        expect(mount(Show, { props: { source, ...review } }).find('#decide-heading').exists()).toBe(false);
+        const own = mount(Show, { props: { source, ...review, decidingOwnProposal: true } });
+        expect(own.find('#decide-heading').exists()).toBe(false);
+        expect(own.text()).toContain('another director must decide');
+
+        const wrapper = mount(Show, { props: { source, ...review, canDecide: true, basedOnVersion: 1, robotsBound: true } });
+        expect(wrapper.findAll('input[name="decision"]').map((i) => i.attributes('value'))).toEqual(['approved', 'rejected', 'needs_info']);
+        expect(wrapper.text()).toContain('only be approved where robots rules allow it');
+        expect(wrapper.find('#policy-basis').exists()).toBe(false);
+        await wrapper.get('input[type="checkbox"]').setValue(true);
+        expect(wrapper.find('#policy-basis').exists()).toBe(true);
+        await wrapper.get('input[value="needs_info"]').setValue(true);
+        await wrapper.get('#decide-heading ~ form').trigger('submit');
+        expect(post).toHaveBeenCalledWith(`/sources/${source.ulid}/policies`, expect.any(Object));
+    });
+
+    it('lists the policy history as text, linking only http(s) terms', () => {
+        const unsafe = {
+            ...policy, version: 1, decision: 'needs_info', termsUrl: 'javascript:alert(1)', notes: '<img src=x onerror=alert(1)>',
+            termsSummary: '<b>terms</b>', containsPersonalData: true, personalDataBasis: '<i>basis</i>', decidedBy: '<u>Dee</u>',
+        };
+        const missingBasis = { ...policy, version: 3, decision: 'rejected', termsUrl: null, containsPersonalData: true, personalDataBasis: null };
+        const wrapper = mount(Show, { props: { source: { ...source, currentPolicyVersion: 2 }, ...review, policies: [missingBasis, policy, unsafe] } });
+        expect(wrapper.findAll('dd')[1]?.text()).toBe('Version 2'); // "Policy in force"
+        expect(wrapper.text()).toContain('Version 2: Approved');
+        expect(wrapper.text()).toContain('Version 1: Needs more information');
+        expect(wrapper.text()).toContain('Lawful basis: not recorded');
+        for (const tag of ['img', 'b', 'i', 'u']) {
+            expect(wrapper.find(tag).exists()).toBe(false);
+        }
+        for (const text of ['<img src=x onerror=alert(1)>', '<b>terms</b>', 'Lawful basis: <i>basis</i>', '<u>Dee</u>']) {
+            expect(wrapper.text()).toContain(text);
+        }
+        expect(wrapper.findAll('a[target="_blank"]').map((a) => a.attributes('href'))).toEqual(['https://news.example/feed', 'https://news.example/terms']);
     });
 });

@@ -114,23 +114,23 @@ class SourceService
 
     /**
      * The domain of a base URL, or a validation error saying what is wrong with it. One rule for the form request and
-     * the service.
+     * the service; a policy's terms URL follows it too (P1-31a), reported under its own field.
      *
      * @throws ValidationException
      */
-    public static function host(string $baseUrl): string
+    public static function host(string $baseUrl, string $field = 'base_url', string $label = 'base URL'): string
     {
         $problem = match (true) {
-            ! WebAddress::isValid($baseUrl) => 'The base URL must be an http:// or https:// address.',
-            WebAddress::hasCredentials($baseUrl) => 'The base URL must not contain a user name or password.',
+            ! WebAddress::isValid($baseUrl) => "The $label must be an http:// or https:// address.",
+            WebAddress::hasCredentials($baseUrl) => "The $label must not contain a user name or password.",
             // Access keys and signed links travel in query strings; a base URL never needs one (TASK-0050 #1).
-            str_contains($baseUrl, '?') || str_contains($baseUrl, '#') => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
-            WebAddress::domain($baseUrl) === null => 'The base URL must use a domain name, not an IP address or a local name.',
-            ! self::hasValidPort($baseUrl) => 'The base URL has an invalid port: use 1 to 65535, without leading zeros.',
+            str_contains($baseUrl, '?') || str_contains($baseUrl, '#') => "The $label must not contain a query string or fragment: never put keys or tokens in it.",
+            WebAddress::domain($baseUrl) === null => "The $label must use a domain name, not an IP address or a local name.",
+            ! self::hasValidPort($baseUrl) => "The $label has an invalid port: use 1 to 65535, without leading zeros.",
             default => null,
         };
         if ($problem !== null) {
-            throw ValidationException::withMessages(['base_url' => $problem]);
+            throw ValidationException::withMessages([$field => $problem]);
         }
 
         return (string) WebAddress::domain($baseUrl);

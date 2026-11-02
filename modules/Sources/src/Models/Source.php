@@ -4,6 +4,7 @@ namespace Modules\Sources\Models;
 
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Modules\Platform\Access\Classifiable;
 use Modules\Platform\Access\Scoped;
 use Modules\Platform\Access\VisibleTo;
@@ -21,6 +22,7 @@ use Modules\Platform\Classification;
  * @property ?string $host
  * @property string $method
  * @property string $status
+ * @property ?int $current_policy_id the approved policy in force (P1-31a)
  * @property string $default_reliability
  * @property int $owner_id
  * @property int $proposed_by
@@ -47,6 +49,18 @@ class Source extends Model implements Classifiable, Scoped
     public function getRouteKeyName(): string
     {
         return 'ulid';
+    }
+
+    /**
+     * The policy decisions on this source (P1-31a). A policy has no visibility of its own: it is read only through a
+     * source the viewer can see, so whoever sees the source sees its whole history (TASK-0059 #3). A policy-level scope
+     * would need its own check here.
+     *
+     * @return HasMany<SourcePolicy, $this>
+     */
+    public function policies(): HasMany
+    {
+        return $this->hasMany(SourcePolicy::class);
     }
 
     public function classification(): Classification
