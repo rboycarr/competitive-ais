@@ -12,12 +12,16 @@ use Illuminate\Database\Events\NoPendingMigrations;
 use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Laravel\Pennant\FeatureManager;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
 use Modules\Platform\Console\CreateAuditCheckpoint;
 use Modules\Platform\Console\RelayOutbox;
+use Modules\Platform\Console\ShowFeatures;
+use Modules\Platform\Console\SwitchFeature;
 use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
 use Modules\Platform\Http\Middleware\AssignRequestId;
@@ -28,13 +32,14 @@ use Modules\Platform\Jobs\CreateAuditCheckpointJob;
 use Modules\Platform\Jobs\RelayOutboxJob;
 use Modules\Platform\Jobs\VerifyAuditChainJob;
 use Modules\Platform\Outbox\OutboxEvents;
+use Modules\Platform\Support\Features;
 use Modules\Platform\Support\ModuleServiceProvider;
 use RuntimeException;
 use Throwable;
 
 /**
  * Shared kernel (docs/01 §3): database accounts and grants, the audit trail (P1-05), the transactional outbox
- * (P1-06), and secure HTTP defaults (P1-08); AccessScope in a later story.
+ * (P1-06), secure HTTP defaults (P1-08) and feature flags; AccessScope in a later story.
  */
 class PlatformServiceProvider extends ModuleServiceProvider
 {
@@ -62,12 +67,30 @@ class PlatformServiceProvider extends ModuleServiceProvider
         DB::prohibitDestructiveCommands($this->app->isProduction());
 
         if ($this->app->runningInConsole()) {
-            $this->commands([ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, RelayOutbox::class]);
+            $this->commands([
+                ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, RelayOutbox::class,
+                ShowFeatures::class, SwitchFeature::class,
+            ]);
         }
 
         $this->runSchemaCommandsAsMigrator();
         $this->scheduleJobs();
         $this->secureHttpDefaults();
+        $this->featureFlags();
+    }
+
+    /**
+     * Pennant stores the flags (docs/10); Support\Features reads and switches them. Pennant forgets its cached values
+     * only after a job succeeds, so a worker would keep a flag's old state after a failed job: forget them before
+     * every job instead, so each job reads the stored state.
+     */
+    private function featureFlags(): void
+    {
+        $this->callAfterResolving(FeatureManager::class, fn (FeatureManager $pennant) => Features::defineDefaults($pennant));
+        Event::listen(JobProcessing::class, fn () => $this->app->make(FeatureManager::class)->flushCache());
+
+        // Codes only: the flag's name and its new state.
+        $this->app->make(AuditActions::class)->define('feature.switched', ['flag' => 'code', 'enabled' => 'bool']);
     }
 
     /**

@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
 use InvalidArgumentException;
+use Laravel\Pennant\FeatureManager;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
 use Modules\Platform\Support\Features;
@@ -35,7 +36,6 @@ class SourceTest extends TestCase
         parent::setUp();
 
         $this->withoutVite();
-        config(['features.collection' => false]);
         $this->analyst = $this->createUser('analyst@example.test', 'ci_analyst', clearance: Classification::Confidential);
     }
 
@@ -98,9 +98,10 @@ class SourceTest extends TestCase
         }
         $this->actingAs($this->analyst)->get('/sources')->assertInertia(fn (AssertableInertia $page) => $page->where('methods', ['manual']));
 
-        // Not even a direct call gets past it, and anything but exactly true is off.
-        foreach ([false, null, 'true', 'false', 1, 0, '1'] as $value) {
-            config(['features.collection' => $value]);
+        // Not even a direct call gets past it, and any stored value but exactly true is off (Pennant itself counts
+        // everything but false as active).
+        foreach ([false, null, 'true', 'false', 1, 0, '1', ['on']] as $value) {
+            app(FeatureManager::class)->store()->globally()->activate(Features::COLLECTION, $value);
             try {
                 app(SourceService::class)->propose($this->analyst, ['name' => 'Direct', 'source_type' => 'rss', 'method' => 'rss', 'base_url' => 'https://feeds.example/', 'classification' => 'internal']);
                 $this->fail('An automated method was accepted with the flag set to '.json_encode($value));
@@ -111,7 +112,7 @@ class SourceTest extends TestCase
         $this->assertSame(0, Source::query()->count());
 
         // With the flag on (Phase 3), automated methods are accepted, and need an address.
-        config(['features.collection' => true]);
+        app(Features::class)->switch(Features::COLLECTION, true);
         $this->actingAs($this->analyst)->post('/sources', $this->form('Feed', ['method' => 'rss']))->assertSessionHasErrors(['base_url' => 'Automated collection needs a base URL.']);
         $this->actingAs($this->analyst)->post('/sources', $this->form('Feed', ['method' => 'rss', 'base_url' => 'https://feeds.example/rss']))->assertSessionHasNoErrors();
         $this->assertSame('rss', Source::query()->sole()->method);

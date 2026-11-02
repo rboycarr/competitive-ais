@@ -217,6 +217,7 @@ return [
             'competitor_aliases', // P1-21: removing one is an audited correction
             'competitor_relationships', // P1-21: ended with valid_to; removing one is an audited correction
             'failed_jobs',
+            'features', // Pennant feature flags; switched only by the audited feature:switch command
             'job_batches',
             'jobs',
             'model_has_permissions',
