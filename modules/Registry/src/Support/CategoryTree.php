@@ -36,6 +36,26 @@ final class CategoryTree
     }
 
     /**
+     * Every category depth first, siblings by name, for pages that indent by depth (Admin › Categories, product forms).
+     *
+     * @return list<ProductCategory>
+     */
+    public static function depthFirst(): array
+    {
+        $children = ProductCategory::query()->get(['id', 'parent_id', 'name', 'path', 'depth'])->groupBy(fn (ProductCategory $c): int => (int) $c->parent_id);
+        $ordered = [];
+        $walk = function (int $parentKey) use (&$walk, &$ordered, $children): void {
+            foreach ($children->get($parentKey, collect())->sortBy(fn (ProductCategory $c): string => mb_strtolower($c->name)) as $category) {
+                $ordered[] = $category;
+                $walk($category->id);
+            }
+        };
+        $walk(0);
+
+        return $ordered;
+    }
+
+    /**
      * The categories below $rootId (not itself), through parent links. A move rewrites exactly these rows, so a corrupt
      * row elsewhere whose path merely starts like the subtree's is never touched (TASK-0037).
      *

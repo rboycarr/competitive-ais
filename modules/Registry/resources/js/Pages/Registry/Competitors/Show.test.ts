@@ -41,6 +41,7 @@ const props = {
     aliases: [{ id: 7, alias: '<i>ACME</i>', type: 'brand' }], aliasTypes: ['brand', 'trade', 'former', 'abbreviation', 'local'],
     relationships: [relationship], relationTypes: ['subsidiary', 'brand_owner', 'joint_venture', 'partner', 'distributor'],
     precisions: ['day', 'month', 'year', 'unknown'], others: [relationship.other],
+    products: [{ ulid: '01JPROD0000000000000000000', name: '<i>Crunch</i> 150 g', status: 'active' }],
 };
 
 describe('Registry/Competitors/Show', () => {

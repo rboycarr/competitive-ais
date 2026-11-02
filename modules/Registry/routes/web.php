@@ -6,6 +6,8 @@ use Modules\Registry\Http\Controllers\CategoryController;
 use Modules\Registry\Http\Controllers\CompetitorAliasController;
 use Modules\Registry\Http\Controllers\CompetitorController;
 use Modules\Registry\Http\Controllers\CompetitorRelationshipController;
+use Modules\Registry\Http\Controllers\ProductController;
+use Modules\Registry\Http\Controllers\VariantController;
 
 // Competitors (P1-20). Reading needs competitor.view, changes competitor.manage; the service and AccessScope check
 // again (hidden entries are 404). No delete route for competitors: they are archived.
@@ -32,6 +34,18 @@ Route::middleware('auth')->group(function () {
         Route::post('/brands', [BrandController::class, 'store'])->name('brands.store');
         Route::put('/brands/{brand}', [BrandController::class, 'update'])->name('brands.update');
         Route::delete('/brands/{brand}', [BrandController::class, 'destroy'])->name('brands.destroy');
+    });
+
+    // Products and variants (P1-22b): visible like competitors (ProductAccess); retired with a status, never deleted.
+    Route::middleware('can:product.view')->group(function () {
+        Route::get('/products', [ProductController::class, 'index'])->name('products.index');
+        Route::get('/products/{product}', [ProductController::class, 'show'])->name('products.show');
+    });
+    Route::middleware('can:product.manage')->group(function () {
+        Route::post('/products', [ProductController::class, 'store'])->name('products.store');
+        Route::put('/products/{product}', [ProductController::class, 'update'])->name('products.update');
+        Route::post('/products/{product}/variants', [VariantController::class, 'store'])->name('products.variants.store');
+        Route::put('/products/{product}/variants/{variant}', [VariantController::class, 'update'])->name('products.variants.update');
     });
 
     // Admin › Categories (P1-22a): the product category tree.

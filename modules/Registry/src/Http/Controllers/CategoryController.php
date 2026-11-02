@@ -8,6 +8,7 @@ use Inertia\Inertia;
 use Inertia\Response;
 use Modules\Registry\Actions\CategoryService;
 use Modules\Registry\Models\ProductCategory;
+use Modules\Registry\Support\CategoryTree;
 
 /** Admin › Categories (P1-22a): the product category tree for taxonomy.manage holders; CategoryService checks again. */
 class CategoryController
@@ -16,17 +17,9 @@ class CategoryController
 
     public function index(): Response
     {
-        $all = ProductCategory::query()->get(['id', 'parent_id', 'name', 'path', 'depth']);
-        $children = $all->groupBy(fn (ProductCategory $c): int => (int) $c->parent_id);
-        $rows = [];
-        // Depth first, siblings by name, so the page can indent by depth.
-        $walk = function (int $parentKey) use (&$walk, &$rows, $children): void {
-            foreach ($children->get($parentKey, collect())->sortBy(fn (ProductCategory $c): string => mb_strtolower($c->name)) as $category) {
-                $rows[] = ['id' => $category->id, 'parentId' => $category->parent_id, 'name' => $category->name, 'depth' => $category->depth, 'path' => $category->path];
-                $walk($category->id);
-            }
-        };
-        $walk(0);
+        $rows = array_map(fn (ProductCategory $c): array => [
+            'id' => $c->id, 'parentId' => $c->parent_id, 'name' => $c->name, 'depth' => $c->depth, 'path' => $c->path,
+        ], CategoryTree::depthFirst());
 
         return Inertia::render('Registry/Admin/Categories', ['categories' => $rows, 'maxDepth' => ProductCategory::MAX_DEPTH]);
     }

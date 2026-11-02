@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Link, router, useForm } from '@inertiajs/vue3';
+import { Link, router, useForm, usePage } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 
 type Option = { ulid: string; name: string };
 type Brand = { ulid: string; name: string; owner: Option | null };
 
 const props = defineProps<{ brands: Brand[]; canManage: boolean; competitors: Option[] }>();
+// A refused removal (products use the brand) comes back as a page error.
+const page = usePage<{ errors?: Record<string, string> }>();
+const removeError = computed(() => page.props.errors?.brand ?? null);
 
 // Our brands first, then one group per competitor (the server sorts them that way).
 const groups = computed(() => {
@@ -49,6 +52,7 @@ function remove(brand: Brand): void {
 
 <template>
     <AppLayout title="Brands">
+        <p v-if="removeError" class="mb-4 text-sm text-red-700" role="alert">{{ removeError }}</p>
         <p v-if="props.brands.length === 0" class="mb-6 text-sm text-slate-600">No brands recorded.</p>
         <section v-for="group in groups" :key="group.key" :aria-labelledby="`brands-${group.key}`" class="mb-6 max-w-2xl">
             <h2 :id="`brands-${group.key}`" class="mb-2 text-lg font-semibold">

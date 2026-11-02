@@ -17,6 +17,7 @@ use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\CompetitorRelationship;
+use Modules\Registry\Support\Dates;
 
 /**
  * Corporate relationships (P1-21, docs/03 Registry):
@@ -160,15 +161,7 @@ class CompetitorRelationshipService
 
     private function date(?string $value, string $field): ?CarbonImmutable
     {
-        $value = trim((string) $value);
-        if ($value === '') {
-            return null;
-        }
-        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m) !== 1 || ! checkdate((int) $m[2], (int) $m[3], (int) $m[1]) || (int) $m[1] < 1800 || (int) $m[1] > 2199) {
-            throw ValidationException::withMessages([$field => 'Enter a date between 1800 and 2199 as YYYY-MM-DD.']);
-        }
-
-        return CarbonImmutable::parse($value, 'UTC')->startOfDay();
+        return Dates::parse($value, $field);
     }
 
     /**
