@@ -11,7 +11,8 @@ use Illuminate\Support\Facades\Schema;
  * policy review (P1-31) can refuse the proposer as approver; `current_policy_id` comes with `source_policies` in P1-31.
  * The base URL is stored and shown, never fetched; `host` is its domain (lower case, punycode), set by the app. The
  * CHECKs hold the same URL rules as SourceService (TASK-0050 #2): no user name or password, no query string or
- * fragment, a domain-shaped host (two or more labels, not numeric) that matches the URL's authority.
+ * fragment, a domain-shaped host (two or more labels, not numeric) that matches the URL's authority, with an optional
+ * port from 1 to 65535 without leading zeros (TASK-0051).
  */
 return new class extends Migration
 {
@@ -48,7 +49,7 @@ return new class extends Migration
             ADD CONSTRAINT sources_host_check CHECK ((base_url IS NULL) = (host IS NULL) AND (host IS NULL OR (
                 host REGEXP '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' AND host NOT REGEXP '[.][0-9]+$'))),
             ADD CONSTRAINT sources_host_match_check CHECK (host IS NULL OR REGEXP_LIKE(base_url,
-                CONCAT('^https?://', REPLACE(CONVERT(host USING utf8mb4), '.', '[.]'), '[.]?(:[0-9]{1,5})?(/|$)'), 'i')),
+                CONCAT('^https?://', REPLACE(CONVERT(host USING utf8mb4), '.', '[.]'), '[.]?(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(/|$)'), 'i')),
             ADD CONSTRAINT sources_collection_url_check CHECK (method = 'manual' OR base_url IS NOT NULL)");
     }
 

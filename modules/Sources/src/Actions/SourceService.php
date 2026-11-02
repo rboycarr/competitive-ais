@@ -126,6 +126,7 @@ class SourceService
             // Access keys and signed links travel in query strings; a base URL never needs one (TASK-0050 #1).
             str_contains($baseUrl, '?') || str_contains($baseUrl, '#') => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
             WebAddress::domain($baseUrl) === null => 'The base URL must use a domain name, not an IP address or a local name.',
+            ! self::hasValidPort($baseUrl) => 'The base URL has an invalid port: use 1 to 65535, without leading zeros.',
             default => null,
         };
         if ($problem !== null) {
@@ -133,6 +134,17 @@ class SourceService
         }
 
         return (string) WebAddress::domain($baseUrl);
+    }
+
+    /** No port, or 1 to 65535 without leading zeros: the same rule as sources_host_match_check (TASK-0051). */
+    private static function hasValidPort(string $baseUrl): bool
+    {
+        $authority = (string) preg_replace('#^https?://([^/]*).*$#is', '$1', $baseUrl);
+        if (! str_contains($authority, ':')) {
+            return true;
+        }
+
+        return preg_match('/:([1-9][0-9]{0,4})$/', $authority, $port) === 1 && (int) $port[1] <= 65535;
     }
 
     /** Inside the write transaction: the proposer by default, otherwise an active source.propose holder now. */

@@ -147,6 +147,7 @@ class SourceTest extends TestCase
             'http://localhost/' => 'The base URL must use a domain name, not an IP address or a local name.',
             'http://10.0.0.1.:8080/' => 'The base URL must use a domain name, not an IP address or a local name.',
             'https://api.example/feed?api_key=secret' => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
+            'https://news.example:08080/' => 'The base URL has an invalid port: use 1 to 65535, without leading zeros.',
             'https://api.example/feed?' => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
             'https://api.example/feed#token=secret' => 'The base URL must not contain a query string or fragment: never put keys or tokens in it.',
         ] as $url => $message) {
@@ -163,9 +164,19 @@ class SourceTest extends TestCase
         $this->assertSame(0, Source::query()->count());
         $this->assertSame(0, DB::table('audit_events')->where('action', 'source.proposed')->count());
 
+        foreach (['https://news.example:1/', 'https://news.example:65535/'] as $url) {
+            app(SourceService::class)->propose($this->analyst, ['name' => 'Port', 'source_type' => 'website', 'base_url' => $url, 'classification' => 'internal']);
+        }
+        $this->assertSame(2, Source::query()->where('name', 'Port')->count());
+        // PHP's URL check may refuse these first; either way the base URL is refused.
+        foreach (['https://news.example:0/', 'https://news.example:/', 'https://news.example:65536/'] as $url) {
+            $this->actingAs($this->analyst)->post('/sources', $this->form('Bad port', ['base_url' => $url]))->assertSessionHasErrors('base_url');
+        }
+        $this->assertSame(0, Source::query()->where('name', 'Bad port')->count());
+
         // A valid other owner, in either ULID case.
         $this->actingAs($this->analyst)->post('/sources', $this->form('Good', ['owner' => strtolower($internalOnly->ulid)]))->assertSessionHasNoErrors();
-        $this->assertSame($internalOnly->id, Source::query()->sole()->owner_id);
+        $this->assertSame($internalOnly->id, Source::query()->where('name', 'Good')->sole()->owner_id);
     }
 
     public function test_visibility_follows_the_matrix_for_lists_and_details(): void
@@ -247,7 +258,12 @@ class SourceTest extends TestCase
                 }
             }
         }
-        foreach ([['https://other.example/', 'news.example'], ['https://news.example.evil.example/', 'news.example'], ['https://xnews.example/', 'news.example'], ['https://news.example', 'ews.example']] as [$url, $host]) {
+        foreach ([
+            ['https://other.example/', 'news.example'], ['https://news.example.evil.example/', 'news.example'], ['https://xnews.example/', 'news.example'], ['https://news.example', 'ews.example'],
+            // Ports: 1 to 65535 without leading zeros (TASK-0051).
+            ['https://news.example:0/', 'news.example'], ['https://news.example:00000/', 'news.example'], ['https://news.example:065535/', 'news.example'],
+            ['https://news.example:65536/', 'news.example'], ['https://news.example:99999/', 'news.example'], ['https://news.example:/', 'news.example'],
+        ] as [$url, $host]) {
             try {
                 DB::table('sources')->insert($row(['base_url' => $url, 'host' => $host]));
                 $this->fail("The database accepted host $host for $url.");
@@ -256,7 +272,10 @@ class SourceTest extends TestCase
             }
         }
         // What the service stores passes: upper-case address, trailing dot, port, punycode.
-        foreach ([['HTTPS://News.Example./market', 'news.example'], ['https://news.example:8443', 'news.example'], ['https://xn--bcher-kva.example/a/b', 'xn--bcher-kva.example']] as [$url, $host]) {
+        foreach ([
+            ['HTTPS://News.Example./market', 'news.example'], ['https://news.example:8443', 'news.example'], ['https://xn--bcher-kva.example/a/b', 'xn--bcher-kva.example'],
+            ['https://news.example:1/', 'news.example'], ['https://news.example:65535/', 'news.example'], ['https://news.example:59999/', 'news.example'],
+        ] as [$url, $host]) {
             DB::table('sources')->insert($row(['base_url' => $url, 'host' => $host]));
         }
 
