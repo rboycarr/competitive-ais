@@ -15,6 +15,7 @@ type Competitor = {
 const props = defineProps<{
     competitor: Competitor; lifecycles: string[]; canManage: boolean; tiers: string[]; analysts: Option[]; classifications: string[];
     aliases: Alias[]; aliasTypes: string[]; relationships: Relationship[]; relationTypes: string[]; precisions: string[]; others: Option[];
+    products: { ulid: string; name: string; status: string }[];
 }>();
 
 // The server accepts only http(s) addresses; checked again here so no other scheme becomes a link.
@@ -56,6 +57,16 @@ function setLifecycle(): void {
         </dl>
 
         <AliasesSection :competitor-ulid="props.competitor.ulid" :competitor-name="props.competitor.name" :aliases="props.aliases" :alias-types="props.aliasTypes" :can-manage="props.canManage" />
+        <section aria-labelledby="products-heading" class="mb-6 max-w-2xl">
+            <h2 id="products-heading" class="mb-2 text-lg font-semibold">Products</h2>
+            <ul v-if="props.products.length > 0" class="space-y-1 text-sm">
+                <li v-for="product in props.products" :key="product.ulid">
+                    <Link :href="`/products/${product.ulid}`" class="underline">{{ product.name }}</Link>
+                    <span class="text-slate-600"> · {{ product.status }}</span>
+                </li>
+            </ul>
+            <p v-else class="text-sm text-slate-600">No products recorded.</p>
+        </section>
         <RelationshipsSection :competitor-ulid="props.competitor.ulid" :relationships="props.relationships" :relation-types="props.relationTypes" :precisions="props.precisions" :others="props.others" :can-manage="props.canManage" />
 
         <template v-if="props.canManage">

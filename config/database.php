@@ -237,6 +237,8 @@ return [
         'no_delete' => [
             'access_grants',
             'competitors', // archived, never deleted (P1-20)
+            'product_variants', // retired with a status (P1-22b)
+            'products', // retired with a status (P1-22b)
         ],
 
         // No access for the app account.

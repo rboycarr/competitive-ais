@@ -18,6 +18,7 @@ use Modules\Registry\Http\Requests\CompetitorRequest;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\CompetitorAlias;
 use Modules\Registry\Models\CompetitorRelationship;
+use Modules\Registry\Models\Product;
 
 /**
  * Competitors (P1-20): list and profile for competitor.view holders, filtered by AccessScope (hidden entries are 404);
@@ -92,6 +93,11 @@ class CompetitorController
             'aliases' => $competitor->aliases()->orderBy('alias')->get()->map(fn (CompetitorAlias $a): array => ['id' => $a->id, 'alias' => $a->alias, 'type' => $a->alias_type])->all(),
             'aliasTypes' => CompetitorAlias::TYPES,
             'relationships' => $this->relationships($viewer, $competitor),
+            // Its products the viewer can see (P1-22b), for product.view holders.
+            'products' => $this->gate->forUser($viewer)->allows('product.view')
+                ? Product::query()->visibleTo($viewer)->where('competitor_id', $competitor->id)->orderBy('name')->get(['ulid', 'name', 'status'])
+                    ->map(fn (Product $p): array => ['ulid' => $p->ulid, 'name' => $p->name, 'status' => $p->status])->all()
+                : [],
             'relationTypes' => CompetitorRelationship::TYPES,
             'precisions' => CompetitorRelationship::PRECISIONS,
             // Candidates for a new relationship: every other competitor the viewer can see, archived ones included.

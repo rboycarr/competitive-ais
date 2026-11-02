@@ -15,6 +15,7 @@ use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Registry\Models\Brand;
 use Modules\Registry\Models\Competitor;
+use Modules\Registry\Models\Product;
 use Modules\Registry\Support\Names;
 
 /**
@@ -23,7 +24,7 @@ use Modules\Registry\Support\Names;
  *   actor, checked again under a shared lock on the competitor row (a hidden owner is "not found", never named);
  * - names are in the registry normal form and unique per owner, ignoring case and accents (the UNIQUE index decides);
  * - the owner never changes; every change is audited with IDs and codes and the owner's classification (ours:
- *   internal). Removing a brand that products use is refused once products exist (P1-22b).
+ *   internal). A brand that products use is not removed (P1-22b).
  */
 class BrandService
 {
@@ -88,9 +89,14 @@ class BrandService
 
         $this->db->transaction(function () use ($actor, $brand, $owner): void {
             $owner = $owner === null ? null : $this->lockVisible($actor, $owner);
-            if (Brand::query()->whereKey($brand->id)->delete() === 0) {
+            if (Brand::query()->whereKey($brand->id)->lockForUpdate()->first() === null) {
                 return; // already removed
             }
+            // Products of any classification count; the message names none of them (P1-22b).
+            if (Product::query()->where('brand_id', $brand->id)->sharedLock()->exists()) {
+                throw ValidationException::withMessages(['brand' => 'Products use this brand, so it cannot be removed.']);
+            }
+            Brand::query()->whereKey($brand->id)->delete();
             $this->audit->record('brand.removed', $brand, $this->context($owner), $this->actor($actor), $this->classification($owner));
         });
     }

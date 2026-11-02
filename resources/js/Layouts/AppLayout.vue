@@ -15,6 +15,7 @@ const status = computed(() => page.props.flash?.status ?? null);
 // Links only; every action is authorized on the server (P1-13).
 const mainLinks = computed(() => [
     can.value.competitorView ? { href: '/competitors', label: 'Competitors' } : null,
+    can.value.productView ? { href: '/products', label: 'Products' } : null,
     can.value.productView ? { href: '/brands', label: 'Brands' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 const adminLinks = computed(() => [

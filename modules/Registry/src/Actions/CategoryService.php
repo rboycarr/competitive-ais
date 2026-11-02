@@ -12,6 +12,7 @@ use Illuminate\Validation\ValidationException;
 use LogicException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Registry\Models\Product;
 use Modules\Registry\Models\ProductCategory;
 use Modules\Registry\Support\CategoryTree;
 use Modules\Registry\Support\Names;
@@ -23,7 +24,7 @@ use Modules\Registry\Support\Names;
  * - creating locks the parent row; moving locks every category row, so tree changes run one at a time and two
  *   concurrent moves cannot build a cycle; a category never moves under itself or one of its subcategories, and its
  *   subtree's paths and depths move with it in the same transaction;
- * - only a category without subcategories can be removed (products are checked too once they exist, P1-22b);
+ * - only a category without subcategories or products can be removed (P1-22b);
  * - every change is audited (category IDs only).
  */
 class CategoryService
@@ -145,6 +146,10 @@ class CategoryService
             }
             if (ProductCategory::query()->where('parent_id', $locked->id)->sharedLock()->exists()) {
                 throw ValidationException::withMessages(['category' => 'Move or remove its subcategories first.']);
+            }
+            // Products of any classification count; the message names none of them (P1-22b).
+            if (Product::query()->where('category_id', $locked->id)->sharedLock()->exists()) {
+                throw ValidationException::withMessages(['category' => 'Products use this category; move them to another one first.']);
             }
             $locked->delete();
             $this->audit->record('category.removed', $locked, $locked->parent_id === null ? [] : ['parent_id' => $locked->parent_id], $this->actor($actor));
