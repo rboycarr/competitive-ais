@@ -11,11 +11,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\PendingCommand;
 use InvalidArgumentException;
 use Laravel\Pennant\FeatureManager;
+use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Support\Features;
 use RuntimeException;
+use Symfony\Component\Console\Exception\InvalidOptionException;
 use Tests\Support\Concurrently;
 use Tests\TestCase;
+use Throwable;
 
 /**
  * Feature flags (docs/01, docs/10, TASK-0053): one global row per flag, stored off by its migration; the app account
@@ -151,6 +154,29 @@ class FeaturesTest extends TestCase
 
         $this->assertFalse($features->enabled(Features::COLLECTION));
         $this->assertSame(['false'], DB::table('features')->pluck('value')->all());
+
+        // Through the command: exit code 1, and the default connection is the app account again (TASK-0056 #2).
+        $default = DB::getDefaultConnection();
+        $this->assertSame(1, Artisan::call('feature:switch', ['flag' => 'collection', 'state' => 'on']));
+        $this->assertStringContainsString('The [collection] feature was not switched: audit unavailable', Artisan::output());
+        $this->assertSame($default, DB::getDefaultConnection());
+        $this->assertSame(['false'], DB::table('features')->pluck('value')->all());
+    }
+
+    public function test_switching_cannot_name_another_connection(): void
+    {
+        // feature:switch has no --database option, so the console refuses it before anything runs (TASK-0056 #3).
+        $default = DB::getDefaultConnection();
+        try {
+            Artisan::call('feature:switch', ['flag' => 'collection', 'state' => 'on', '--database' => $default]);
+            $this->fail('feature:switch accepted --database.');
+        } catch (Throwable $e) {
+            $this->assertInstanceOf(InvalidOptionException::class, $e);
+            $this->assertSame('The "--database" option does not exist.', $e->getMessage());
+        }
+        $this->assertSame($default, DB::getDefaultConnection());
+        $this->assertSame(['false'], DB::table('features')->pluck('value')->all());
+        $this->assertSame(0, DB::table('audit_events')->count());
     }
 
     public function test_concurrent_switches_run_one_after_the_other(): void
@@ -217,7 +243,20 @@ class FeaturesTest extends TestCase
 
     public function test_the_audit_lookup_follows_the_index_without_sorting(): void
     {
-        // A few switches, then the lookup enabled() runs, explained as sent (TASK-0055 #1).
+        // The index the lookup relies on (TASK-0056 #1).
+        $this->assertSame(['action', 'occurred_at'], DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', DB::connection()->getDatabaseName())->where('TABLE_NAME', 'audit_events')
+            ->where('INDEX_NAME', 'audit_events_action_occurred_at_index')->orderBy('SEQ_IN_INDEX')->pluck('COLUMN_NAME')->all());
+
+        // Enough other audit rows that a table scan is clearly the worse plan, a few switches, then the lookup
+        // enabled() runs, explained as sent (TASK-0055 #1).
+        $this->app->make(AuditActions::class)->define('probe.filler');
+        DB::transaction(function (): void {
+            foreach (range(1, 300) as $i) {
+                $this->app->make(AuditLogger::class)->record('probe.filler');
+            }
+        });
+        DB::statement('ANALYZE TABLE audit_events');
         $this->asMigrator(function (): void {
             foreach ([true, false, true] as $on) {
                 $this->app->make(Features::class)->switch(Features::COLLECTION, $on);

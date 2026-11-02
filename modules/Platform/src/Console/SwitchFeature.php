@@ -5,12 +5,14 @@ namespace Modules\Platform\Console;
 use Illuminate\Console\Command;
 use Illuminate\Console\ConfirmableTrait;
 use Modules\Platform\Support\Features;
+use Throwable;
 
 /**
  * Switches a feature flag on or off for everyone (docs/10 runbook). Operators only: it runs as the migrator account
  * (PlatformServiceProvider::MIGRATOR_COMMANDS), so only in the migrator service, and there is no screen for it until
  * the administration module.
- * Acts as the system; audited as feature.switched. Production asks for confirmation (or --force).
+ * Acts as the system; audited as feature.switched. Production asks for confirmation (or --force). A failed switch
+ * ends the command normally with exit code 1, so the provider switches the default connection back (TASK-0056 #2).
  */
 class SwitchFeature extends Command
 {
@@ -34,7 +36,16 @@ class SwitchFeature extends Command
             return self::FAILURE;
         }
 
-        if (! $features->switch($flag, $state === 'on')) {
+        try {
+            $changed = $features->switch($flag, $state === 'on');
+        } catch (Throwable $e) {
+            report($e);
+            $this->components->error("The [$flag] feature was not switched: {$e->getMessage()}");
+
+            return self::FAILURE;
+        }
+
+        if (! $changed) {
             $this->components->info("The [$flag] feature is already $state.");
 
             return self::SUCCESS;
