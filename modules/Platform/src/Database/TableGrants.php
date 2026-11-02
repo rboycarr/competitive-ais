@@ -32,7 +32,10 @@ class TableGrants
     /** Rows are revoked or closed by UPDATE, never deleted (P1-14). */
     public const NO_DELETE = ['SELECT', 'INSERT', 'UPDATE'];
 
-    private const CLASSES = ['mutable', 'append_only', 'no_delete', 'app_excluded'];
+    /** Reference data that only migrations write, e.g. ISO 4217 currencies (P1-23a). */
+    public const READ_ONLY = ['SELECT'];
+
+    private const CLASSES = ['mutable', 'append_only', 'no_delete', 'read_only', 'app_excluded'];
 
     public function __construct(
         private readonly DatabaseManager $db,
@@ -56,6 +59,7 @@ class TableGrants
                 'mutable' => self::MUTABLE,
                 'append_only' => self::APPEND_ONLY,
                 'no_delete' => self::NO_DELETE,
+                'read_only' => self::READ_ONLY,
                 default => [],
             };
 
@@ -121,7 +125,7 @@ class TableGrants
         $unclassified = array_keys(array_filter($plan, fn (array $t): bool => $t['class'] === 'unclassified'));
         if ($unclassified !== [] || $views !== []) {
             throw new RuntimeException(trim(
-                ($unclassified !== [] ? 'Unclassified tables (no app access granted; add each to database.grants mutable, append_only, no_delete or app_excluded): '.implode(', ', $unclassified).'. ' : '')
+                ($unclassified !== [] ? 'Unclassified tables (no app access granted; add each to one of database.grants '.implode(', ', self::CLASSES).'): '.implode(', ', $unclassified).'. ' : '')
                 .($views !== [] ? 'Views are not permitted: '.implode(', ', $views).'.' : '')
             ));
         }

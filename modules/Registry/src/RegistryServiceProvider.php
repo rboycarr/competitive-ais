@@ -11,7 +11,8 @@ use Modules\Registry\Lookup\EloquentCompetitorLookup;
 
 /**
  * Registry (M02–M04, docs/03): competitors (P1-20), aliases and relationships (P1-21), brands and the category tree
- * (P1-22a), products and variants (P1-22b); markets and taxonomies follow in Sprint 1.2. Competitor entries are classified records without
+ * (P1-22a), products and variants (P1-22b), currencies, markets and regions (P1-23a); channels, retailers and tags
+ * follow in Sprint 1.2. Competitor entries are classified records without
  * competitor/market scopes (PO decision 2026-11-01): classification and AccessScope decide who sees them.
  */
 class RegistryServiceProvider extends ModuleServiceProvider
@@ -58,6 +59,12 @@ class RegistryServiceProvider extends ModuleServiceProvider
         $audit->define('product.updated', ['fields' => 'code[]']);
         $audit->define('variant.created', ['product' => 'ulid']);
         $audit->define('variant.updated', ['fields' => 'code[]']);
+        // P1-23a: unclassified reference data (internal).
+        $audit->define('market.created');
+        $audit->define('market.updated', ['fields' => 'code[]']);
+        $audit->define('region.created', ['market' => 'ulid', 'level' => 'code', 'parent_id' => 'id']);
+        $audit->define('region.renamed', ['market' => 'ulid']);
+        $audit->define('region.removed', ['market' => 'ulid', 'level' => 'code', 'parent_id' => 'id']);
         // Domain events (docs/03: CompetitorCreated, CompetitorUpdated, CompetitorArchived) are defined with their first
         // consumer, the Phase 2 search indexer; the outbox refuses events that no handler subscribes to.
     }

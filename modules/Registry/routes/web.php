@@ -6,6 +6,7 @@ use Modules\Registry\Http\Controllers\CategoryController;
 use Modules\Registry\Http\Controllers\CompetitorAliasController;
 use Modules\Registry\Http\Controllers\CompetitorController;
 use Modules\Registry\Http\Controllers\CompetitorRelationshipController;
+use Modules\Registry\Http\Controllers\MarketController;
 use Modules\Registry\Http\Controllers\ProductController;
 use Modules\Registry\Http\Controllers\VariantController;
 
@@ -48,12 +49,21 @@ Route::middleware('auth')->group(function () {
         Route::put('/products/{product}/variants/{variant}', [VariantController::class, 'update'])->name('products.variants.update');
     });
 
-    // Admin › Categories (P1-22a): the product category tree.
+    // Admin › Categories (P1-22a) and Markets (P1-23a): shared taxonomy for taxonomy.manage holders.
     Route::middleware('can:taxonomy.manage')->prefix('admin')->name('admin.')->group(function () {
         Route::get('/categories', [CategoryController::class, 'index'])->name('categories.index');
         Route::post('/categories', [CategoryController::class, 'store'])->name('categories.store');
         Route::put('/categories/{category}', [CategoryController::class, 'update'])->name('categories.update')->whereNumber('category');
         Route::put('/categories/{category}/parent', [CategoryController::class, 'move'])->name('categories.move')->whereNumber('category');
         Route::delete('/categories/{category}', [CategoryController::class, 'destroy'])->name('categories.destroy')->whereNumber('category');
+
+        // Markets and their regions (P1-23a). Markets are never deleted.
+        Route::get('/markets', [MarketController::class, 'index'])->name('markets.index');
+        Route::post('/markets', [MarketController::class, 'store'])->name('markets.store');
+        Route::get('/markets/{market}', [MarketController::class, 'show'])->name('markets.show');
+        Route::put('/markets/{market}', [MarketController::class, 'update'])->name('markets.update');
+        Route::post('/markets/{market}/regions', [MarketController::class, 'storeRegion'])->name('markets.regions.store');
+        Route::put('/markets/{market}/regions/{region}', [MarketController::class, 'updateRegion'])->name('markets.regions.update')->whereNumber('region');
+        Route::delete('/markets/{market}/regions/{region}', [MarketController::class, 'destroyRegion'])->name('markets.regions.destroy')->whereNumber('region');
     });
 });

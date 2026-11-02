@@ -24,6 +24,7 @@ const adminLinks = computed(() => [
     can.value.teamManage ? { href: '/admin/teams', label: 'Teams' } : null,
     can.value.grantManage ? { href: '/admin/access-grants', label: 'Access grants' } : null,
     can.value.taxonomyManage ? { href: '/admin/categories', label: 'Categories' } : null,
+    can.value.taxonomyManage ? { href: '/admin/markets', label: 'Markets' } : null,
     can.value.auditView ? { href: '/admin/audit', label: 'Audit log' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 </script>
