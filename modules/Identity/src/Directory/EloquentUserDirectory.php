@@ -2,6 +2,7 @@
 
 namespace Modules\Identity\Directory;
 
+use Illuminate\Contracts\Auth\Authenticatable;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Identity\Contracts\UserSummary;
 use Modules\Identity\Models\User;
@@ -34,6 +35,11 @@ class EloquentUserDirectory implements UserDirectory
         return User::query()->whereIn('id', $ids)->get(['id', 'ulid', 'name', 'status'])
             ->mapWithKeys(fn (User $user): array => [$user->id => $this->summary($user)])
             ->all();
+    }
+
+    public function account(int $id): ?Authenticatable
+    {
+        return User::query()->find($id);
     }
 
     private function summary(User $user): UserSummary

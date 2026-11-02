@@ -41,7 +41,7 @@ Each module lists its responsibility, public contracts (what other modules may u
 - **Events:** `SourceProposed`, `SourcePolicyDecided`, `SourceApproved`, `SourceSuspended`, `SourceRetired`.
 - **Permissions:** `source.view`, `source.propose`, `source.approve` (Director), `source.manage`.
 - **State machine:** proposed → policy_review → approved | rejected(→ proposed after edit); approved → suspended → approved | retired. Each decision appends a `source_policies` version.
-- **Rules (Phase 1):** `method` must be `manual` while the `collection` flag is off. The proposer cannot approve their own source.
+- **Rules (Phase 1):** `method` must be `manual` while the `collection` flag is off. The proposer cannot approve their own source. Proposing implemented in P1-30 (`SourceService`; docs/02 §3.4): sources are classified records without scopes, visible through `AccessScope`; the owner must be an active `source.propose` holder who can see the source.
 - **Pages:** Sources (list, detail with policy history), Policy review form.
 
 ## Evidence (M09) — Phase 1

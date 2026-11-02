@@ -117,7 +117,7 @@ If a CI job is renamed in `.github/workflows/ci.yml`, update the `context` names
 | DB (`DB_*` for the app user; `DB_MIGRATOR_*`, `DB_RETENTION_*`, `DB_TEST_DATABASE`) | same | separate users (`docs/02` §6); `DB_READONLY_PASSWORD` and the root password in `.env.services` locally |
 | Object store (`AWS_*` = app key, bucket names) | same | separate keys per purpose; admin and audit-anchor keys in `.env.services` locally |
 | ClamAV, Redis, Mail | same | |
-| Feature flags | DB (Pennant) | collection and AI default off |
+| Feature flags (`FEATURE_COLLECTION`) | `.env` / configuration in Phase 1 (`config/features.php`); Pennant (DB) once a flag must change at run time | collection and AI default off; only `true` switches a flag on |
 
 ## 3. Production target (proposal; O3 open)
 Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates via ACME or the organization's CA). MySQL, Redis, MinIO, and ClamAV run on a private network. Backups go to encrypted offsite storage. Sizing is decided after O3/O5; Phase 4 local AI needs GPU sizing (O4).

@@ -5,7 +5,7 @@ import { Head, Link, usePage } from '@inertiajs/vue3';
 defineProps<{ title: string }>();
 
 type Shared = {
-    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean; productView?: boolean; taxonomyManage?: boolean } };
+    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean; productView?: boolean; taxonomyManage?: boolean; sourceView?: boolean } };
     flash?: { status?: string | null };
 };
 
@@ -17,6 +17,7 @@ const mainLinks = computed(() => [
     can.value.competitorView ? { href: '/competitors', label: 'Competitors' } : null,
     can.value.productView ? { href: '/products', label: 'Products' } : null,
     can.value.productView ? { href: '/brands', label: 'Brands' } : null,
+    can.value.sourceView ? { href: '/sources', label: 'Sources' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 const adminLinks = computed(() => [
     can.value.userView ? { href: '/admin/users', label: 'Users' } : null,

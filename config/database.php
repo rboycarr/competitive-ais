@@ -246,6 +246,7 @@ return [
             'markets', // grants and prices refer to them (P1-23a)
             'product_variants', // retired with a status (P1-22b)
             'products', // retired with a status (P1-22b)
+            'sources', // retired, never deleted: policies and evidence refer to them (P1-30)
         ],
 
         // SELECT only for the app account: reference data that only migrations write (P1-23a). Empty since
