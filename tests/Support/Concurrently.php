@@ -12,14 +12,24 @@ use Throwable;
  * before forking, so no socket is shared (the test environment keeps cache, session and queue in memory). All tasks
  * start at the same instant; each reports "ok" or the exception it ended with. The data a task needs must be
  * committed (DatabaseMigrations, not RefreshDatabase).
+ *
+ * The parent never waits without a limit (TASK-0046 #1): a task still running at the deadline is killed and reported
+ * as a timeout; a task that dies without reporting is reported as such. If forking fails part-way, the children
+ * already started are killed and reaped before the error is raised (TASK-0046 #4).
  */
 final class Concurrently
 {
+    public const TIMEOUT = 'timeout';
+
+    public const NO_RESULT = 'no result';
+
     /**
      * @param  list<callable(): mixed>  $tasks
-     * @return list<array{outcome: string, message: string}> per task, in order: 'ok' or the exception class
+     * @param  float  $timeout  seconds from the common start until unfinished tasks are killed
+     * @return list<array{outcome: string, message: string}> per task, in order: 'ok', the exception class, or one of
+     *                                                       TIMEOUT and NO_RESULT
      */
-    public static function run(array $tasks): array
+    public static function run(array $tasks, float $timeout = 120.0): array
     {
         if (! function_exists('pcntl_fork')) {
             throw new RuntimeException('Parallel tests need the pcntl extension.');
@@ -34,38 +44,79 @@ final class Concurrently
         }
         $start = microtime(true) + 0.5; // every child is forked well before this
         $pids = [];
-        foreach ($tasks as $i => $task) {
-            $pid = pcntl_fork();
-            if ($pid === -1) {
-                throw new RuntimeException('Cannot fork a task process.');
-            }
-            if ($pid === 0) {
-                $result = ['outcome' => 'ok', 'message' => ''];
-                try {
-                    while (microtime(true) < $start) {
-                        usleep(100);
-                    }
-                    $task();
-                } catch (Throwable $e) {
-                    $result = ['outcome' => $e::class, 'message' => $e->getMessage()];
+
+        try {
+            foreach ($tasks as $i => $task) {
+                $pid = pcntl_fork();
+                if ($pid === -1) {
+                    throw new RuntimeException('Cannot fork a task process.');
                 }
-                file_put_contents("$dir/$i.json", (string) json_encode($result));
-                // No shutdown handlers or destructors: they belong to the parent (PHPUnit, the application).
-                posix_kill(posix_getpid(), SIGKILL);
+                if ($pid === 0) {
+                    self::child($task, $start, "$dir/$i.json");
+                }
+                $pids[$i] = $pid;
             }
-            $pids[$i] = $pid;
+
+            return self::collect($pids, $dir, $start + $timeout);
+        } finally {
+            foreach ($pids as $pid) { // only those still running: collect() reaps the others
+                if (pcntl_waitpid($pid, $status, WNOHANG) === 0) {
+                    posix_kill($pid, SIGKILL);
+                    pcntl_waitpid($pid, $status);
+                }
+            }
+            array_map('unlink', glob("$dir/*") ?: []);
+            @rmdir($dir);
+        }
+    }
+
+    /** In the child: wait for the common start, run the task, report, and end without the parent's shutdown. */
+    private static function child(callable $task, float $start, string $file): never
+    {
+        $result = ['outcome' => 'ok', 'message' => ''];
+        try {
+            while (microtime(true) < $start) {
+                usleep(100);
+            }
+            $task();
+        } catch (Throwable $e) {
+            $result = ['outcome' => $e::class, 'message' => $e->getMessage()];
+        }
+        file_put_contents($file, (string) json_encode($result));
+        // No shutdown handlers or destructors: they belong to the parent (PHPUnit, the application).
+        posix_kill(posix_getpid(), SIGKILL);
+        exit(1); // not reached
+    }
+
+    /**
+     * @param  array<int, int>  $pids  task index => process ID
+     * @return list<array{outcome: string, message: string}>
+     */
+    private static function collect(array $pids, string $dir, float $deadline): array
+    {
+        $running = $pids;
+        while ($running !== [] && microtime(true) < $deadline) {
+            foreach ($running as $i => $pid) {
+                if (pcntl_waitpid($pid, $status, WNOHANG) !== 0) {
+                    unset($running[$i]);
+                }
+            }
+            usleep(10_000);
+        }
+        foreach ($running as $pid) {
+            posix_kill($pid, SIGKILL);
+            pcntl_waitpid($pid, $status);
         }
 
         $results = [];
-        foreach ($pids as $i => $pid) {
-            pcntl_waitpid($pid, $status);
-            $json = @file_get_contents("$dir/$i.json");
+        foreach (array_keys($pids) as $i) {
+            $json = isset($running[$i]) ? false : @file_get_contents("$dir/$i.json");
             /** @var array{outcome: string, message: string}|null $result */
             $result = is_string($json) ? json_decode($json, true) : null;
-            $results[$i] = $result ?? ['outcome' => 'no result', 'message' => 'The task process ended without reporting.'];
-            @unlink("$dir/$i.json");
+            $results[$i] = $result ?? (isset($running[$i])
+                ? ['outcome' => self::TIMEOUT, 'message' => 'The task was still running at the deadline and was killed.']
+                : ['outcome' => self::NO_RESULT, 'message' => 'The task process ended without reporting.']);
         }
-        @rmdir($dir);
 
         return array_values($results);
     }

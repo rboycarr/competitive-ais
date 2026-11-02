@@ -125,7 +125,10 @@ class ProductService
         }
 
         $brandUlid = strtoupper(trim((string) ($data['brand'] ?? '')));
-        $brand = $brandUlid === '' ? null : Brand::query()->where('ulid', $brandUlid)->sharedLock()->first();
+        // Find the ID with a plain read, then lock the row by its key: a locking read through the ULID index locks
+        // that index entry before the row, the reverse of BrandService::remove(), and the two deadlocked (P1-25).
+        $brandId = $brandUlid === '' ? null : Brand::query()->where('ulid', $brandUlid)->value('id');
+        $brand = $brandId === null ? null : Brand::query()->whereKey($brandId)->sharedLock()->first();
         if ($brandUlid !== '' && ($brand === null || $brand->competitor_id !== $owner?->id)) {
             throw ValidationException::withMessages(['brand' => 'Choose one of the owner\'s brands.']);
         }
