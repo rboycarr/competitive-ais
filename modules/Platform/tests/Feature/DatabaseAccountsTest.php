@@ -28,6 +28,8 @@ class DatabaseAccountsTest extends TestCase
 
     private const NO_DELETE_PROBE = 'zz_probe_no_delete';
 
+    private const READ_ONLY_PROBE = 'zz_probe_read_only';
+
     private const UNCLASSIFIED_PROBE = 'zz_probe_unclassified';
 
     /** MySQL ER_TABLEACCESS_DENIED_ERROR */
@@ -38,13 +40,15 @@ class DatabaseAccountsTest extends TestCase
         parent::setUp();
 
         $migrator = DB::connection('migrator');
-        foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE, self::NO_DELETE_PROBE] as $table) {
+        foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE, self::NO_DELETE_PROBE, self::READ_ONLY_PROBE] as $table) {
             $migrator->statement("create table `$table` (id bigint unsigned auto_increment primary key, note varchar(50) not null)");
         }
 
         config()->push('database.grants.append_only', self::APPEND_ONLY_PROBE);
         config()->push('database.grants.mutable', self::MUTABLE_PROBE);
         config()->push('database.grants.no_delete', self::NO_DELETE_PROBE);
+        config()->push('database.grants.read_only', self::READ_ONLY_PROBE);
+        $migrator->table(self::READ_ONLY_PROBE)->insert(['note' => 'seeded']);
         config()->set('database.grants.retention_tables.'.self::APPEND_ONLY_PROBE, ['SELECT', 'DELETE']);
         $this->app->make(TableGrants::class)->apply();
     }
@@ -52,7 +56,7 @@ class DatabaseAccountsTest extends TestCase
     protected function tearDown(): void
     {
         $migrator = DB::connection('migrator');
-        foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE, self::NO_DELETE_PROBE, self::UNCLASSIFIED_PROBE] as $table) {
+        foreach ([self::APPEND_ONLY_PROBE, self::MUTABLE_PROBE, self::NO_DELETE_PROBE, self::READ_ONLY_PROBE, self::UNCLASSIFIED_PROBE] as $table) {
             foreach ([config('database.grants.app_user'), config('database.grants.retention_user')] as $user) {
                 $migrator->unprepared('REVOKE IF EXISTS '.implode(', ', TableGrants::TABLE_PRIVILEGES)." ON `$table` FROM '$user'@'%' IGNORE UNKNOWN USER"); // @phpstan-ignore argument.type (constant table names, configured account names)
             }
@@ -108,6 +112,17 @@ class DatabaseAccountsTest extends TestCase
         $this->assertDenied(fn () => DB::table(self::NO_DELETE_PROBE)->where('id', $id)->delete());
         $this->assertDenied(fn () => DB::statement('truncate table `'.self::NO_DELETE_PROBE.'`'));
         $this->assertSame('revoked', DB::table(self::NO_DELETE_PROBE)->where('id', $id)->value('note'));
+    }
+
+    public function test_app_can_only_read_read_only_tables(): void
+    {
+        $this->assertSame(['seeded'], DB::table(self::READ_ONLY_PROBE)->pluck('note')->all());
+
+        $this->assertDenied(fn () => DB::table(self::READ_ONLY_PROBE)->insert(['note' => 'added']));
+        $this->assertDenied(fn () => DB::table(self::READ_ONLY_PROBE)->update(['note' => 'changed']));
+        $this->assertDenied(fn () => DB::table(self::READ_ONLY_PROBE)->delete());
+        $this->assertDenied(fn () => DB::statement('truncate table `'.self::READ_ONLY_PROBE.'`'));
+        $this->assertSame(['seeded'], DB::table(self::READ_ONLY_PROBE)->pluck('note')->all());
     }
 
     public function test_app_cannot_change_the_schema(): void
@@ -318,6 +333,32 @@ class DatabaseAccountsTest extends TestCase
         }
 
         $this->assertGreaterThanOrEqual(2, $checked, 'Expected the probe table and access_grants to be checked.');
+    }
+
+    public function test_every_existing_read_only_table_rejects_writes(): void
+    {
+        $checked = 0;
+
+        foreach ((array) config('database.grants.read_only') as $table) {
+            if (! DB::connection('migrator')->getSchemaBuilder()->hasTable($table)) {
+                continue; // not migrated yet; covered automatically once its migration exists
+            }
+
+            $privileges = DB::table('information_schema.TABLE_PRIVILEGES')
+                ->where('TABLE_SCHEMA', DB::connection()->getDatabaseName())
+                ->where('TABLE_NAME', $table)
+                ->pluck('PRIVILEGE_TYPE')
+                ->all();
+            $this->assertSame(['SELECT'], $privileges, "App grants on read-only [$table]");
+
+            $column = DB::connection('migrator')->getSchemaBuilder()->getColumnListing($table)[0];
+            $this->assertDenied(fn () => DB::table($table)->whereRaw('1 = 0')->update([$column => DB::raw("`$column`")])); // @phpstan-ignore argument.type (column name read from the schema)
+            $this->assertDenied(fn () => DB::table($table)->whereRaw('1 = 0')->delete());
+            $this->assertDenied(fn () => DB::statement("truncate table `$table`"));
+            $checked++;
+        }
+
+        $this->assertGreaterThanOrEqual(2, $checked, 'Expected the probe table and currencies to be checked.');
     }
 
     public function test_migrator_connection_is_refused_where_its_credentials_are_absent(): void

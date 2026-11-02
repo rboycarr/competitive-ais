@@ -224,6 +224,7 @@ return [
             'password_reset_tokens',
             'permissions',
             'product_categories', // P1-22a: empty categories may be removed (audited)
+            'regions', // P1-23a: regions without subregions may be removed (audited)
             'role_has_permissions',
             'roles',
             'sessions',
@@ -237,8 +238,14 @@ return [
         'no_delete' => [
             'access_grants',
             'competitors', // archived, never deleted (P1-20)
+            'markets', // grants and prices refer to them (P1-23a)
             'product_variants', // retired with a status (P1-22b)
             'products', // retired with a status (P1-22b)
+        ],
+
+        // SELECT only for the app account: reference data that only migrations write (P1-23a).
+        'read_only' => [
+            'currencies', // ISO 4217 subset, seeded by its migration
         ],
 
         // No access for the app account.
