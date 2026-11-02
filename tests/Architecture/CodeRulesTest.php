@@ -20,7 +20,9 @@ foreach (modules() as $module) {
 }
 
 // Tag links carry no visibility of their own: CompetitorTagService is their only writer, and it checks AccessScope
-// (TASK-0042 #2). A new reader or writer is added here only after review.
+// (TASK-0042 #2). A new reader or writer is added here only after review. This is a tripwire for ordinary use, not a
+// proof: a disguised table name (built at run time) is not detected and is a code-review matter, as it would be for
+// any table the app account can write (TASK-0043).
 test('only reviewed files use the taggables table', function () {
     $allowed = [
         'modules/Registry/src/Actions/CompetitorTagService.php', // the only writer
