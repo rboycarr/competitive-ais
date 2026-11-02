@@ -82,12 +82,18 @@ class PlatformServiceProvider extends ModuleServiceProvider
     /**
      * Pennant stores the flags (docs/10); Support\Features reads and switches them. Pennant forgets its cached values
      * only after a job succeeds, so a worker would keep a flag's old state after a failed job: forget them before
-     * every job instead, so each job reads the stored state.
+     * every job instead, so each job reads the stored state. Pennant's purge command would delete flag rows without
+     * an audit row, so it is refused (TASK-0053 #4).
      */
     private function featureFlags(): void
     {
         $this->callAfterResolving(FeatureManager::class, fn (FeatureManager $pennant) => Features::defineDefaults($pennant));
         Event::listen(JobProcessing::class, fn () => $this->app->make(FeatureManager::class)->flushCache());
+        Event::listen(CommandStarting::class, function (CommandStarting $event): void {
+            if ($event->command === 'pennant:purge') {
+                throw new RuntimeException('pennant:purge is disabled: feature flags change only through the audited feature:switch command.');
+            }
+        });
 
         // Codes only: the flag's name and its new state.
         $this->app->make(AuditActions::class)->define('feature.switched', ['flag' => 'code', 'enabled' => 'bool']);

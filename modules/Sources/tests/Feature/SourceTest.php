@@ -101,7 +101,7 @@ class SourceTest extends TestCase
         // Not even a direct call gets past it, and any stored value but exactly true is off (Pennant itself counts
         // everything but false as active).
         foreach ([false, null, 'true', 'false', 1, 0, '1', ['on']] as $value) {
-            app(FeatureManager::class)->store()->globally()->activate(Features::COLLECTION, $value);
+            $this->collectionFlag($value);
             try {
                 app(SourceService::class)->propose($this->analyst, ['name' => 'Direct', 'source_type' => 'rss', 'method' => 'rss', 'base_url' => 'https://feeds.example/', 'classification' => 'internal']);
                 $this->fail('An automated method was accepted with the flag set to '.json_encode($value));
@@ -112,7 +112,7 @@ class SourceTest extends TestCase
         $this->assertSame(0, Source::query()->count());
 
         // With the flag on (Phase 3), automated methods are accepted, and need an address.
-        app(Features::class)->switch(Features::COLLECTION, true);
+        $this->collectionFlag(true);
         $this->actingAs($this->analyst)->post('/sources', $this->form('Feed', ['method' => 'rss']))->assertSessionHasErrors(['base_url' => 'Automated collection needs a base URL.']);
         $this->actingAs($this->analyst)->post('/sources', $this->form('Feed', ['method' => 'rss', 'base_url' => 'https://feeds.example/rss']))->assertSessionHasNoErrors();
         $this->assertSame('rss', Source::query()->sole()->method);
@@ -302,6 +302,16 @@ class SourceTest extends TestCase
             $this->assertStringContainsString('Sources exist', $e->getMessage());
         }
         $this->assertSame(1, Source::query()->count());
+    }
+
+    /**
+     * The app account can only read the features table and a migrator write would not be visible inside this test's
+     * transaction, so the flag's stored value is set in Pennant's in-memory store (FeaturesTest covers the table).
+     */
+    private function collectionFlag(mixed $value): void
+    {
+        config(['pennant.stores.array' => ['driver' => 'array'], 'pennant.default' => 'array']);
+        app(FeatureManager::class)->store()->globally()->activate(Features::COLLECTION, $value);
     }
 
     /**

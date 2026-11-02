@@ -117,7 +117,7 @@ If a CI job is renamed in `.github/workflows/ci.yml`, update the `context` names
 | DB (`DB_*` for the app user; `DB_MIGRATOR_*`, `DB_RETENTION_*`, `DB_TEST_DATABASE`) | same | separate users (`docs/02` §6); `DB_READONLY_PASSWORD` and the root password in `.env.services` locally |
 | Object store (`AWS_*` = app key, bucket names) | same | separate keys per purpose; admin and audit-anchor keys in `.env.services` locally |
 | ClamAV, Redis, Mail | same | |
-| Feature flags (Pennant, `features` table) | the database, not the environment (P1-30a): `php artisan feature:status` lists them; `php artisan feature:switch <flag> on\|off` changes one for everyone, audited as `feature.switched`, and asks for confirmation in production unless `--force` | every flag (collection; AI later) is off until switched on; only a stored `true` counts; queue workers read the stored state before every job |
+| Feature flags (Pennant, `features` table) | the database, not the environment (P1-30a): `php artisan feature:status` lists them; `docker compose run --rm migrator php artisan feature:switch <flag> on\|off` changes one for everyone on the migrator account (the app account can only read flags), audited as `feature.switched`, and asks for confirmation in production unless `--force`; `pennant:purge` is refused | every flag (collection; AI later) is off until switched on; only a stored `true` counts; queue workers read the stored state before every job |
 
 ## 3. Production target (proposal; O3 open)
 Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates via ACME or the organization's CA). MySQL, Redis, MinIO, and ClamAV run on a private network. Backups go to encrypted offsite storage. Sizing is decided after O3/O5; Phase 4 local AI needs GPU sizing (O4).
@@ -154,7 +154,7 @@ Restore drills run monthly and before each release: restore into a scratch envir
 Phase 1 uses Laravel logs (JSON), Horizon dashboard (admin-only), `/health`, and scheduled checks that notify admins by email. A metrics stack (e.g., Prometheus/Grafana) is added only when justified (ADR required).
 
 ## 6. Runbooks (written in Sprint 1.0; expanded per phase)
-Outage triage · Switch a feature flag (`feature:status`, then `feature:switch <flag> on|off` with the PO's approval; check the `feature.switched` audit row) · Compromised token or account (revoke tokens, force logout, reset MFA, review audit) · Failed evidence scans · Audit checkpoint mismatch and `late_commit` investigation · Audit signing-key rotation · Backup failure and restore (including MinIO object versions, object-lock metadata, DB grants, and an evidence hash sample) · Reindex search [P2] · Broken collector / blocked source [P3] · Model rollback [P4] · Secret rotation.
+Outage triage · Switch a feature flag (`feature:status`, then `feature:switch <flag> on|off` in the migrator service with the PO's approval; check the `feature.switched` audit row) · Compromised token or account (revoke tokens, force logout, reset MFA, review audit) · Failed evidence scans · Audit checkpoint mismatch and `late_commit` investigation · Audit signing-key rotation · Backup failure and restore (including MinIO object versions, object-lock metadata, DB grants, and an evidence hash sample) · Reindex search [P2] · Broken collector / blocked source [P3] · Model rollback [P4] · Secret rotation.
 
 ## Acceptance criteria
 - `docker compose up -d` brings all Phase 1 services to healthy on the developer machine.
