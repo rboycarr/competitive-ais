@@ -72,13 +72,13 @@
 | P1-23a | As a taxonomy manager, I maintain currencies, markets and their regions | ISO 4217 seed (read-only for the app); market codes fixed and unique; region tree deepening strictly (database-held) (PO decision O28: three slices) | M (**done** 2026-11-02: merged as pull request #17 after Codex review TASK-0040/0041; currencies made editable in P1-23b, O29; database-enforced fixed fields in P1-52) |
 | P1-23b | As a taxonomy manager, I maintain channels, retailers and tags | Admin pages; tagging competitors; tag filter on the competitor list; currencies editable (PO decision O29) | M (**done** 2026-11-02: merged as pull request #18 after Codex review TASK-0042/0043) |
 | P1-23c | As an admin, I grant access to one market instead of all records | `access_grants.market_id` with its foreign key and the widened scope CHECK; `GrantSet`/`AccessScope` cover market scopes (all-of); matrix with per-market grants, the same way as P1-20a | M (**done** 2026-11-02: merged as pull request #19 after Codex review TASK-0044/0045) |
-| P1-25 | As the platform, registry uniqueness holds under concurrency | Generated-key UNIQUE indexes (regions, brands, categories); locked overlap check for relationships; parallel-request tests | M (**implemented** 2026-11-02 on `feature/p1-25-uniqueness-under-load`: the indexes and locks came with P1-21 to P1-23; this story adds the parallel-request harness and `RegistryConcurrencyTest`, and fixes two deadlocks they found (parallel tagging; brand removal vs. product creation); Codex TASK-0046 to 0049: "yes"; pending PO merge) |
+| P1-25 | As the platform, registry uniqueness holds under concurrency | Generated-key UNIQUE indexes (regions, brands, categories); locked overlap check for relationships; parallel-request tests | M (**done** 2026-11-02: the indexes and locks came with P1-21 to P1-23; this story adds the parallel-request harness and `RegistryConcurrencyTest`, and fixes two deadlocks they found (parallel tagging; brand removal vs. product creation); merged as pull request #20 after Codex reviews TASK-0046 to 0049) |
 
 ### Sprint 1.3 — Sources and evidence
 
 | ID | Story | Acceptance criteria | Size |
 |---|---|---|---|
-| P1-30 | As an analyst, I propose a source | Fields per `docs/04`; method forced to `manual` while collection flag off | S |
+| P1-30 | As an analyst, I propose a source | Fields per `docs/04`; method forced to `manual` while collection flag off | S (**implemented** 2026-11-02 on `feature/p1-30-propose-source`: new Sources module, `sources` table, list, detail and proposal form; Codex TASK-0050 to 0052: "yes"; pending PO merge) |
 | P1-31 | As a director, I review and decide a source policy | New `source_policies` version per decision; proposer ≠ approver; lifecycle transitions tested | M |
 | P1-32 | As an analyst, I upload evidence safely | Quarantine → ClamAV → SHA-256 → content-addressed storage; EICAR + MIME-spoof rejected; status visible in UI | L |
 | P1-33 | As an analyst, duplicate files do not duplicate storage but keep provenance | Same bytes → one blob, two assets with their own source/capture data | S |

@@ -31,7 +31,8 @@
             "Database\\Seeders\\": "database/seeders/",
             "Modules\\Identity\\": "modules/Identity/src/",
             "Modules\\Platform\\": "modules/Platform/src/",
-            "Modules\\Registry\\": "modules/Registry/src/"
+            "Modules\\Registry\\": "modules/Registry/src/",
+            "Modules\\Sources\\": "modules/Sources/src/"
         }
     },
     "autoload-dev": {
@@ -39,7 +40,8 @@
             "Tests\\": "tests/",
             "Modules\\Identity\\Tests\\": "modules/Identity/tests/",
             "Modules\\Platform\\Tests\\": "modules/Platform/tests/",
-            "Modules\\Registry\\Tests\\": "modules/Registry/tests/"
+            "Modules\\Registry\\Tests\\": "modules/Registry/tests/",
+            "Modules\\Sources\\Tests\\": "modules/Sources/tests/"
         }
     },
     "scripts": {

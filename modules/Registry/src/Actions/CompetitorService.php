@@ -14,6 +14,7 @@ use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Modules\Platform\Support\WebAddress;
 use Modules\Registry\Models\Competitor;
 
 /**
@@ -152,12 +153,10 @@ class CompetitorService
         ];
     }
 
-    /** One rule for every caller (TASK-0031 #3): a valid URL with an http or https scheme and a host. */
+    /** One rule for every caller (TASK-0031 #3), shared with other modules through Platform's WebAddress. */
     public static function isWebAddress(string $value): bool
     {
-        $parts = filter_var($value, FILTER_VALIDATE_URL) === false ? false : parse_url($value);
-
-        return is_array($parts) && in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) && ($parts['host'] ?? '') !== '';
+        return WebAddress::isValid($value);
     }
 
     /** Inside the write transaction. Keeping the current analyst needs no check; a new one must qualify now. */

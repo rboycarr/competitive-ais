@@ -2,6 +2,9 @@
 
 namespace Modules\Identity\Contracts;
 
+use Modules\Platform\Access\Classifiable;
+use Modules\Platform\Access\Scoped;
+
 /**
  * Read-only access to users for other modules (ADR-0001: modules use each other's Contracts only), e.g. the Registry
  * assigning an analyst to a competitor (P1-20). Returns summaries, never the User model.
@@ -29,4 +32,11 @@ interface UserDirectory
      * @return array<int, UserSummary>
      */
     public function summaries(array $ids): array;
+
+    /**
+     * Whether the user with this ID may see the record, decided by AccessScope (e.g. whether a source's owner can see
+     * the source, P1-30). False for an unknown ID. Answers yes or no only: the User model stays in Identity
+     * (TASK-0050 #3).
+     */
+    public function maySee(int $id, Classifiable&Scoped $record): bool;
 }

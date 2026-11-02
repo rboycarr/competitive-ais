@@ -5,10 +5,15 @@ namespace Modules\Identity\Directory;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Identity\Contracts\UserSummary;
 use Modules\Identity\Models\User;
+use Modules\Platform\Access\AccessScope;
+use Modules\Platform\Access\Classifiable;
+use Modules\Platform\Access\Scoped;
 
 /** UserDirectory over the users table (P1-20). */
 class EloquentUserDirectory implements UserDirectory
 {
+    public function __construct(private readonly AccessScope $access) {}
+
     public function activeHolders(string $permission): array
     {
         // hasPermissionTo, not a query scope: it applies the two-factor rule for privileged permissions (P1-12).
@@ -34,6 +39,13 @@ class EloquentUserDirectory implements UserDirectory
         return User::query()->whereIn('id', $ids)->get(['id', 'ulid', 'name', 'status'])
             ->mapWithKeys(fn (User $user): array => [$user->id => $this->summary($user)])
             ->all();
+    }
+
+    public function maySee(int $id, Classifiable&Scoped $record): bool
+    {
+        $user = User::query()->find($id);
+
+        return $user !== null && $this->access->allows($user, $record);
     }
 
     private function summary(User $user): UserSummary
