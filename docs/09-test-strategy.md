@@ -16,6 +16,7 @@
 | Feature | Pest + MySQL 8.4 (not SQLite: CHECK constraints, JSON, and grants must behave like production) | HTTP routes, policies, Actions, jobs, events | every push |
 | Authorization matrix | Pest dataset | role × clearance × grant × classification × endpoint → expected 200/403/404 | every push |
 | DB grants | Pest, connecting as `cais_app` | UPDATE/DELETE on append-only tables fails | every push |
+| Concurrency | Pest + `Tests\Support\Concurrently` (one forked process and connection per request, released together; needs `pcntl`) with `DatabaseMigrations` | invariants under parallel requests: one winner per unique name, no overlap, consistent trees, removal guards; every request ends successfully or with a validation error, never a database error | every push |
 | Migrations | CI script | migrate → rollback → migrate on an empty DB; seeders run | every push |
 | Queue / idempotency | Pest with `Queue::fake` + real Redis in CI | retries, uniqueness, duplicate dispatch, outbox replays | every push |
 | Frontend unit | Vitest + Vue Test Utils | components, composables, form validation | every push |
@@ -49,7 +50,7 @@
 11. Grants: typed-FK and CHECK enforcement at the database level (invalid scope combinations rejected by MySQL, not only by validation).
 12. SoD: reviewer tries to publish; unassigned reviewer tries to decide; reassignment is audited.
 13. Edit after approval: publish fails until the current version is approved; concurrent edit and publish race.
-14. Uniqueness under concurrency: duplicate root regions, own brands, root categories; overlapping relationship intervals including open-ended ones (parallel requests).
+14. Uniqueness under concurrency: duplicate root regions, own brands, root categories; overlapping relationship intervals including open-ended ones (parallel requests). Implemented in P1-25 (`RegistryConcurrencyTest`), also covering aliases, crossing category moves, and removal guards against parallel use (brand vs. products, tag vs. tagging, currency decimal places vs. new markets); a mutation without the relationship locks let all four overlapping requests through. The tests found two deadlocks, both fixed: parallel tagging (a locking read of a missing link took a gap lock) and brand removal vs. product creation (a locking read through the ULID index, the reverse lock order of the removal). **Rule:** read a row's ID without a lock, then lock the row by its key; don't use a locking read to check that a row is absent before inserting it (the unique key decides).
 15. Evidence races: duplicate uploads with racing scan jobs, one infected copy, one retried job; shared-blob retention as max and hold as OR; deletion job refuses a referenced or held blob.
 16. Source policy at capture: the asset keeps its policy version after the source policy changes or the source is suspended.
 17. Evidence withdrawn or integrity failure flags citing approved and published items for re-review.

@@ -19,7 +19,8 @@ use Modules\Registry\Models\Tag;
  * Tagging competitors (P1-23b, docs/03 Registry):
  * - needs competitor.manage and a competitor the actor can see, checked again under a lock on the competitor row;
  * - the tag is read under a shared lock, so it cannot be removed until the link commits;
- * - tagging twice and untagging an untagged competitor change nothing and are not audited;
+ * - tagging twice and untagging an untagged competitor change nothing and are not audited; the primary key decides
+ *   between concurrent duplicates, without a gap lock, so parallel tagging cannot deadlock (P1-25);
  * - every change is audited on the competitor (its classification) with the tag ID and taxonomy, never the name.
  */
 class CompetitorTagService
@@ -41,7 +42,10 @@ class CompetitorTagService
                 $locked = $this->lockVisible($actor, $competitor);
                 $tag = Tag::query()->whereKey($tagId)->sharedLock()->first()
                     ?? throw ValidationException::withMessages(['tag' => 'Choose a listed tag.']);
-                if ($this->links($tag, $locked)->lockForUpdate()->exists()) {
+                // A plain read, not a locking one: a locking read of a missing link takes a gap lock, and two requests
+                // tagging different competitors with this tag then deadlock on their inserts (P1-25). The primary key
+                // refuses a concurrent duplicate, which the catch below treats as already tagged.
+                if ($this->links($tag, $locked)->exists()) {
                     return;
                 }
                 $this->links($tag, $locked)->insert(['tag_id' => $tag->id, 'taggable_type' => Tag::COMPETITOR, 'taggable_id' => $locked->id, 'created_at' => now('UTC')]);
