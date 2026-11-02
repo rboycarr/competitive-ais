@@ -62,11 +62,28 @@ final class Concurrently
         } finally {
             // Normally empty: collect() reaps every child. Left only if forking or collecting failed part-way.
             foreach ($unreaped as $pid) {
-                posix_kill($pid, SIGKILL);
-                pcntl_waitpid($pid, $status);
+                self::killAndReap($pid);
             }
             array_map('unlink', glob("$dir/*") ?: []);
             @rmdir($dir);
+        }
+    }
+
+    /**
+     * Whether a waitpid() result means the child is gone: it was reaped now (its ID), or it is no longer our child
+     * (-1 with ECHILD). Any other error, e.g. an interrupted call (EINTR), leaves it unreaped (TASK-0048).
+     */
+    private static function reaped(int $waited): bool
+    {
+        return $waited > 0 || ($waited === -1 && pcntl_get_last_error() === PCNTL_ECHILD);
+    }
+
+    /** Kills a child that is still ours and waits until it is reaped, retrying interrupted waits. */
+    private static function killAndReap(int $pid): void
+    {
+        posix_kill($pid, SIGKILL);
+        while (! self::reaped(pcntl_waitpid($pid, $status))) {
+            usleep(1_000);
         }
     }
 
@@ -100,7 +117,7 @@ final class Concurrently
     {
         while ($unreaped !== [] && microtime(true) < $deadline) {
             foreach ($unreaped as $i => $pid) {
-                if (pcntl_waitpid($pid, $status, WNOHANG) !== 0) { // ended (or not ours any more): reaped
+                if (self::reaped(pcntl_waitpid($pid, $status, WNOHANG))) {
                     unset($unreaped[$i]);
                 }
             }
@@ -108,8 +125,7 @@ final class Concurrently
         }
         $timedOut = [];
         foreach ($unreaped as $i => $pid) { // still running at the deadline, and still our child: not yet reaped
-            posix_kill($pid, SIGKILL);
-            pcntl_waitpid($pid, $status);
+            self::killAndReap($pid);
             unset($unreaped[$i]);
             $timedOut[$i] = true;
         }
