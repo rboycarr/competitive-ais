@@ -78,7 +78,7 @@
 
 | ID | Story | Acceptance criteria | Size |
 |---|---|---|---|
-| P1-30 | As an analyst, I propose a source | Fields per `docs/04`; method forced to `manual` while collection flag off | S (**implemented** 2026-11-02 on `feature/p1-30-propose-source`: new Sources module, `sources` table, list, detail and proposal form; pending Codex review and PO merge) |
+| P1-30 | As an analyst, I propose a source | Fields per `docs/04`; method forced to `manual` while collection flag off | S (**implemented** 2026-11-02 on `feature/p1-30-propose-source`: new Sources module, `sources` table, list, detail and proposal form; Codex TASK-0050 to 0052: "yes"; pending PO merge) |
 | P1-31 | As a director, I review and decide a source policy | New `source_policies` version per decision; proposer ≠ approver; lifecycle transitions tested | M |
 | P1-32 | As an analyst, I upload evidence safely | Quarantine → ClamAV → SHA-256 → content-addressed storage; EICAR + MIME-spoof rejected; status visible in UI | L |
 | P1-33 | As an analyst, duplicate files do not duplicate storage but keep provenance | Same bytes → one blob, two assets with their own source/capture data | S |
