@@ -12,7 +12,8 @@ use Throwable;
  * (PlatformServiceProvider::MIGRATOR_COMMANDS), so only in the migrator service, and there is no screen for it until
  * the administration module.
  * Acts as the system; audited as feature.switched. Production asks for confirmation (or --force). A failed switch
- * ends the command normally with exit code 1, so the provider switches the default connection back (TASK-0056 #2).
+ * is logged and ends the command normally with exit code 1, so the provider switches the default connection back
+ * (TASK-0056 #2); the console shows a fixed message, never the exception's, which may hold SQL or hosts (TASK-0057).
  */
 class SwitchFeature extends Command
 {
@@ -40,7 +41,7 @@ class SwitchFeature extends Command
             $changed = $features->switch($flag, $state === 'on');
         } catch (Throwable $e) {
             report($e);
-            $this->components->error("The [$flag] feature was not switched: {$e->getMessage()}");
+            $this->components->error("The [$flag] feature was not switched; the reason is in the application log.");
 
             return self::FAILURE;
         }

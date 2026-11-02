@@ -143,13 +143,13 @@ class FeaturesTest extends TestCase
     {
         $features = $this->app->make(Features::class);
         $this->assertFalse($features->enabled(Features::COLLECTION));
-        $this->mock(AuditLogger::class, fn ($audit) => $audit->shouldReceive('record')->andThrow(new RuntimeException('audit unavailable')));
+        $this->mock(AuditLogger::class, fn ($audit) => $audit->shouldReceive('record')->andThrow(new RuntimeException('audit unavailable at db.internal.example:3306')));
 
         try {
             $this->asMigrator(fn () => $this->app->make(Features::class)->switch(Features::COLLECTION, true));
             $this->fail('The switch went through without an audit row.');
         } catch (RuntimeException $e) {
-            $this->assertSame('audit unavailable', $e->getMessage());
+            $this->assertSame('audit unavailable at db.internal.example:3306', $e->getMessage());
         }
 
         $this->assertFalse($features->enabled(Features::COLLECTION));
@@ -158,7 +158,9 @@ class FeaturesTest extends TestCase
         // Through the command: exit code 1, and the default connection is the app account again (TASK-0056 #2).
         $default = DB::getDefaultConnection();
         $this->assertSame(1, Artisan::call('feature:switch', ['flag' => 'collection', 'state' => 'on']));
-        $this->assertStringContainsString('The [collection] feature was not switched: audit unavailable', Artisan::output());
+        $output = Artisan::output();
+        $this->assertStringContainsString('The [collection] feature was not switched; the reason is in the application log.', $output);
+        $this->assertStringNotContainsString('db.internal.example', $output); // the exception's text stays in the log (TASK-0057)
         $this->assertSame($default, DB::getDefaultConnection());
         $this->assertSame(['false'], DB::table('features')->pluck('value')->all());
     }
