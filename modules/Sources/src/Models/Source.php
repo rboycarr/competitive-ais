@@ -21,6 +21,7 @@ use Modules\Platform\Classification;
  * @property ?string $host
  * @property string $method
  * @property string $status
+ * @property ?int $current_policy_id the approved policy in force (P1-31a)
  * @property string $default_reliability
  * @property int $owner_id
  * @property int $proposed_by

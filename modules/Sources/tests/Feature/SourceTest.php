@@ -213,9 +213,9 @@ class SourceTest extends TestCase
     public function test_the_list_filters_by_status_and_type(): void
     {
         $news = $this->source('Trade news');
-        $field = $this->source('Field visits', type: 'field', status: 'approved');
+        $field = $this->source('Field visits', type: 'field', status: 'policy_review'); // approved needs a policy (P1-31a)
 
-        $this->actingAs($this->analyst)->get('/sources?status=approved')->assertInertia(fn (AssertableInertia $page) => $page->has('sources', 1)->where('sources.0.ulid', $field->ulid));
+        $this->actingAs($this->analyst)->get('/sources?status=policy_review')->assertInertia(fn (AssertableInertia $page) => $page->has('sources', 1)->where('sources.0.ulid', $field->ulid));
         $this->actingAs($this->analyst)->get('/sources?type=website')->assertInertia(fn (AssertableInertia $page) => $page->has('sources', 1)->where('sources.0.ulid', $news->ulid));
         $this->actingAs($this->analyst)->get('/sources?status=gone')->assertSessionHasErrors('status');
     }
