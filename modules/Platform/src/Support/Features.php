@@ -2,6 +2,7 @@
 
 namespace Modules\Platform\Support;
 
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
 use Laravel\Pennant\FeatureManager;
@@ -15,8 +16,10 @@ use RuntimeException;
  * the app account can only read the table (grant class read_only, TASK-0053 #1), so nothing in the running app can
  * switch a flag. Every flag is off until an operator runs `php artisan feature:switch` in the migrator service, which
  * writes on the migrator account and audits feature.switched in the same transaction. Only a stored true counts as
- * on (Pennant's own active() accepts any value but false), and an unknown flag is a programming error, not "off", so
- * a typo cannot quietly disable a check. The only class that reads Pennant (tests/Architecture/CodeRulesTest).
+ * on (Pennant's own active() accepts any value but false), and only while the flag's last feature.switched audit row
+ * also says on: a row changed some other way, e.g. directly on the migrator account, reads as off and is reported by
+ * feature:status (TASK-0054 #2). An unknown flag is a programming error, not "off", so a typo cannot quietly disable
+ * a check. The only class that reads Pennant (tests/Architecture/CodeRulesTest).
  */
 final class Features
 {
@@ -48,7 +51,33 @@ final class Features
 
     public function enabled(string $flag): bool
     {
+        return $this->stored($flag) && $this->lastAudited($flag);
+    }
+
+    /**
+     * Whether the stored state is the one the flag's last feature.switched audit row set (off when there is none);
+     * false means the row was changed without feature:switch.
+     */
+    public function matchesAuditTrail(string $flag): bool
+    {
+        $this->pennant->flushCache();
+
+        return $this->stored($flag) === $this->lastAudited($flag);
+    }
+
+    private function stored(string $flag): bool
+    {
         return $this->pennant->store()->globally()->value(self::known($flag)) === true;
+    }
+
+    /** The state the flag's last feature.switched audit row set; off when it was never switched. */
+    private function lastAudited(string $flag, ?ConnectionInterface $connection = null): bool
+    {
+        $context = ($connection ?? $this->db->connection())->table('audit_events')
+            ->where('action', 'feature.switched')->where('context->flag', $flag)->orderByDesc('id')->value('context');
+        $context = is_string($context) ? json_decode($context, true) : null;
+
+        return is_array($context) && ($context['enabled'] ?? null) === true;
     }
 
     /**
@@ -72,7 +101,9 @@ final class Features
                 if ($row === null) {
                     throw new LogicException("Feature flag [$flag] has no stored row; its migration must create it.");
                 }
-                if ((json_decode((string) $row->value, flags: JSON_THROW_ON_ERROR) === true) === $on) {
+                // Compared with the stored value, so switching repairs a row changed without an audit row.
+                if ((json_decode((string) $row->value, flags: JSON_THROW_ON_ERROR) === true) === $on
+                    && $this->lastAudited($flag, $writer) === $on) {
                     return false;
                 }
 

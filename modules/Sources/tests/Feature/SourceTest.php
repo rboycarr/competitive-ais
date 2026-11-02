@@ -12,6 +12,7 @@ use Inertia\Testing\AssertableInertia;
 use InvalidArgumentException;
 use Laravel\Pennant\FeatureManager;
 use Modules\Identity\Models\User;
+use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Platform\Support\Features;
 use Modules\Sources\Actions\SourceService;
@@ -306,12 +307,14 @@ class SourceTest extends TestCase
 
     /**
      * The app account can only read the features table and a migrator write would not be visible inside this test's
-     * transaction, so the flag's stored value is set in Pennant's in-memory store (FeaturesTest covers the table).
+     * transaction, so the flag's stored value is set in Pennant's in-memory store, with the audited "on" switch a
+     * flag also needs (SourceCollectionFlagTest and FeaturesTest cover the table and the command).
      */
     private function collectionFlag(mixed $value): void
     {
         config(['pennant.stores.array' => ['driver' => 'array'], 'pennant.default' => 'array']);
         app(FeatureManager::class)->store()->globally()->activate(Features::COLLECTION, $value);
+        DB::transaction(fn () => app(AuditLogger::class)->record('feature.switched', context: ['flag' => Features::COLLECTION, 'enabled' => true]));
     }
 
     /**

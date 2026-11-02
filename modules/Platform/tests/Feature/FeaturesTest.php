@@ -179,20 +179,45 @@ class FeaturesTest extends TestCase
         foreach (array_slice($states, 1) as $i => $state) {
             $this->assertNotSame($states[$i], $state, 'Two audited switches in a row set the same state.');
         }
+        $this->app->make(FeatureManager::class)->flushCache();
         $this->assertSame(end($states), $this->app->make(Features::class)->enabled(Features::COLLECTION));
+        $this->assertSame([json_encode(end($states))], DB::table('features')->pluck('value')->all());
     }
 
     public function test_a_worker_reads_the_stored_state_before_every_job(): void
     {
         $features = $this->app->make(Features::class);
-        $this->assertFalse($features->enabled(Features::COLLECTION));
+        $features->switch(Features::COLLECTION, true);
+        $this->assertTrue($features->enabled(Features::COLLECTION));
 
-        // An operator switches the flag on; this process keeps its earlier read until the next job starts.
-        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'true']);
-        $this->assertFalse($features->enabled(Features::COLLECTION));
+        // The stored value changes elsewhere; this process keeps its earlier read until the next job starts.
+        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'false']);
+        $this->assertTrue($features->enabled(Features::COLLECTION));
 
         event(new JobProcessing('sync', new SyncJob($this->app, '{"job":"probe"}', 'sync', 'default')));
+        $this->assertFalse($features->enabled(Features::COLLECTION));
+    }
+
+    public function test_a_flag_changed_without_the_audited_command_reads_as_off_and_is_reported(): void
+    {
+        // Directly on the migrator account, e.g. through Pennant in the migrator service: no audit row (TASK-0054 #2).
+        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'true']);
+        $features = $this->app->make(Features::class);
+        $this->assertFalse($features->enabled(Features::COLLECTION));
+        $this->assertFalse($features->matchesAuditTrail(Features::COLLECTION));
+        $this->command('feature:status')->expectsOutputToContain('collection | off')
+            ->expectsOutputToContain('Changed without feature:switch, so read as off: collection.')->assertFailed();
+
+        // Switching on through the command repairs it (one audit row); a later unaudited "off" is reported too.
+        $this->command('feature:switch collection on')->expectsOutputToContain('The [collection] feature is now on.')->assertSuccessful();
         $this->assertTrue($features->enabled(Features::COLLECTION));
+        $this->command('feature:status')->expectsOutputToContain('collection | on')->assertSuccessful();
+        DB::connection(Features::WRITER)->table('features')->where('name', Features::COLLECTION)->update(['value' => 'false']);
+        $this->assertFalse($features->matchesAuditTrail(Features::COLLECTION));
+        $this->assertFalse($features->enabled(Features::COLLECTION));
+        $this->command('feature:switch collection off')->expectsOutputToContain('The [collection] feature is now off.')->assertSuccessful();
+        $this->assertTrue($features->matchesAuditTrail(Features::COLLECTION));
+        $this->assertSame([true, false], $this->switchedStates());
     }
 
     public function test_pennant_purge_is_refused_and_the_rollback_waits_until_every_flag_is_off(): void

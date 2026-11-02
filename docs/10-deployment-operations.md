@@ -117,7 +117,7 @@ If a CI job is renamed in `.github/workflows/ci.yml`, update the `context` names
 | DB (`DB_*` for the app user; `DB_MIGRATOR_*`, `DB_RETENTION_*`, `DB_TEST_DATABASE`) | same | separate users (`docs/02` §6); `DB_READONLY_PASSWORD` and the root password in `.env.services` locally |
 | Object store (`AWS_*` = app key, bucket names) | same | separate keys per purpose; admin and audit-anchor keys in `.env.services` locally |
 | ClamAV, Redis, Mail | same | |
-| Feature flags (Pennant, `features` table) | the database, not the environment (P1-30a): `php artisan feature:status` lists them; `docker compose run --rm migrator php artisan feature:switch <flag> on\|off` changes one for everyone on the migrator account (the app account can only read flags), audited as `feature.switched`, and asks for confirmation in production unless `--force`; `pennant:purge` is refused | every flag (collection; AI later) is off until switched on; only a stored `true` counts; queue workers read the stored state before every job |
+| Feature flags (Pennant, `features` table) | the database, not the environment (P1-30a): `php artisan feature:status` lists them and whether each matches its last audited switch (exit 1 if not); `docker compose run --rm migrator php artisan feature:switch <flag> on\|off` changes one for everyone on the migrator account (the app account can only read flags), audited as `feature.switched`, and asks for confirmation in production unless `--force`; `pennant:purge` is refused | every flag (collection; AI later) is off until switched on; only a stored `true` counts; queue workers read the stored state before every job |
 
 ## 3. Production target (proposal; O3 open)
 Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates via ACME or the organization's CA). MySQL, Redis, MinIO, and ClamAV run on a private network. Backups go to encrypted offsite storage. Sizing is decided after O3/O5; Phase 4 local AI needs GPU sizing (O4).
@@ -145,6 +145,7 @@ Restore drills run monthly and before each release: restore into a scratch envir
 | Failed jobs | any new failure in `evidence` queue; > 10/h elsewhere |
 | Audit checkpoint verification (`VerifyAuditChainJob` hourly; `php artisan audit:verify` on demand, exit 1 on any issue) | any issue → critical; `late_commit` → high (P1-05) |
 | Evidence integrity sample | any hash mismatch → critical |
+| Feature flags (`php artisan feature:status`, daily and after a restore) | exit 1 (a flag changed without `feature:switch`, read as off) → high |
 | Backup job | missing or failed → critical |
 | Disk (MySQL, MinIO volumes) | > 80% |
 | ClamAV signatures age | > 48 h |
