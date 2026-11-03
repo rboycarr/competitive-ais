@@ -21,6 +21,7 @@ use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Platform\Support\WebAddress;
 use Normalizer;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -97,7 +98,10 @@ class EvidenceUploadService
             });
         } catch (Throwable $e) {
             try {
-                $disk->delete($key);
+                // A disk may report a failed delete by returning false instead of throwing (TASK-0065).
+                if ($disk->delete($key) === false) {
+                    throw new RuntimeException('The quarantine object was not deleted.');
+                }
             } catch (Throwable $cleanup) {
                 // An object without an asset: logged with its generated key only, for the quarantine sweep
                 // (P1-38, TASK-0064 #2). No file name, title or credentials.
