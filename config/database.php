@@ -267,6 +267,7 @@ return [
             'evidence_custody_events',
             'outbox_receipts',
             'source_policies',
+            'source_status_changes', // P1-31b: suspensions, reinstatements, retirements
             'verification_reviews',
         ],
 

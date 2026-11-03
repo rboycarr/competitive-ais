@@ -52,6 +52,7 @@ describe('Sources/Show', () => {
     const review = {
         policies: [], canSubmit: false, canDecide: false, decidingOwnProposal: false, basedOnVersion: 0,
         decisions: ['approved', 'rejected', 'needs_info'], robotsDecisions: ['allowed', 'disallowed', 'not_applicable', 'not_reviewed'], robotsBound: false,
+        statusChanges: [], lifecycleActions: [],
     };
     const policy = {
         version: 2, decision: 'approved', termsUrl: 'https://news.example/terms', termsSummary: 'Synthetic terms.', termsReviewedOn: '2026-11-01',
@@ -98,13 +99,40 @@ describe('Sources/Show', () => {
         expect(post).toHaveBeenCalledWith(`/sources/${source.ulid}/policies`, expect.any(Object));
     });
 
+    it('offers the allowed status changes with their reasons, and posts the change', async () => {
+        expect(mount(Show, { props: { source, ...review } }).find('#status-heading').exists()).toBe(false);
+        const lifecycleActions = [{ action: 'suspend', reasons: ['complaint', 'other'] }, { action: 'retire', reasons: ['no_longer_needed'] }];
+        const wrapper = mount(Show, { props: { source: { ...source, status: 'approved', currentPolicyVersion: 1 }, ...review, lifecycleActions } });
+        expect(wrapper.findAll('input[name="action"]').map((i) => i.attributes('value'))).toEqual(['suspend', 'retire']);
+        expect(wrapper.get('#status-reason').attributes('disabled')).toBeDefined();
+
+        await wrapper.get('input[value="suspend"]').setValue(true);
+        expect(wrapper.findAll('#status-reason option').map((o) => o.text())).toEqual(['Choose a reason', 'Complaint', 'Other']);
+        expect(wrapper.text()).toContain('nobody may use the source until it is reinstated');
+        await wrapper.get('#status-reason').setValue('complaint');
+        await wrapper.get('input[value="retire"]').setValue(true);
+        expect(wrapper.findAll('#status-reason option').map((o) => o.text())).toEqual(['Choose a reason', 'No longer needed']);
+        await wrapper.get('#status-heading ~ form').trigger('submit');
+        expect(post).toHaveBeenCalledWith(`/sources/${source.ulid}/status`, expect.any(Object));
+    });
+
+    it('shows the status history as text, and no policy in force unless approved', () => {
+        const statusChanges = [{ action: 'suspend', fromStatus: 'approved', toStatus: 'suspended', reason: 'complaint', note: '<img src=x onerror=alert(1)>', changedBy: '<b>Dee</b>', changedAt: '2026-11-03T09:00:00Z' }];
+        const wrapper = mount(Show, { props: { source: { ...source, status: 'suspended', currentPolicyVersion: 1 }, ...review, statusChanges } });
+        expect(wrapper.text()).toContain('Suspend: Approved → Suspended');
+        expect(wrapper.text()).toContain('Reason: Complaint');
+        expect(wrapper.find('img').exists() || wrapper.find('b').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
+        expect(wrapper.findAll('dd')[1]?.text()).toBe('None (version 1 was approved; the source is suspended)');
+    });
+
     it('lists the policy history as text, linking only http(s) terms', () => {
         const unsafe = {
             ...policy, version: 1, decision: 'needs_info', termsUrl: 'javascript:alert(1)', notes: '<img src=x onerror=alert(1)>',
             termsSummary: '<b>terms</b>', containsPersonalData: true, personalDataBasis: '<i>basis</i>', decidedBy: '<u>Dee</u>',
         };
         const missingBasis = { ...policy, version: 3, decision: 'rejected', termsUrl: null, containsPersonalData: true, personalDataBasis: null };
-        const wrapper = mount(Show, { props: { source: { ...source, currentPolicyVersion: 2 }, ...review, policies: [missingBasis, policy, unsafe] } });
+        const wrapper = mount(Show, { props: { source: { ...source, status: 'approved', currentPolicyVersion: 2 }, ...review, policies: [missingBasis, policy, unsafe] } });
         expect(wrapper.findAll('dd')[1]?.text()).toBe('Version 2'); // "Policy in force"
         expect(wrapper.text()).toContain('Version 2: Approved');
         expect(wrapper.text()).toContain('Version 1: Needs more information');

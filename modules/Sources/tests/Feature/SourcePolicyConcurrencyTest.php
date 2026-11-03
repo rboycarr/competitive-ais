@@ -6,9 +6,11 @@ use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Identity\Models\User;
+use Modules\Sources\Actions\SourceLifecycleService;
 use Modules\Sources\Actions\SourcePolicyService;
 use Modules\Sources\Actions\SourceService;
 use Modules\Sources\Models\SourcePolicy;
+use Modules\Sources\Models\SourceStatusChange;
 use Tests\Support\Concurrently;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
@@ -16,6 +18,7 @@ use Tests\TestCase;
 /**
  * P1-31a: directors deciding the same review at the same moment (separate processes and connections, Concurrently)
  * record exactly one decision; the others are told the source is no longer awaiting review, never a database error.
+ * P1-31b: parallel status changes apply one at a time, each from the status the previous one left.
  * Data is committed, so the class uses DatabaseMigrations; tearDown removes the governance rows (the app account
  * cannot, and the migrations refuse to roll back while they exist).
  */
@@ -28,6 +31,7 @@ class SourcePolicyConcurrencyTest extends TestCase
     protected function tearDown(): void
     {
         $migrator = DB::connection('migrator');
+        $migrator->table('source_status_changes')->delete();
         $migrator->table('sources')->update(['current_policy_id' => null, 'status' => 'proposed']);
         $migrator->table('source_policies')->delete();
         $migrator->table('sources')->delete();
@@ -62,6 +66,43 @@ class SourcePolicyConcurrencyTest extends TestCase
             $source->refresh();
             $this->assertSame($policy->decision === 'approved' ? ['approved', $policy->id] : ['proposed', null], [$source->status, $source->current_policy_id]);
             $this->assertSame(1, DB::table('audit_events')->where('action', 'source.policy_decided')->where('subject_ulid', $source->ulid)->count());
+        }
+    }
+
+    public function test_parallel_status_changes_apply_one_at_a_time(): void
+    {
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst');
+        $directors = array_map(fn (int $i): User => $this->enableTwoFactor($this->createUser("director$i@example.test", 'ci_director')), range(1, 4));
+
+        for ($round = 1; $round <= self::ROUNDS; $round++) {
+            $source = app(SourceService::class)->propose($analyst, ['name' => "Feed $round", 'source_type' => 'rss', 'classification' => 'internal']);
+            app(SourcePolicyService::class)->submit($analyst, $source);
+            app(SourcePolicyService::class)->decide($directors[0], $source, [
+                'decision' => 'approved', 'based_on_version' => 0, 'terms_summary' => 'Synthetic terms.', 'terms_reviewed_on' => '2026-11-01',
+                'robots_decision' => 'not_applicable', 'contains_personal_data' => false,
+            ]);
+
+            // Four suspensions of one approved source: one applies, the others find it already suspended.
+            $results = Concurrently::run(array_map(fn (User $director) => fn () => app(SourceLifecycleService::class)
+                ->change($director, $source, 'suspend', 'complaint', 'Synthetic.'), $directors));
+            $outcomes = array_column($results, 'outcome');
+            $this->assertSame([1, 3], [count(array_keys($outcomes, 'ok', true)), count(array_keys($outcomes, ValidationException::class, true))], "round $round: ".json_encode($results));
+            $this->assertSame(1, SourceStatusChange::query()->where('source_id', $source->id)->count());
+
+            // Reinstating and retiring at once: whichever runs second starts from the first one's status, and the history
+            // records each change from the status it really left.
+            $results = Concurrently::run([
+                fn () => app(SourceLifecycleService::class)->change($directors[1], $source, 'reinstate', 'resolved', 'Synthetic.'),
+                fn () => app(SourceLifecycleService::class)->change($directors[2], $source, 'retire', 'other', 'Synthetic.'),
+            ]);
+            $this->assertNotContains('timeout', array_column($results, 'outcome'), "round $round");
+            $this->assertSame('retired', $source->refresh()->status, "round $round: ".json_encode($results));
+            $steps = SourceStatusChange::query()->where('source_id', $source->id)->orderBy('id')->get(['from_status', 'to_status'])
+                ->map(fn (SourceStatusChange $c): array => [$c->from_status, $c->to_status])->all();
+            for ($i = 1; $i < count($steps); $i++) {
+                $this->assertSame($steps[$i - 1][1], $steps[$i][0], "round $round: the history is a chain");
+            }
+            $this->assertSame('retired', end($steps)[1] ?? null, "round $round");
         }
     }
 }

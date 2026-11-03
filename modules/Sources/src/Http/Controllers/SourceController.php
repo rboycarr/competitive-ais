@@ -18,6 +18,7 @@ use Modules\Sources\Actions\SourceService;
 use Modules\Sources\Http\Requests\ProposeSourceRequest;
 use Modules\Sources\Models\Source;
 use Modules\Sources\Models\SourcePolicy;
+use Modules\Sources\Models\SourceStatusChange;
 
 /**
  * Sources (P1-30): list and detail for source.view holders, filtered by AccessScope (hidden sources are 404); the
@@ -73,8 +74,12 @@ class SourceController
     {
         $viewer = $this->viewer($request);
         $this->access->ensureVisible($viewer, $source);
-        $policies = $source->policies()->orderByDesc('version')->get(); // after the visibility check: see Source::policies()
-        $names = $this->users->summaries(array_values(array_unique([$source->owner_id, $source->proposed_by, ...$policies->pluck('decided_by')->all()])));
+        // After the visibility check: see Source::policies() and Source::statusChanges().
+        $policies = $source->policies()->orderByDesc('version')->get();
+        $changes = $source->statusChanges()->orderByDesc('changed_at')->orderByDesc('id')->get();
+        $names = $this->users->summaries(array_values(array_unique([
+            $source->owner_id, $source->proposed_by, ...$policies->pluck('decided_by')->all(), ...$changes->pluck('changed_by')->all(),
+        ])));
         $viewerId = (int) $viewer->getAuthIdentifier();
         $can = $this->gate->forUser($viewer);
 
@@ -121,6 +126,21 @@ class SourceController
             'decisions' => SourcePolicy::DECISIONS,
             'robotsDecisions' => SourcePolicy::ROBOTS,
             'robotsBound' => in_array($source->method, SourcePolicy::ROBOTS_BOUND_METHODS, true),
+            // Newest first. SourceLifecycleService checks every change again.
+            'statusChanges' => $changes->map(fn (SourceStatusChange $c): array => [
+                'action' => $c->action,
+                'fromStatus' => $c->from_status,
+                'toStatus' => $c->to_status,
+                'reason' => $c->reason,
+                'note' => $c->note,
+                'changedBy' => $names[$c->changed_by]->name ?? null,
+                'changedAt' => $c->changed_at->toIso8601ZuluString(),
+            ])->all(),
+            // The changes this viewer may make now, with the reasons each allows.
+            'lifecycleActions' => $can->allows('source.manage') ? array_map(
+                fn (string $action): array => ['action' => $action, 'reasons' => SourceStatusChange::ACTIONS[$action]['reasons']],
+                array_keys(array_filter(SourceStatusChange::ACTIONS, fn (array $step): bool => in_array($source->status, $step['from'], true))),
+            ) : [],
         ]);
     }
 
