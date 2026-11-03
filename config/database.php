@@ -243,6 +243,7 @@ return [
             'access_grants',
             'competitors', // archived, never deleted (P1-20)
             'evidence_assets', // rejected or withdrawn, never deleted: custody and claims refer to them (P1-32a)
+            'evidence_blobs', // clean content is retained and referenced by evidence assets (P1-32b)
             'currencies', // edited by taxonomy managers, never deleted (P1-23b, PO decision O29)
             'markets', // grants and prices refer to them (P1-23a)
             'product_variants', // retired with a status (P1-22b)

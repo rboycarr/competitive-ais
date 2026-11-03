@@ -117,3 +117,6 @@ Item content (title, summary, claims, links, subjects) is **editable only in `dr
 ## Acceptance criteria
 - Every Phase 1 route maps to a policy and a permission listed here.
 - Every state transition has a positive test and a denied test.
+### Evidence scanning (P1-32b)
+
+Evidence uploads dispatch `ScanEvidenceJob` only after the upload transaction commits. The job uses the in-house Platform clamd client over the private data network. ClamAV errors are retryable and never treated as clean. Clean content is deduplicated into the locked `evidence` bucket; infected content and content whose magic-byte type no longer matches the upload extension are rejected and their quarantine object is removed. Audit and custody records contain codes and system actors only.

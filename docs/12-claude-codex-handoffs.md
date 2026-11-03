@@ -101,6 +101,7 @@ AI approval never replaces human approval.
 | TASK-0066 | Verification of the TASK-0065 fix | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/evidence-upload` @ `533d3be` | **Reviewed: the TASK-0065 fix confirmed, no new findings; recommendation "yes".** Merged as pull request #27 | `handoffs/TASK-0066-review.md` |
 | TASK-0067 | Review of P1-25a (unique-violation catches narrowed to their index) | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `fix/registry-unique-violations` @ `d7deec1` | **Reviewed: "yes after fixes": 1 high (a duplicate value could imitate the key), 2 medium, 1 low. Fixed: the key is read only from the end of the driver's message, MySQL 8.4 form only, unit-tested; only the relay may name the receipts table (code rule); the low (an unrelated checkpoint duplicate) cannot occur today.** Verified in TASK-0068 | `handoffs/TASK-0067-review.md` |
 | TASK-0068 | Verification of the TASK-0067 fixes | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `fix/registry-unique-violations` @ `3eb728c` | **Reviewed: the TASK-0067 findings resolved (the low correctly declined), no new findings; recommendation "yes".** Merged as pull request #28 | `handoffs/TASK-0068-review.md` |
+| TASK-0070 | Read-only review of P1-32b evidence scanning | Codex | Reviewer: Claude Code, read-only | `feature/evidence-scan` | **Ready for review; pending** | `handoffs/TASK-0070-review.md` |
 
 ## 4. Decision and disagreement log
 

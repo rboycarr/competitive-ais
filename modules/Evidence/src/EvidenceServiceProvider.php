@@ -17,6 +17,9 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         parent::boot();
 
         // Codes only: never the title, file name, URL or description (audit context holds no user input).
-        $this->app->make(AuditActions::class)->define('evidence.uploaded', ['classification' => 'code']);
+        $actions = $this->app->make(AuditActions::class);
+        $actions->define('evidence.uploaded', ['classification' => 'code']);
+        $actions->define('evidence.scanned', ['result' => 'code', 'sha256' => 'sha256']);
+        $actions->define('evidence.rejected', ['reason' => 'code']);
     }
 }

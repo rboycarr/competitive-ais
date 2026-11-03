@@ -160,3 +160,6 @@ Outage triage · Switch a feature flag (`feature:status`, then `feature:switch <
 ## Acceptance criteria
 - `docker compose up -d` brings all Phase 1 services to healthy on the developer machine.
 - A restore drill succeeds before the Phase 1 exit demo.
+### Evidence queue and worker (P1-32b)
+
+Horizon runs a dedicated `evidence` supervisor. `ScanEvidenceJob` has three attempts with 30, 120 and 600 second backoff. The worker needs network access to `clamav:3310` on the data network and the application S3 identity's write access to `evidence`; it must not receive governance-bypass credentials. A scanner error leaves the asset quarantined with `scan_status=error` and the next retry resets it to pending. A manual check can inspect the queue in Horizon and verify the object-store policy with `bash scripts/dev/verify-object-store.sh`.

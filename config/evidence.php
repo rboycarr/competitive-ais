@@ -6,6 +6,17 @@
 
 return [
 
+    'scan' => [
+        'host' => env('CLAMAV_HOST', 'clamav'),
+        'port' => (int) env('CLAMAV_PORT', 3310),
+        'connect_timeout' => (float) env('CLAMAV_CONNECT_TIMEOUT', 5),
+        'read_timeout' => (float) env('CLAMAV_READ_TIMEOUT', 30),
+        'chunk_bytes' => 1024 * 1024,
+        'engine' => 'clamd',
+    ],
+
+    'blob_retention_days' => 30,
+
     // Largest accepted upload. PHP (upload_max_filesize 50M, post_max_size 55M) and nginx (client_max_body_size 55m)
     // allow a little more, so this limit is the one users meet, with a clear message.
     'max_bytes' => 50 * 1024 * 1024,

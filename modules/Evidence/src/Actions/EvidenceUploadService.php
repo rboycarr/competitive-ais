@@ -13,6 +13,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Modules\Evidence\Jobs\ScanEvidenceJob;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Platform\Access\AccessScope;
@@ -82,7 +83,7 @@ class EvidenceUploadService
                 fclose($stream);
             }
 
-            return $this->db->transaction(function () use ($actor, $asset): EvidenceAsset {
+            $saved = $this->db->transaction(function () use ($actor, $asset): EvidenceAsset {
                 $asset->save();
                 $event = new EvidenceCustodyEvent;
                 $event->forceFill([
@@ -96,6 +97,9 @@ class EvidenceUploadService
 
                 return $asset;
             });
+            ScanEvidenceJob::dispatch($saved->id)->onQueue('evidence')->afterCommit();
+
+            return $saved;
         } catch (Throwable $e) {
             try {
                 // A disk may report a failed delete by returning false instead of throwing (TASK-0065).
