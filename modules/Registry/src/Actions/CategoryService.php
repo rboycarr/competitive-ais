@@ -12,6 +12,7 @@ use Illuminate\Validation\ValidationException;
 use LogicException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Product;
 use Modules\Registry\Models\ProductCategory;
 use Modules\Registry\Support\CategoryTree;
@@ -57,8 +58,8 @@ class CategoryService
 
                 return $category;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'product_categories', 'product_categories_parent_key_name_unique') ? $this->taken() : $e;
         }
     }
 
@@ -77,8 +78,8 @@ class CategoryService
                 $this->audit->record('category.renamed', $locked, [], $this->actor($actor));
                 $category->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'product_categories', 'product_categories_parent_key_name_unique') ? $this->taken() : $e;
         }
     }
 
@@ -130,8 +131,8 @@ class CategoryService
                 ]) + ['subcategories' => $moved], $this->actor($actor));
                 $category->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'product_categories', 'product_categories_parent_key_name_unique') ? $this->taken() : $e;
         }
     }
 

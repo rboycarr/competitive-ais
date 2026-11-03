@@ -15,6 +15,7 @@ use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\CompetitorRelationship;
 use Modules\Registry\Support\Dates;
@@ -87,8 +88,8 @@ class CompetitorRelationshipService
 
                 return $relationship;
             }, self::ATTEMPTS);
-        } catch (UniqueConstraintViolationException) {
-            throw $this->overlapping($type); // a concurrent insert with the same start date got there first
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'competitor_relationships', 'competitor_relationships_pair_unique') ? $this->overlapping($type) : $e; // a concurrent insert with the same start date got there first
         }
     }
 
@@ -115,8 +116,8 @@ class CompetitorRelationshipService
                 $this->audit->record('competitor.relationship_updated', $locked, ['fields' => $changed], $this->actor($actor), $this->classification($parent, $child));
                 $relationship->setRawAttributes($locked->getAttributes(), true);
             }, self::ATTEMPTS);
-        } catch (UniqueConstraintViolationException) {
-            throw $this->overlapping($relationship->relation_type);
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'competitor_relationships', 'competitor_relationships_pair_unique') ? $this->overlapping($relationship->relation_type) : $e;
         }
     }
 

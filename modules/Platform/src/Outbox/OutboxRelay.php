@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use LogicException;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Platform\Support\TypedFields;
 use stdClass;
 use Throwable;
@@ -134,8 +135,12 @@ class OutboxRelay
                     'handled_at' => $this->time(CarbonImmutable::now('UTC')),
                 ]);
             });
-        } catch (UniqueConstraintViolationException) {
-            // A concurrent delivery recorded the receipt first; this run's database changes were rolled back.
+        } catch (UniqueConstraintViolationException $e) {
+            // A concurrent delivery recorded the receipt first; this run's database changes were rolled back. A
+            // duplicate raised by the handler's own writes is a failure of that delivery and must not be swallowed.
+            if (! UniqueViolation::on($e, 'outbox_receipts', 'outbox_receipts_outbox_event_id_handler_unique')) {
+                throw $e;
+            }
         }
     }
 

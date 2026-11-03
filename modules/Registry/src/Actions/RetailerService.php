@@ -11,6 +11,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Channel;
 use Modules\Registry\Models\Market;
 use Modules\Registry\Models\Retailer;
@@ -48,8 +49,8 @@ class RetailerService
 
                 return $retailer;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'retailers', 'retailers_market_id_name_unique') ? $this->taken() : $e;
         }
     }
 
@@ -70,8 +71,8 @@ class RetailerService
                 $this->audit->record('retailer.updated', $locked, ['fields' => $changed], $this->actor($actor));
                 $retailer->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'retailers', 'retailers_market_id_name_unique') ? $this->taken() : $e;
         }
     }
 

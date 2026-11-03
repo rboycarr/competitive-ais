@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Tag;
 use Modules\Registry\Support\Names;
 
@@ -42,8 +43,8 @@ class TagService
 
                 return $tag;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'tags', 'tags_taxonomy_name_unique') ? $this->taken() : $e;
         }
     }
 
@@ -64,8 +65,8 @@ class TagService
                 $this->audit->record('tag.updated', $locked, ['fields' => $changed], $this->actor($actor));
                 $tag->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'tags', 'tags_taxonomy_name_unique') ? $this->taken() : $e;
         }
     }
 

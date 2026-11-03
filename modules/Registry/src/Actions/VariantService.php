@@ -12,6 +12,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Access\ProductAccess;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\Product;
@@ -55,8 +56,8 @@ class VariantService
 
                 return $variant;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->skuTaken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'product_variants', 'product_variants_product_id_sku_unique') ? $this->skuTaken() : $e;
         }
     }
 
@@ -85,8 +86,8 @@ class VariantService
                 $this->audit->record('variant.updated', $locked, ['fields' => $changed], $this->actor($actor), $this->classification($owner));
                 $variant->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->skuTaken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'product_variants', 'product_variants_product_id_sku_unique') ? $this->skuTaken() : $e;
         }
     }
 

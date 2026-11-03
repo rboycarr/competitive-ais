@@ -14,6 +14,7 @@ use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Platform\Support\WebAddress;
 use Modules\Registry\Models\Competitor;
 
@@ -66,8 +67,9 @@ class CompetitorService
                     return $competitor;
                 });
             } catch (UniqueConstraintViolationException $e) {
-                // Two entries with the same name at once: try the next slug suffix.
-                if ($attempt >= 20) {
+                // Two entries with the same name at once: try the next slug suffix. Any other duplicate is a different
+                // failure and surfaces as itself.
+                if (! UniqueViolation::on($e, 'competitors', 'competitors_slug_unique') || $attempt >= 20) {
                     throw $e;
                 }
                 $competitor->exists = false;

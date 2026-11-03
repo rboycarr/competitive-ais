@@ -12,6 +12,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\Tag;
 
@@ -51,8 +52,12 @@ class CompetitorTagService
                 $this->links($tag, $locked)->insert(['tag_id' => $tag->id, 'taggable_type' => Tag::COMPETITOR, 'taggable_id' => $locked->id, 'created_at' => now('UTC')]);
                 $this->audit->record('competitor.tagged', $locked, ['tag_id' => $tag->id, 'taxonomy' => $tag->taxonomy], $this->actor($actor));
             });
-        } catch (UniqueConstraintViolationException) {
-            // Tagged by a concurrent request: the outcome is the same, and that request audited it.
+        } catch (UniqueConstraintViolationException $e) {
+            // Tagged by a concurrent request: the outcome is the same, and that request audited it. Any other duplicate
+            // is a different failure.
+            if (! UniqueViolation::on($e, 'taggables', 'PRIMARY')) {
+                throw $e;
+            }
         }
     }
 

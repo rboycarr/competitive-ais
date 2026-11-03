@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Currency;
 use Modules\Registry\Models\Market;
 use Modules\Registry\Support\Names;
@@ -50,8 +51,8 @@ class CurrencyService
 
                 return $currency;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw ValidationException::withMessages(['code' => 'This currency is already listed.']);
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'currencies', 'PRIMARY') ? ValidationException::withMessages(['code' => 'This currency is already listed.']) : $e;
         }
     }
 
