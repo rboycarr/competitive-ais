@@ -214,6 +214,12 @@ class SourceLifecycleTest extends TestCase
         $migration = require base_path('modules/Sources/database/migrations/2026_11_17_000100_create_source_status_changes_table.php');
         $this->assertThrows(fn () => $migration->down(), RuntimeException::class, 'Source status changes exist');
         $this->assertSame(1, SourceStatusChange::query()->count());
+
+        // Rolling back the DATETIME conversion keeps DATETIME(6): TIMESTAMP never comes back (TASK-0062).
+        $type = fn (): ?string => DB::selectOne("SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'source_policies' AND COLUMN_NAME = 'decided_at'")?->COLUMN_TYPE;
+        $before = $type();
+        (require base_path('modules/Sources/database/migrations/2026_11_17_000200_use_datetime_for_source_policy_decisions.php'))->down();
+        $this->assertSame(['datetime(6)', 'datetime(6)'], [$before, $type()]);
     }
 
     /** @return TestResponse<Response> */
