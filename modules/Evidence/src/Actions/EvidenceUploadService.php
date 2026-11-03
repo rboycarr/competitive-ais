@@ -10,6 +10,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Filesystem\Factory as Filesystems;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Evidence\Models\EvidenceAsset;
@@ -67,17 +68,19 @@ class EvidenceUploadService
         if (! $this->access->allows($actor, $asset)) {
             throw ValidationException::withMessages(['classification' => 'You cannot classify evidence above what you can see.']);
         }
-        $asset->quarantine_key = 'quarantine/'.$asset->ulid;
-
+        $key = $asset->quarantine_key = 'quarantine/'.$asset->ulid;
         $disk = $this->storage->disk(self::QUARANTINE_DISK);
-        $stream = fopen($file->getRealPath(), 'rb') ?: throw ValidationException::withMessages(['file' => 'The upload could not be read; try again.']);
-        try {
-            $disk->writeStream($asset->quarantine_key, $stream);
-        } finally {
-            fclose($stream);
-        }
 
+        // One cleanup boundary for the write and the records (TASK-0064 #1): a write that fails part-way (e.g. during a
+        // multipart upload) leaves nothing either. Deleting a key that was never written is harmless.
         try {
+            $stream = fopen($file->getRealPath(), 'rb') ?: throw ValidationException::withMessages(['file' => 'The upload could not be read; try again.']);
+            try {
+                $disk->writeStream($key, $stream);
+            } finally {
+                fclose($stream);
+            }
+
             return $this->db->transaction(function () use ($actor, $asset): EvidenceAsset {
                 $asset->save();
                 $event = new EvidenceCustodyEvent;
@@ -94,8 +97,11 @@ class EvidenceUploadService
             });
         } catch (Throwable $e) {
             try {
-                $disk->delete($asset->quarantine_key);
+                $disk->delete($key);
             } catch (Throwable $cleanup) {
+                // An object without an asset: logged with its generated key only, for the quarantine sweep
+                // (P1-38, TASK-0064 #2). No file name, title or credentials.
+                Log::warning('evidence.quarantine_orphan', ['quarantine_key' => $key, 'cleanup_error' => $cleanup::class]);
                 report($cleanup);
             }
 
@@ -131,6 +137,10 @@ class EvidenceUploadService
             if ($value !== null && ! is_string($value)) {
                 throw ValidationException::withMessages([$field => 'Give text.']);
             }
+            // Malformed UTF-8 is refused here, before anything is stored (TASK-0064 #4).
+            if ($value !== null && ! mb_check_encoding($value, 'UTF-8')) {
+                throw ValidationException::withMessages([$field => 'This text contains characters that cannot be read.']);
+            }
             $value = trim((string) $value);
             if (mb_strlen($value) > $max) {
                 throw ValidationException::withMessages([$field => "Use at most $max characters."]);
@@ -151,7 +161,7 @@ class EvidenceUploadService
         return [
             'original_filename' => $name,
             'size_bytes' => $size,
-            'title' => preg_replace('/\s+/u', ' ', $title),
+            'title' => (string) preg_replace('/\s+/u', ' ', $title), // valid UTF-8 (checked above), so never null
             'description' => $text('description', self::MAX_TEXT),
             'source_url' => $sourceUrl,
             'captured_at' => $this->capturedAt($data['captured_at'] ?? null),

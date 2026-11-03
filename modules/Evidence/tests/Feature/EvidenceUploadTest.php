@@ -3,14 +3,17 @@
 namespace Modules\Evidence\Tests\Feature;
 
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
+use Mockery;
 use Modules\Evidence\Actions\EvidenceUploadService;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
@@ -178,6 +181,52 @@ class EvidenceUploadTest extends TestCase
         $this->assertSame([], Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->allFiles());
     }
 
+    public function test_a_write_that_fails_part_way_leaves_nothing_behind(): void
+    {
+        $disk = Mockery::mock(Filesystem::class);
+        $disk->shouldReceive('writeStream')->once()->andThrow(new RuntimeException('Synthetic write failure.'));
+        $disk->shouldReceive('delete')->once()->with(Mockery::pattern('#^quarantine/[0-9A-HJKMNP-TV-Z]{26}$#'))->andReturn(true);
+        Storage::set(EvidenceUploadService::QUARANTINE_DISK, $disk);
+
+        $this->assertThrows(fn () => app(EvidenceUploadService::class)->upload($this->analyst, $this->file('a.pdf', self::PDF), $this->fields()), RuntimeException::class, 'Synthetic write failure.');
+        $this->assertSame([0, 0], [EvidenceAsset::query()->count(), EvidenceCustodyEvent::query()->count()]);
+    }
+
+    public function test_an_object_that_cannot_be_removed_is_logged_by_its_key_only(): void
+    {
+        $disk = Mockery::mock(Filesystem::class);
+        $disk->shouldReceive('writeStream')->once()->andReturn(true);
+        $disk->shouldReceive('delete')->once()->andThrow(new RuntimeException('Synthetic delete failure.'));
+        Storage::set(EvidenceUploadService::QUARANTINE_DISK, $disk);
+        EvidenceAsset::saved(fn () => throw new RuntimeException('Synthetic database failure.'));
+        $log = Log::spy();
+
+        $this->assertThrows(fn () => app(EvidenceUploadService::class)->upload($this->analyst, $this->file('secret-plans.pdf', self::PDF), ['title' => 'Do not log me'] + $this->fields()), RuntimeException::class, 'Synthetic database failure.');
+        $log->shouldHaveReceived('warning')->once()->with('evidence.quarantine_orphan', Mockery::on(fn (array $context): bool => array_keys($context) === ['quarantine_key', 'cleanup_error']
+            && preg_match('#^quarantine/[0-9A-Z]{26}$#', $context['quarantine_key']) === 1 && $context['cleanup_error'] === RuntimeException::class));
+        $this->assertSame(0, EvidenceAsset::query()->count());
+    }
+
+    public function test_malformed_text_suspended_users_and_disguised_archives_are_refused(): void
+    {
+        foreach (['title', 'description', 'source_url'] as $field) {
+            try {
+                app(EvidenceUploadService::class)->upload($this->analyst, $this->file('a.pdf', self::PDF), [$field => "bad \xff text"] + $this->fields());
+                $this->fail("Expected a validation error for malformed $field.");
+            } catch (ValidationException $e) {
+                $this->assertArrayHasKey($field, $e->errors());
+            }
+        }
+        // A malformed file name cleans to "upload", which has no accepted extension.
+        $this->assertThrows(fn () => app(EvidenceUploadService::class)->upload($this->analyst, $this->file("report\xff.pdf", self::PDF), $this->fields()), ValidationException::class);
+        // A plain ZIP archive is not a Word document, whatever its name.
+        $this->actingAs($this->analyst)->post('/evidence', $this->form('report.docx', "PK\x03\x04\x14\x00\x00\x00\x00\x00".str_repeat("\x00", 20)))->assertSessionHasErrors('file');
+
+        $suspended = $this->createUser('suspended@example.test', 'ci_analyst', 'suspended', Classification::Confidential);
+        $this->assertThrows(fn () => app(EvidenceUploadService::class)->upload($suspended, $this->file('a.pdf', self::PDF), $this->fields()), AuthorizationException::class);
+        $this->assertSame([0, []], [EvidenceAsset::query()->count(), Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->allFiles()]);
+    }
+
     public function test_until_available_only_the_uploader_and_holders_see_an_asset(): void
     {
         $other = $this->createUser('other@example.test', 'ci_analyst', clearance: Classification::Confidential);
@@ -245,6 +294,7 @@ class EvidenceUploadTest extends TestCase
             ['source_url' => 'javascript:alert(1)'], ['source_url' => 'https://user@shop.example/'],
             ['quarantine_key' => null], ['scan_status' => 'clean', 'scanned_at' => now()], ['status' => 'available', 'quarantine_key' => null],
             ['status' => 'rejected', 'quarantine_key' => null], ['scan_status' => 'error'], ['scanned_at' => now()],
+            ['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now()], // still holding its quarantine object
         ] as $overrides) {
             $this->assertDatabaseError(3819, fn () => DB::table('evidence_assets')->insert($row($overrides)), (string) json_encode($overrides));
         }

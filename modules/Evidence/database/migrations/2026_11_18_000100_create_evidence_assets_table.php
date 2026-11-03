@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\Schema;
  *   (P1-35), scopes (P1-36). Difference from the ERD: `size_bytes`, the uploaded size, shown before a blob exists.
  * - evidence_custody_events (append_only): who did what to an asset, when.
  * The database holds the status rules: a quarantined asset has its quarantine object and a pending (or failed,
- * retryable) scan; an available one scanned clean; a rejected one has a scan result.
+ * retryable) scan; an available one scanned clean and no longer has a quarantine object (TASK-0064 #3); a rejected one
+ * has a scan result.
  * Times are DATETIME(6) in UTC (docs/02 §1).
  */
 return new class extends Migration
@@ -54,7 +55,7 @@ return new class extends Migration
             ADD CONSTRAINT evidence_assets_source_url_check CHECK (source_url IS NULL OR source_url REGEXP '^https?://[^/@?#]+([/?#]|$)'),
             ADD CONSTRAINT evidence_assets_state_check CHECK (
                 (status <> 'quarantined' OR (scan_status IN ('pending', 'error') AND quarantine_key IS NOT NULL))
-                AND (status <> 'available' OR scan_status = 'clean')
+                AND (status <> 'available' OR (scan_status = 'clean' AND quarantine_key IS NULL))
                 AND (status <> 'rejected' OR scan_status <> 'pending')
                 AND ((scan_status = 'pending') = (scanned_at IS NULL)))");
 
