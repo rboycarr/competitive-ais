@@ -144,10 +144,17 @@ class RegistryConcurrencyTest extends TestCase
     {
         $categories = app(CategoryService::class);
         for ($round = 1; $round <= self::ROUNDS; $round++) {
-            $a = $categories->create($this->director, "Snacks $round", null);
-            $b = $categories->create($this->director, "Drinks $round", null);
-            $c = $categories->create($this->director, "Chips $round", $a->id);
-            $d = $categories->create($this->director, "Potato chips $round", $c->id); // moves with C
+            // This setup failed once in a full run with a ValidationException whose message was lost (2026-11-03); it
+            // did not reproduce in 22 repeated runs, under load or not. Say exactly what failed if it happens again.
+            try {
+                $a = $categories->create($this->director, "Snacks $round", null);
+                $b = $categories->create($this->director, "Drinks $round", null);
+                $c = $categories->create($this->director, "Chips $round", $a->id);
+                $d = $categories->create($this->director, "Potato chips $round", $c->id); // moves with C
+            } catch (ValidationException $e) {
+                $this->fail("Category setup failed in round $round: ".json_encode($e->errors()).'; categories: '
+                    .json_encode(ProductCategory::query()->orderBy('id')->get(['id', 'parent_id', 'name', 'path', 'depth'])->toArray()));
+            }
 
             // A under B and B under A at once (a cycle if both won), and C (with D) moving to B or the top.
             $results = Concurrently::run([
