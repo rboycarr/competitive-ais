@@ -7,12 +7,26 @@
 | Protocol | ADR-0009; operating guide in `handoffs/README.md` |
 
 ## 1. Operating model (decision D4: manual handoff)
-- **Claude Code:** lead architect, primary implementer, and maintainer of the source-of-truth docs. Writes task briefs, implements, runs tests, triages review findings.
-- **OpenAI Codex:** independent reviewer and adversarial-test proposer. Implements only bounded tasks the user explicitly assigns, on its own branch or worktree.
+
+**From 2026-11-04 (PO decision): roles switched back. Claude Code implements and Codex reviews read-only, as until 2026-11-02 (below).**
+
+**What happened during Codex's turn as implementer:**
+- Codex took over P1-32b (TASK-0069) on 2026-11-03 but could not finish it: the full backend suite takes about 25 minutes, and its runs ended at its command time limit.
+- Its uncommitted work is kept, unchanged, in commit `30bb995` on `feature/evidence-scan`. Claude Code reviews and finishes it there.
+- `AGENTS.md` is restored to the reviewer role.
+
+**2026-11-03 to 2026-11-04 (no longer in force): Codex implements, Claude Code reviews.**
+- **OpenAI Codex:** the implementer. It works on feature branches, writes the task briefs and prompts for review, adds the dispositions, keeps `docs/11`, this ledger and the session history up to date, and hands the PO compare links. Its rules are in `AGENTS.md`, and its starting point is `handoffs/SESSION-2026-11-03-codex-takeover.md`.
+- **Claude Code:** the reviewer, read-only. It reviews Codex's branches when the PO asks, never edits them, and its output is recorded verbatim, with its SHA-256, in `handoffs/TASK-####-review.md`.
+- **The Product Owner:** decides scope and product questions, runs Codex, and is the only party who merges.
+
+**Until 2026-11-02 (TASK-0001 to TASK-0068):**
+- **Claude Code:** lead architect, primary implementer, and maintainer of the source-of-truth docs. It wrote the task briefs, implemented, ran the tests and triaged the review findings.
+- **OpenAI Codex:** independent reviewer and adversarial-test proposer. It implemented only bounded tasks the user explicitly assigned, on its own branch or worktree.
 - **The user (Product Owner):** the only party who runs Codex, and the only party who approves merges for gated changes.
 - By default Claude does **not** invoke Codex. The exception is when the Product Owner explicitly asks Claude to run a specific review in that session. The review file then records "invoked by Claude at the Product Owner's request", and the run is still read-only. Claude never states that Codex reviewed something unless `handoffs/TASK-####-review.md` contains Codex's actual output.
 
-**Environment fact (2026-10-31):** Codex CLI `0.164.0-alpha.11.1` is bundled with the VS Code ChatGPT extension (`%USERPROFILE%\.vscode\extensions\openai.chatgpt-*\bin\windows-x86_64\codex.exe`). It is not on PATH. It is logged in through ChatGPT. This project is not in Codex's trusted-project list.
+**Environment fact (2026-10-31):** Codex CLI `0.164.0-alpha.11.1` is bundled with the VS Code ChatGPT extension (`%USERPROFILE%\.vscode\extensions\openai.chatgpt-*\bin\windows-x86_64\codex.exe`). It is not on PATH. It is logged in through ChatGPT. (2026-11-03: the project is now listed as trusted in Codex's configuration.) Originally, this project is not in Codex's trusted-project list.
 
 ## 2. When Codex review is required
 
@@ -101,7 +115,8 @@ AI approval never replaces human approval.
 | TASK-0066 | Verification of the TASK-0065 fix | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/evidence-upload` @ `533d3be` | **Reviewed: the TASK-0065 fix confirmed, no new findings; recommendation "yes".** Merged as pull request #27 | `handoffs/TASK-0066-review.md` |
 | TASK-0067 | Review of P1-25a (unique-violation catches narrowed to their index) | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `fix/registry-unique-violations` @ `d7deec1` | **Reviewed: "yes after fixes": 1 high (a duplicate value could imitate the key), 2 medium, 1 low. Fixed: the key is read only from the end of the driver's message, MySQL 8.4 form only, unit-tested; only the relay may name the receipts table (code rule); the low (an unrelated checkpoint duplicate) cannot occur today.** Verified in TASK-0068 | `handoffs/TASK-0067-review.md` |
 | TASK-0068 | Verification of the TASK-0067 fixes | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `fix/registry-unique-violations` @ `3eb728c` | **Reviewed: the TASK-0067 findings resolved (the low correctly declined), no new findings; recommendation "yes".** Merged as pull request #28 | `handoffs/TASK-0068-review.md` |
-| TASK-0070 | Read-only review of P1-32b evidence scanning | Codex | Reviewer: Claude Code, read-only | `feature/evidence-scan` | **Ready for review; pending** | `handoffs/TASK-0070-review.md` |
+| TASK-0069 | **Implement** P1-32b (scan and store evidence): the first task under the new roles | **OpenAI Codex** | Implementer (PO decision 2026-11-03); Claude Code reviews read-only | `feature/evidence-scan` | **Reassigned to Claude Code 2026-11-04** (roles switched back): Codex's unfinished work kept in `30bb995` | — |
+| TASK-0070 | Read-only review of P1-32b evidence scanning | Codex (brief); Claude Code (implementer since 2026-11-04) | Reviewer: Codex, read-only (roles switched back) | `feature/evidence-scan` | **Superseded:** written by Codex while it implemented; Claude Code rewrites it for Codex's read-only review of the finished branch | `handoffs/TASK-0070-review.md` |
 
 ## 4. Decision and disagreement log
 

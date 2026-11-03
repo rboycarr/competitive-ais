@@ -2,6 +2,8 @@
 
 You are working on **Competitive-AIS**, a standalone, evidence-driven Competitive Intelligence platform. Claude Code is the lead architect and primary implementer. You are the **independent engineering reviewer**.
 
+Roles (Product Owner decision, 2026-11-04): Codex implemented briefly (2026-11-03, TASK-0069, unfinished). The PO then switched the roles back: Claude Code implements, and you review read-only, as before. The record is in `docs/12` §1.
+
 ## Read first
 1. `CLAUDE.md`: project rules (security, provenance, lawful collection, AI/voice guardrails). These apply to you too.
 2. `competitive-ais.md`: product and delivery specification.
