@@ -63,6 +63,16 @@ class Source extends Model implements Classifiable, Scoped
         return $this->hasMany(SourcePolicy::class);
     }
 
+    /**
+     * Suspensions, reinstatements and retirements (P1-31b), visible like the policies: only through a visible source.
+     *
+     * @return HasMany<SourceStatusChange, $this>
+     */
+    public function statusChanges(): HasMany
+    {
+        return $this->hasMany(SourceStatusChange::class);
+    }
+
     public function classification(): Classification
     {
         return $this->classification;

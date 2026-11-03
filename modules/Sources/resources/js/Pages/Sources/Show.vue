@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { Link, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
-import { decisionLabel, methodLabel, robotsLabel, typeLabel } from './labels';
+import { actionHelp, actionLabel, decisionLabel, methodLabel, reasonLabel, robotsLabel, statusLabel, typeLabel } from './labels';
 
 type Source = {
     ulid: string; name: string; type: string; baseUrl: string | null; host: string | null; method: string; status: string; reliability: string;
@@ -15,14 +15,26 @@ type Policy = {
     containsPersonalData: boolean; personalDataBasis: string | null; notes: string | null; decidedBy: string | null; decidedAt: string;
 };
 
+type StatusChange = { action: string; fromStatus: string; toStatus: string; reason: string; note: string; changedBy: string | null; changedAt: string };
+type LifecycleAction = { action: string; reasons: string[] };
+
 const props = defineProps<{
     source: Source; policies: Policy[]; canSubmit: boolean; canDecide: boolean; decidingOwnProposal: boolean; basedOnVersion: number;
-    decisions: string[]; robotsDecisions: string[]; robotsBound: boolean;
+    decisions: string[]; robotsDecisions: string[]; robotsBound: boolean; statusChanges: StatusChange[]; lifecycleActions: LifecycleAction[];
 }>();
 
 // Linked only when it is an http(s) address; the system itself never opens it.
 const safeLink = (url: string | null): string | null => (url !== null && /^https?:\/\//i.test(url) ? url : null);
 const safeUrl = computed(() => safeLink(props.source.baseUrl));
+// The last approved policy applies only while the source is approved (P1-31b).
+const policyInForce = computed(() => {
+    const version = props.source.currentPolicyVersion;
+    if (version === null) {
+        return 'None';
+    }
+
+    return props.source.status === 'approved' ? `Version ${version}` : `None (version ${version} was approved; the source is ${statusLabel(props.source.status).toLowerCase()})`;
+});
 const proposedAt = computed(() => (props.source.proposedAt === null ? '—' : new Date(props.source.proposedAt).toLocaleString()));
 
 const submitForm = useForm({});
@@ -40,6 +52,17 @@ function submitForReview(): void {
 function decide(): void {
     form.post(`/sources/${props.source.ulid}/policies`, { preserveScroll: true });
 }
+
+const statusForm = useForm({ action: '', reason: '', note: '' });
+const reasons = computed(() => props.lifecycleActions.find((a) => a.action === statusForm.action)?.reasons ?? []);
+
+function chooseAction(): void {
+    statusForm.reason = '';
+}
+
+function changeStatus(): void {
+    statusForm.post(`/sources/${props.source.ulid}/status`, { preserveScroll: true });
+}
 </script>
 
 <template>
@@ -47,7 +70,7 @@ function decide(): void {
         <p class="mb-4 text-sm"><Link href="/sources" class="underline">All sources</Link></p>
         <dl class="mb-6 grid max-w-2xl grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
             <dt class="font-medium">Status</dt><dd>{{ props.source.status.replace('_', ' ') }}</dd>
-            <dt class="font-medium">Policy in force</dt><dd>{{ props.source.currentPolicyVersion === null ? 'None' : `Version ${props.source.currentPolicyVersion}` }}</dd>
+            <dt class="font-medium">Policy in force</dt><dd>{{ policyInForce }}</dd>
             <dt class="font-medium">Type</dt><dd>{{ typeLabel(props.source.type) }}</dd>
             <dt class="font-medium">Base URL</dt>
             <dd>
@@ -147,6 +170,37 @@ function decide(): void {
             </form>
         </section>
 
+        <section v-if="props.lifecycleActions.length > 0" aria-labelledby="status-heading" class="mb-8 max-w-2xl">
+            <h2 id="status-heading" class="mb-1 text-lg font-semibold">Change status</h2>
+            <form class="space-y-3" novalidate @submit.prevent="changeStatus">
+                <fieldset>
+                    <legend class="font-medium">Change</legend>
+                    <div class="mt-1 flex flex-wrap gap-4">
+                        <label v-for="option in props.lifecycleActions" :key="option.action" class="flex items-center gap-2">
+                            <input v-model="statusForm.action" type="radio" name="action" :value="option.action" required @change="chooseAction">
+                            {{ actionLabel(option.action) }}
+                        </label>
+                    </div>
+                    <p v-if="statusForm.action !== ''" class="mt-1 text-xs text-slate-600">{{ actionHelp(statusForm.action) }}</p>
+                </fieldset>
+                <div>
+                    <label for="status-reason" class="block font-medium">Reason</label>
+                    <select id="status-reason" v-model="statusForm.reason" required :disabled="statusForm.action === ''" :aria-invalid="statusForm.errors.reason ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                        <option value="" disabled>Choose a reason</option>
+                        <option v-for="reason in reasons" :key="reason" :value="reason">{{ reasonLabel(reason) }}</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="status-note" class="block font-medium">Note</label>
+                    <textarea id="status-note" v-model="statusForm.note" required maxlength="10000" rows="3" :aria-invalid="statusForm.errors.note ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+                </div>
+                <ul v-if="Object.keys(statusForm.errors).length > 0" class="text-sm text-red-700" role="alert">
+                    <li v-for="(message, field) in statusForm.errors" :key="field">{{ message }}</li>
+                </ul>
+                <button type="submit" :disabled="statusForm.processing || statusForm.action === ''" class="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50">Change status</button>
+            </form>
+        </section>
+
         <section aria-labelledby="policy-heading" class="max-w-2xl">
             <h2 id="policy-heading" class="mb-2 text-lg font-semibold">Policy history</h2>
             <p v-if="props.policies.length === 0" class="text-sm text-slate-700">No policy decision yet. Nobody may use this source for evidence until a director approves its policy.</p>
@@ -170,6 +224,17 @@ function decide(): void {
                         <dt class="font-medium">Personal data</dt><dd class="whitespace-pre-line">{{ policy.containsPersonalData ? `Yes. Lawful basis: ${policy.personalDataBasis ?? 'not recorded'}` : 'No' }}</dd>
                         <dt class="font-medium">Notes</dt><dd class="whitespace-pre-line">{{ policy.notes ?? '—' }}</dd>
                     </dl>
+                </li>
+            </ol>
+        </section>
+
+        <section v-if="props.statusChanges.length > 0" aria-labelledby="status-history-heading" class="mt-8 max-w-2xl">
+            <h2 id="status-history-heading" class="mb-2 text-lg font-semibold">Status history</h2>
+            <ol class="space-y-3">
+                <li v-for="(change, index) in props.statusChanges" :key="`${change.changedAt}-${index}`" class="rounded border border-slate-200 p-3 text-sm">
+                    <h3 class="font-semibold">{{ actionLabel(change.action) }}: {{ statusLabel(change.fromStatus) }} → {{ statusLabel(change.toStatus) }}</h3>
+                    <p class="text-slate-700">{{ change.changedBy ?? 'Unknown' }}, {{ new Date(change.changedAt).toLocaleString() }}. Reason: {{ reasonLabel(change.reason) }}</p>
+                    <p class="mt-1 whitespace-pre-line">{{ change.note }}</p>
                 </li>
             </ol>
         </section>
