@@ -27,7 +27,7 @@ return new class extends Migration
             $table->string('reason', 20);
             $table->text('note');
             $table->foreignId('changed_by')->constrained('users')->restrictOnDelete();
-            $table->timestamp('changed_at', 6);
+            $table->dateTime('changed_at', 6); // DATETIME(6), never TIMESTAMP (docs/02 §1, TASK-0061 #1)
 
             $table->index(['source_id', 'changed_at']);
         });

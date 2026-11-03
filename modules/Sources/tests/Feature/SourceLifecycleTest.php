@@ -114,6 +114,28 @@ class SourceLifecycleTest extends TestCase
         app(SourcePolicyService::class)->submit($this->analyst, $review);
         $this->change($review, 'retire', 'other', 'Synthetic: withdrawn.')->assertSessionHasNoErrors();
         $this->assertSame(['retired', 'retired', 'approved'], [$proposed->refresh()->status, $review->refresh()->status, $approved->refresh()->status]);
+
+        // A source retired while awaiting review can be neither decided nor submitted again (TASK-0061).
+        $this->actingAs($this->director)->post("/sources/{$review->ulid}/policies", $this->decision())->assertSessionHasErrors('decision');
+        $this->actingAs($this->analyst)->post("/sources/{$review->ulid}/submit")->assertSessionHasErrors('source');
+        $this->assertSame([0, 'retired'], [SourcePolicy::query()->where('source_id', $review->id)->count(), $review->refresh()->status]);
+    }
+
+    public function test_a_rejected_re_review_keeps_the_old_approval_on_record_but_not_in_force(): void
+    {
+        $source = $this->approved('Trade news');
+        $first = $source->current_policy_id;
+        $this->change($source, 'suspend', 'terms_changed', 'Synthetic: the terms changed.');
+        $this->change($source, 'reinstate', 'terms_changed', 'Synthetic: new terms to review.');
+        app(SourcePolicyService::class)->decide($this->director, $source, $this->decision(['decision' => 'rejected', 'based_on_version' => 1, 'notes' => 'Synthetic: the new terms forbid our use.']));
+
+        $source->refresh();
+        $this->assertSame(['proposed', $first], [$source->status, $source->current_policy_id]);
+        $this->actingAs($this->director)->get("/sources/{$source->ulid}")->assertInertia(fn (AssertableInertia $page) => $page
+            ->where('source.status', 'proposed')->where('source.currentPolicyVersion', 1)
+            ->where('lifecycleActions', [['action' => 'retire', 'reasons' => SourceStatusChange::ACTIONS['retire']['reasons']]]));
+        // Only approved sources may be used (P1-37 checks the status); suspending needs an approved source.
+        $this->change($source, 'suspend', 'complaint', 'Synthetic.')->assertSessionHasErrors('action');
     }
 
     public function test_only_source_managers_who_can_see_the_source_change_it(): void
@@ -141,6 +163,8 @@ class SourceLifecycleTest extends TestCase
             ['note', ['action' => 'suspend', 'reason' => 'complaint', 'note' => '   ']],
             ['note', ['action' => 'suspend', 'reason' => 'complaint', 'note' => str_repeat('x', 10001)]],
             ['action', ['action' => 'delete', 'reason' => 'other', 'note' => 'Synthetic.']],
+            ['note', ['action' => 'suspend', 'reason' => 'complaint', 'note' => ['Synthetic.']]],
+            ['reason', ['action' => 'suspend', 'reason' => ['complaint'], 'note' => 'Synthetic.']],
         ] as [$field, $form]) {
             $this->actingAs($this->director)->post("/sources/{$source->ulid}/status", $form)->assertSessionHasErrors($field);
         }
@@ -155,6 +179,10 @@ class SourceLifecycleTest extends TestCase
         }
         $this->assertSame(0, SourceStatusChange::query()->count());
         $this->assertSame('approved', $source->refresh()->status);
+
+        // Exactly the limit is accepted.
+        $this->change($source, 'suspend', 'complaint', str_repeat('x', 10000))->assertSessionHasNoErrors();
+        $this->assertSame(10000, mb_strlen(SourceStatusChange::query()->sole()->note));
     }
 
     public function test_the_database_holds_the_lifecycle_rules(): void
