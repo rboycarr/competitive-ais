@@ -35,4 +35,15 @@ return [
         ],
     ],
 
+    // The clamd daemon of the `clamav` compose service (ADR-0003, ADR-0007), reached on the private `data` network.
+    // Its stream limit is raised to 60M in compose.yaml (the default 25M is below the 50 MB evidence limit).
+    'clamav' => [
+        'host' => env('CLAMAV_HOST', 'clamav'),
+        'port' => (int) env('CLAMAV_PORT', 3310),
+        'connect_timeout' => 5.0,
+        'read_timeout' => 60.0, // a 50 MB stream on a busy daemon; a timeout is an error, never clean
+        'chunk_bytes' => 1024 * 1024,
+        'engine' => 'clamd',
+    ],
+
 ];

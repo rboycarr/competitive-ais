@@ -97,9 +97,6 @@ class EvidenceUploadService
 
                 return $asset;
             });
-            ScanEvidenceJob::dispatch($saved->id)->onQueue('evidence')->afterCommit();
-
-            return $saved;
         } catch (Throwable $e) {
             try {
                 // A disk may report a failed delete by returning false instead of throwing (TASK-0065).
@@ -115,6 +112,17 @@ class EvidenceUploadService
 
             throw $e;
         }
+
+        // Outside the cleanup boundary (P1-32b): the asset is already committed here, so a dispatch failure must
+        // never delete its quarantine object. The scan queue picks up any asset still `quarantined`/`pending` through
+        // its own retries; a missing dispatch is not otherwise fatal to the upload itself.
+        try {
+            ScanEvidenceJob::dispatch($saved->id)->afterCommit();
+        } catch (Throwable $e) {
+            report($e);
+        }
+
+        return $saved;
     }
 
     /**

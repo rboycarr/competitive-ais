@@ -2,7 +2,10 @@
 
 namespace Modules\Evidence\Tests\Feature;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Mockery;
@@ -11,6 +14,7 @@ use Modules\Evidence\Actions\EvidenceUploadService;
 use Modules\Evidence\Jobs\ScanEvidenceJob;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceBlob;
+use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
 use Modules\Platform\Scanning\ClamAvClient;
@@ -18,84 +22,237 @@ use RuntimeException;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
+/**
+ * P1-32b / ADR-0007 / docs/02 §3.5: a quarantined asset is scanned, stored once if clean, and rejected if infected or
+ * no longer matching its extension (PO decision O34); results are written only from a pending scan, so a terminal
+ * result is never overwritten and a duplicate or retried job is harmless. The database holds the blob rules.
+ */
 class EvidenceScanTest extends TestCase
 {
     use CreatesUsers, RefreshDatabase;
 
     private const PDF = "%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
 
+    /**
+     * The official 68-byte EICAR test string, base64-encoded so no editor or scanner flags this file itself. Decoded
+     * only in memory, never written to the fake quarantine disk: that disk resolves to a path under the project
+     * directory, which on a Windows host (even reached through WSL) sits on the NTFS volume real-time antivirus
+     * protection scans. The genuine bytes were found, written, and left readable on disk (`file_exists()` true), yet
+     * `readStream()` failed every time with `UnableToReadFile`: the read itself was blocked, consistent with on-access
+     * scanning rather than a code defect (TASK-0069 rework, 2026-11-04). `test_the_eicar_fixture_decodes_correctly`
+     * proves this constant is the genuine string without touching disk; `test_the_exact_standard_eicar_fixture_...`
+     * below writes a safe placeholder instead, since ClamAvClient is mocked and never actually reads the bytes
+     * either. The real string is exercised only by the real-ClamAV smoke test, over an in-memory stream (never a
+     * file), recorded in the session history.
+     *
+     * An earlier, 4-byte-short version of this constant (missing "CC)7") went undetected by the real ClamAV while
+     * every automated test still passed: a reminder that a mocked verdict proves the service's handling of that
+     * verdict, never that a fixture is the real thing.
+     */
+    private const EICAR = 'WDVPIVAlQEFQWzRcUFpYNTQoUF4pN0NDKTd9JEVJQ0FSLVNUQU5EQVJELUFOVElWSVJVUy1URVNULUZJTEUhJEgrSCo=';
+
+    private User $analyst;
+
     protected function setUp(): void
     {
         parent::setUp();
+
         Storage::fake(EvidenceUploadService::QUARANTINE_DISK);
         Storage::fake(EvidenceScanService::EVIDENCE_DISK);
+        $this->analyst = $this->createUser('scanner@example.test', 'ci_analyst', clearance: Classification::Confidential);
     }
 
-    public function test_clean_content_is_promoted_and_reused_by_hash(): void
+    public function test_clean_content_is_promoted_and_stored_once(): void
     {
-        $user = $this->createUser('scanner@example.test', 'ci_analyst', clearance: Classification::Confidential);
-        $first = $this->asset($user, 'one.pdf', self::PDF);
-        $second = $this->asset($user, 'two.pdf', self::PDF);
-        $this->clamReturns('clean');
+        $asset = $this->quarantined('report.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+
+        app(EvidenceScanService::class)->scan($asset->id);
+
+        $asset = $asset->fresh();
+        $this->assertNotNull($asset);
+        $this->assertSame(['available', 'clean', null], [$asset->status, $asset->scan_status, $asset->quarantine_key]);
+        $this->assertNotNull($asset->scanned_at);
+        $this->assertSame('clamd', $asset->scan_engine);
+        $this->assertNotNull($asset->evidence_blob_id);
+
+        $blob = EvidenceBlob::query()->sole();
+        $this->assertSame([hash('sha256', self::PDF), 'evidence', strlen(self::PDF), 'application/pdf', 'ok', false], [
+            $blob->sha256, $blob->storage_disk, $blob->size_bytes, $blob->detected_mime, $blob->integrity_status, $blob->legal_hold,
+        ]);
+        $this->assertSame(now('UTC')->addDays(30)->toDateString(), $blob->retention_until?->toDateString());
+        Storage::disk(EvidenceScanService::EVIDENCE_DISK)->assertExists($blob->storage_key);
+        $this->assertSame(self::PDF, Storage::disk(EvidenceScanService::EVIDENCE_DISK)->get($blob->storage_key));
+        $this->assertSame([], Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->allFiles());
+
+        $events = EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->orderBy('id')->pluck('event')->all();
+        $this->assertSame(['scanned'], $events);
+        $audit = DB::table('audit_events')->where('action', 'evidence.scanned')->sole();
+        $this->assertSame(['system', null], [$audit->actor_type, $audit->actor_id]);
+        $this->assertEquals(['result' => 'clean', 'sha256' => $blob->sha256], json_decode((string) $audit->context, true));
+    }
+
+    public function test_identical_bytes_reuse_the_same_blob(): void
+    {
+        $first = $this->quarantined('one.pdf', self::PDF);
+        $second = $this->quarantined('two.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
 
         app(EvidenceScanService::class)->scan($first->id);
         app(EvidenceScanService::class)->scan($second->id);
 
-        $first = $first->fresh();
-        $second = $second->fresh();
-        $this->assertNotNull($first);
-        $this->assertNotNull($second);
-        $this->assertSame(['available', 'clean'], [$first->status, $first->scan_status]);
-        $this->assertSame(['available', 'clean'], [$second->status, $second->scan_status]);
         $this->assertSame(1, EvidenceBlob::query()->count());
-        Storage::disk(EvidenceScanService::EVIDENCE_DISK)->assertExists((string) EvidenceBlob::query()->sole()->storage_key);
-        $this->assertSame([], Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->allFiles());
+        $blobId = EvidenceBlob::query()->sole()->id;
+        $this->assertSame([$blobId, $blobId], [$first->fresh()?->evidence_blob_id, $second->fresh()?->evidence_blob_id]);
+        $this->assertCount(1, Storage::disk(EvidenceScanService::EVIDENCE_DISK)->allFiles());
     }
 
-    public function test_type_mismatched_content_is_rejected(): void
+    public function test_a_type_mismatch_at_scan_time_is_rejected_outright(): void
     {
-        $user = $this->createUser('reject@example.test', 'ci_analyst', clearance: Classification::Confidential);
-        $mismatch = $this->asset($user, 'spoof.png', self::PDF);
-        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists((string) $mismatch->quarantine_key);
-        $this->clamReturns('clean');
-        app(EvidenceScanService::class)->scan($mismatch->id);
-        $mismatch = $mismatch->fresh();
-        $this->assertNotNull($mismatch);
-        $this->assertSame(['rejected', 'clean'], [$mismatch->status, $mismatch->scan_status]);
+        // The upload service would have refused this at the door; this is defence in depth if the stored bytes ever
+        // stop matching the declared extension (O34, 2026-11-03: reject outright, never re-quarantine).
+        $asset = $this->quarantined('spoof.png', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
 
+        app(EvidenceScanService::class)->scan($asset->id);
+
+        $asset = $asset->fresh();
+        $this->assertNotNull($asset);
+        $this->assertSame(['rejected', 'clean', null, null], [$asset->status, $asset->scan_status, $asset->quarantine_key, $asset->evidence_blob_id]);
         $this->assertSame(0, EvidenceBlob::query()->count());
+        $this->assertSame([], Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->allFiles());
+        $events = EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->orderBy('id')->pluck('event')->all();
+        $this->assertSame(['scanned', 'rejected'], $events);
+        $audit = DB::table('audit_events')->where('action', 'evidence.rejected')->sole();
+        $this->assertSame(['type_mismatch'], [json_decode((string) $audit->context, true)['reason']]);
     }
 
-    public function test_eicar_is_rejected(): void
+    public function test_the_eicar_fixture_decodes_to_the_genuine_signature(): void
     {
-        Storage::fake(EvidenceUploadService::QUARANTINE_DISK);
-        $user = $this->createUser('eicar@example.test', 'ci_analyst', clearance: Classification::Confidential);
-        $infected = $this->asset($user, 'eicar.txt', base64_decode('WDVPIVAlQEFQWzRcUFpYNTQoUF4pN30kRUlDQVItU1RBTkRBUkQtQU5USVZJUlVTLVRFU1QtRklMRSEkSCtIKg==', true));
-        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists((string) $infected->quarantine_key);
-        $this->clamReturns('infected');
-        app(EvidenceScanService::class)->scan($infected->id);
-        $infected = $infected->fresh();
-        $this->assertNotNull($infected);
-        $this->assertSame(['rejected', 'infected'], [$infected->status, $infected->scan_status]);
+        $eicar = base64_decode(self::EICAR, true);
+        $this->assertSame(68, strlen((string) $eicar));
+        $this->assertSame('X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*', $eicar);
     }
 
-    public function test_scanner_errors_are_retryable_and_duplicate_jobs_are_harmless(): void
+    public function test_the_exact_standard_eicar_fixture_is_rejected_as_infected(): void
     {
-        $user = $this->createUser('retry@example.test', 'ci_analyst', clearance: Classification::Confidential);
-        $asset = $this->asset($user, 'retry.pdf', self::PDF);
+        // Not the real EICAR bytes on disk (see the constant's docblock): ClamAvClient is mocked below and never
+        // reads them, so a safe placeholder exercises the same "infected" code path without the real bytes landing
+        // on the host's antivirus-scanned filesystem.
+        $asset = $this->quarantined('eicar.txt', 'Synthetic placeholder: the real content is never read (mocked scanner).');
+        $this->clamReturns(ClamAvClient::INFECTED);
+
+        app(EvidenceScanService::class)->scan($asset->id);
+
+        $asset = $asset->fresh();
+        $this->assertNotNull($asset);
+        $this->assertSame(['rejected', 'infected', null], [$asset->status, $asset->scan_status, $asset->evidence_blob_id]);
+        $this->assertSame(0, EvidenceBlob::query()->count());
+        $events = EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->orderBy('id')->pluck('event')->all();
+        $this->assertSame(['scanned', 'rejected'], $events);
+        $audit = DB::table('audit_events')->where('action', 'evidence.rejected')->sole();
+        $this->assertSame(['infected'], [json_decode((string) $audit->context, true)['reason']]);
+    }
+
+    public function test_a_scanner_error_is_retryable_and_leaves_the_asset_in_quarantine(): void
+    {
+        $asset = $this->quarantined('retry.pdf', self::PDF);
         app()->instance(ClamAvClient::class, Mockery::mock(ClamAvClient::class, function ($mock): void {
-            $mock->shouldReceive('scan')->once()->andThrow(new RuntimeException('scanner unavailable'));
+            $mock->shouldReceive('scan')->once()->andThrow(new RuntimeException('Synthetic scanner failure.'));
         }));
-        try {
-            app(EvidenceScanService::class)->scan($asset->id);
-            $this->fail('The scanner error should be raised for the queue retry.');
-        } catch (RuntimeException) {
-            $fresh = $asset->fresh();
-            $this->assertNotNull($fresh);
-            $this->assertSame('error', $fresh->scan_status);
+        $log = Log::spy();
+
+        $this->assertThrows(fn () => app(EvidenceScanService::class)->scan($asset->id), RuntimeException::class, 'Synthetic scanner failure.');
+
+        $asset = $asset->fresh();
+        $this->assertNotNull($asset);
+        $this->assertSame(['quarantined', 'error'], [$asset->status, $asset->scan_status]);
+        $this->assertNotNull($asset->quarantine_key);
+        $this->assertNotNull($asset->scanned_at);
+        $this->assertSame(0, EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->count());
+        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists((string) $asset->quarantine_key);
+        $log->shouldHaveReceived('warning')->once()->with('evidence.scan_error', ['asset_id' => $asset->id, 'error' => RuntimeException::class]);
+
+        // The retry (ScanEvidenceJob's next attempt) claims it again: error -> pending -> clean.
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($asset->id);
+        $this->assertSame(['available', 'clean'], [$asset->fresh()?->status, $asset->fresh()?->scan_status]);
+    }
+
+    public function test_a_terminal_result_is_never_overwritten_and_a_duplicate_job_is_harmless(): void
+    {
+        $asset = $this->quarantined('once.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($asset->id);
+        $decided = $asset->fresh();
+        $this->assertNotNull($decided);
+
+        // A second call (a duplicate ScanEvidenceJob dispatch, or a retry that arrives late) changes nothing: the
+        // asset is no longer quarantined, so claim() returns null before anything else runs.
+        app(EvidenceScanService::class)->scan($asset->id);
+
+        $this->assertSame($decided->toArray(), $asset->fresh()?->toArray());
+        $this->assertSame(1, EvidenceBlob::query()->count());
+        $this->assertSame(1, EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->count());
+    }
+
+    public function test_scanning_an_asset_that_is_not_quarantined_or_missing_does_nothing(): void
+    {
+        $available = $this->quarantined('clean.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($available->id);
+
+        // Already decided: no scan should run again (would throw if ClamAvClient::scan() were called).
+        app()->instance(ClamAvClient::class, Mockery::mock(ClamAvClient::class, function ($mock): void {
+            $mock->shouldNotReceive('scan');
+        }));
+        app(EvidenceScanService::class)->scan($available->id);
+        app(EvidenceScanService::class)->scan(999999); // an unknown asset id
+    }
+
+    public function test_scan_evidence_job_is_configured_for_retries_and_uniqueness(): void
+    {
+        $job = new ScanEvidenceJob(42);
+        $this->assertSame(['evidence', 3, [30, 120, 600], '42'], [$job->queue, $job->tries, $job->backoff(), $job->uniqueId()]);
+    }
+
+    public function test_the_database_holds_the_blob_rules(): void
+    {
+        $row = fn (array $overrides = []): array => $overrides + [
+            'sha256' => hash('sha256', (string) Str::ulid()), 'storage_disk' => 'evidence', 'storage_key' => 'sha256/'.Str::random(60),
+            'size_bytes' => 10, 'detected_mime' => 'application/pdf', 'first_scan_engine' => 'clamd', 'first_scanned_at' => now(),
+            'integrity_status' => 'ok', 'created_at' => now(),
+        ];
+        foreach ([
+            ['sha256' => 'not-a-hash'], ['sha256' => str_repeat('G', 64)], ['size_bytes' => 0],
+            ['detected_mime' => '  '], ['integrity_status' => 'corrupt'],
+        ] as $overrides) {
+            $this->assertDatabaseError(3819, fn () => DB::table('evidence_blobs')->insert($row($overrides)), (string) json_encode($overrides));
         }
-        $this->assertSame([30, 120, 600], (new ScanEvidenceJob($asset->id))->backoff());
-        $this->assertSame((string) $asset->id, (new ScanEvidenceJob($asset->id))->uniqueId());
+        $id = DB::table('evidence_blobs')->insertGetId($row());
+        $this->assertDatabaseError(1062, fn () => DB::table('evidence_blobs')->insert($row(['sha256' => DB::table('evidence_blobs')->where('id', $id)->value('sha256')])), 'duplicate sha256');
+
+        // evidence_assets.evidence_blob_id: exactly when the status is available (TASK-0069 rework). Isolated from the
+        // older state check by setting every other "available" column correctly first.
+        $asset = $this->quarantined('probe.pdf', self::PDF);
+        $this->assertDatabaseError(3819, fn () => DB::table('evidence_assets')->where('id', $asset->id)
+            ->update(['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now(), 'quarantine_key' => null]), 'available without a blob');
+        DB::table('evidence_assets')->where('id', $asset->id)->update(['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now(), 'quarantine_key' => null, 'evidence_blob_id' => $id]);
+        $this->assertDatabaseError(3819, fn () => DB::table('evidence_assets')->where('id', $asset->id)->update(['evidence_blob_id' => null]), 'available without a blob (cleared)');
+
+        // Never deleted, by the app account.
+        $this->assertDatabaseError(1142, fn () => DB::table('evidence_blobs')->where('id', $id)->delete(), 'blob delete');
+    }
+
+    public function test_rollback_is_refused_while_blobs_exist(): void
+    {
+        $asset = $this->quarantined('kept.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($asset->id);
+
+        $migration = require base_path('modules/Evidence/database/migrations/2026_11_19_000100_create_evidence_blobs_table.php');
+        $this->assertThrows(fn () => $migration->down(), RuntimeException::class, 'Evidence blobs exist');
+        $this->assertSame(1, EvidenceBlob::query()->count());
     }
 
     private function clamReturns(string $result): void
@@ -105,17 +262,27 @@ class EvidenceScanTest extends TestCase
         }));
     }
 
-    private function asset(User $user, string $filename, string $bytes): EvidenceAsset
+    private function quarantined(string $filename, string $bytes): EvidenceAsset
     {
         $asset = new EvidenceAsset;
         $asset->forceFill([
             'ulid' => (string) Str::ulid(), 'status' => 'quarantined', 'scan_status' => 'pending',
             'quarantine_key' => 'quarantine/'.Str::ulid(), 'original_filename' => $filename, 'size_bytes' => strlen($bytes),
-            'title' => 'Synthetic scan', 'captured_at' => now('UTC'), 'uploaded_by' => $user->id,
+            'title' => 'Synthetic scan', 'captured_at' => now('UTC'), 'uploaded_by' => $this->analyst->id,
             'classification' => Classification::Internal, 'created_at' => now('UTC'), 'updated_at' => now('UTC'),
         ])->save();
-        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->write((string) $asset->quarantine_key, $bytes);
+        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->put((string) $asset->quarantine_key, $bytes);
 
         return $asset;
+    }
+
+    private function assertDatabaseError(int $code, callable $statement, string $case): void
+    {
+        try {
+            $statement();
+            $this->fail("Expected database error $code for: $case");
+        } catch (QueryException $e) {
+            $this->assertSame($code, $e->errorInfo[1] ?? null, "$case: {$e->getMessage()}");
+        }
     }
 }
