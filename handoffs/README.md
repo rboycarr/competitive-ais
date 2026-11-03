@@ -5,16 +5,31 @@ Protocol: ADR-0009. Ledger: `docs/12-claude-codex-handoffs.md`.
 ## Files per task
 | File | Written by | Content |
 |---|---|---|
-| `TASK-####.md` | Claude Code | Brief: objective, context, branch, affected files, constraints, acceptance tests, definition of done, review focus, commands Claude ran with results |
-| `TASK-####.prompt.md` | Claude Code | The exact prompt to give Codex (plain text, no secrets) |
-| `TASK-####-review.md` | **The user** pastes Codex output verbatim; Claude Code appends the disposition table | Codex findings + Claude's accept/reject/defer decision per finding, with evidence and commit references |
+| `TASK-####.md` | The implementer (Codex from 2026-11-03; Claude Code before) | Brief: objective, context, branch, affected files, constraints, acceptance tests, definition of done, review focus, commands run with results |
+| `TASK-####.prompt.md` | The implementer | The exact prompt to give the agent (plain text, no secrets) |
+| `TASK-####-review.md` | The reviewer's output verbatim (Claude Code from 2026-11-03; Codex before), then the implementer's disposition table | Findings, and the accept/reject/defer decision per finding, with evidence and commit references |
 
 Task numbers are sequential and never reused.
 
 ## Session handoffs
 `SESSION-YYYY-MM-DD.md` (Claude Code, when the PO asks): context for Codex's next review rounds. It covers the project state, what changed in the session, the decisions in force, the conventions earlier reviews established, known gaps, and what comes next. No secrets, ever. Codex reads the latest one before a review when its brief points to it.
 
-## Running Codex (user)
+## Running Codex as the implementer (from 2026-11-03)
+
+Codex now implements (`AGENTS.md`). **Read-only mode blocks it**: it cannot create a branch, edit files, or run the tests.
+- **VS Code Codex panel (recommended):**
+  1. Open this folder and start a new task in **Agent** mode, which lets Codex write in the workspace and asks before other actions. Not "Chat" or read-only.
+  2. Paste the contents of the task's prompt, e.g. `handoffs/TASK-0069.prompt.md`.
+  3. Approve its `wsl … docker compose …` and `git push` commands when it asks. Codex asks the PO its product questions in the same conversation.
+- **CLI, interactive** (not `exec`, so that it can ask questions):
+  ```powershell
+  & $codex --sandbox workspace-write --ask-for-approval on-request -C $repo
+  ```
+  Then paste the prompt.
+- **If the sandbox blocks the WSL and Docker commands** the stack needs: approve them when asked. Granting full access (`--sandbox danger-full-access`) is a decision for the PO alone, and `AGENTS.md`'s rules still apply either way.
+- **Reviews of Codex's branches:** Claude Code reviews them read-only, from the brief Codex writes (`handoffs/TASK-####.md` and `.prompt.md`).
+
+## Running Codex as a reviewer (read-only; how TASK-0001 to TASK-0068 were run)
 
 **Option A — VS Code Codex panel:** open this folder, start a new Codex task, paste the contents of `TASK-####.prompt.md`, set the mode to read-only / ask for approval, and save the final answer to `TASK-####-review.md`.
 
@@ -36,7 +51,7 @@ Get-Content "$repo\handoffs\$task.prompt.md" -Raw |
 - If you ask Claude to run the review for you, Claude uses this same read-only command, writes the raw output to a temporary file, and wraps it unedited between `BEGIN/END CODEX OUTPUT` markers with a header (date, version, model, session ID, SHA-256 of the raw output). TASK-0001 was run this way.
 
 ## Rules
-- One implementer per task. Codex never edits Claude's active branch. When Codex is assigned implementation, it works on `review/TASK-####` or `feature/<epic>-<name>-codex` in a separate worktree.
+- One implementer per task. The reviewer never edits the implementer's branch. From 2026-11-03 Codex implements on `feature/<story>` (or `fix/` and `docs/`) branches in this working copy, and Claude Code only reviews.
 - Never put secrets, `.env` contents, credentials, real evidence, or personal data into a brief or prompt. Codex is a cloud service; the repo is synthetic-data-only.
 - A commit may carry the trailer `Codex-Review: handoffs/TASK-####-review.md` **only** if that file exists with real Codex output.
 - Disagreements are decided on evidence (tests, reproduction). High-risk disagreements are escalated to the Product Owner and logged in `docs/12` §4.

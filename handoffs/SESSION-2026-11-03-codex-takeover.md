@@ -13,11 +13,12 @@ This file is synthetic project information; it contains no secrets.
 
 ## 1. What changes for you
 
-Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify files unless the task brief explicitly assigns you implementation work on a named branch or worktree."
+**Decided by the PO (2026-11-03):**
+- You are the **standing implementer**. `AGENTS.md` now says so and lists what you may and may not do.
+- **Claude Code reviews your branches read-only.**
+- Your first assignment is `handoffs/TASK-0069.md` (P1-32b).
 
-- **The assignment:** this handoff, once merged by the PO, is that assignment. You implement the stories in §7, each on its own feature branch created from an up-to-date `main`.
-- **Unchanged:** every other rule in `AGENTS.md`, `CLAUDE.md` and the skills.
-- **Open for the PO to confirm:** whether `AGENTS.md` should be amended to make implementer the standing role, and who reviews your branches. Until the PO decides, ask before assuming either.
+Everything else in `CLAUDE.md` and the skills is unchanged.
 
 **Working model, as practised so far (keep it):**
 1. **Branch:** one story per branch, created from `main` after the previous merge has been verified in `origin/main`. `main` is protected: **never push to it**.
@@ -189,7 +190,7 @@ Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify 
 ## 8. Open items for the PO
 
 - **Merge:** this handoff's branch (P1-32a and P1-25a are already merged).
-- **Codex's role:** confirm the takeover in `AGENTS.md`, and name who reviews Codex's branches (§1).
+- **Codex's role:** decided 2026-11-03: Codex implements, Claude Code reviews (§1, `AGENTS.md`).
 - **The two P1-32b design points** in §7.
 - **npm advisories:** the review of the dev-tool advisories is due 2026-11-15.
 - **The intermittent `RegistryConcurrencyTest` failure:** watch for its next occurrence (§4).
