@@ -11,6 +11,9 @@ Protocol: ADR-0009. Ledger: `docs/12-claude-codex-handoffs.md`.
 
 Task numbers are sequential and never reused.
 
+## Session handoffs
+`SESSION-YYYY-MM-DD.md` (Claude Code, when the PO asks): context for Codex's next review rounds. It covers the project state, what changed in the session, the decisions in force, the conventions earlier reviews established, known gaps, and what comes next. No secrets, ever. Codex reads the latest one before a review when its brief points to it.
+
 ## Running Codex (user)
 
 **Option A — VS Code Codex panel:** open this folder, start a new Codex task, paste the contents of `TASK-####.prompt.md`, set the mode to read-only / ask for approval, and save the final answer to `TASK-####-review.md`.
