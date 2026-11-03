@@ -156,6 +156,20 @@ class OutboxTest extends TestCase
         $this->assertSame(OutboxLeaseLosingHandler::TAKEN_OVER, $event->claimed_until);
     }
 
+    public function test_a_duplicate_raised_by_the_handler_itself_fails_the_delivery(): void
+    {
+        // Only a duplicate receipt means "already handled"; any other unique violation is a handler failure and must
+        // not be swallowed as if a concurrent delivery had won (2026-11-03).
+        $this->app->make(OutboxEvents::class)->subscribe('probe.changed', OutboxDuplicateWritingHandler::class);
+        DB::transaction(fn () => $this->publish());
+
+        $this->assertSame(['dispatched' => 0, 'retrying' => 1, 'dead' => 0, 'superseded' => 0], $this->relay());
+        $event = DB::table('outbox_events')->sole();
+        $this->assertNull($event->dispatched_at);
+        $this->assertStringContainsString('UniqueConstraintViolationException (ref ', (string) $event->last_error);
+        $this->assertSame(0, DB::table('outbox_receipts')->where('handler', OutboxDuplicateWritingHandler::class)->count());
+    }
+
     public function test_a_failure_is_retried_with_backoff_and_successful_handlers_are_not_rerun(): void
     {
         $this->app->make(OutboxEvents::class)->subscribe('probe.changed', OutboxFlakyHandler::class);
@@ -296,6 +310,16 @@ final class OutboxLeaseLosingHandler implements OutboxHandler
     public function handle(OutboxMessage $message): void
     {
         DB::connection('migrator')->table('outbox_events')->where('ulid', $message->ulid)->update(['claimed_until' => self::TAKEN_OVER]);
+    }
+}
+
+/** A handler with a bug: its own second write hits a unique key (the cache table's primary key). */
+final class OutboxDuplicateWritingHandler implements OutboxHandler
+{
+    public function handle(OutboxMessage $message): void
+    {
+        DB::table('cache')->insert(['key' => 'outbox-duplicate:'.$message->ulid, 'value' => 'x', 'expiration' => 0]);
+        DB::table('cache')->insert(['key' => 'outbox-duplicate:'.$message->ulid, 'value' => 'x', 'expiration' => 0]);
     }
 }
 

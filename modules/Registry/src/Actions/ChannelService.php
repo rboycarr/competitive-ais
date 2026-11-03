@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Channel;
 use Modules\Registry\Models\Retailer;
 use Modules\Registry\Support\Names;
@@ -42,8 +43,8 @@ class ChannelService
 
                 return $channel;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'channels', 'channels_name_unique') ? $this->taken() : $e;
         }
     }
 
@@ -64,8 +65,8 @@ class ChannelService
                 $this->audit->record('channel.updated', $locked, ['fields' => $changed], $this->actor($actor));
                 $channel->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'channels', 'channels_name_unique') ? $this->taken() : $e;
         }
     }
 

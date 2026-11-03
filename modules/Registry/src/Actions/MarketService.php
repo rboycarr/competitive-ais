@@ -11,6 +11,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Currency;
 use Modules\Registry\Models\Market;
 
@@ -47,8 +48,8 @@ class MarketService
 
                 return $market;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw ValidationException::withMessages(['code' => 'A market with this code exists.']);
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'markets', 'markets_code_unique') ? ValidationException::withMessages(['code' => 'A market with this code exists.']) : $e;
         }
     }
 

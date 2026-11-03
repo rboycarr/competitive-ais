@@ -11,6 +11,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\CompetitorAlias;
 use Modules\Registry\Support\Names;
@@ -54,8 +55,8 @@ class CompetitorAliasService
 
                 return $row;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw ValidationException::withMessages(['alias' => "{$competitor->name} already has this alias."]);
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'competitor_aliases', 'competitor_aliases_competitor_id_alias_unique') ? ValidationException::withMessages(['alias' => "{$competitor->name} already has this alias."]) : $e;
         }
     }
 

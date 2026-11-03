@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Modules\Platform\Database\UniqueViolation;
 
 /**
  * Closes the next range of audit rows into a checkpoint with a Merkle root (ADR-0006).
@@ -59,8 +60,14 @@ class AuditCheckpointer
                 'watermark_at' => $watermark,
                 'created_at' => $now->format('Y-m-d H:i:s.u'),
             ]);
-        } catch (UniqueConstraintViolationException) {
-            return null; // a concurrent run closed this range first
+        } catch (UniqueConstraintViolationException $e) {
+            // A concurrent run closed this range first (either key); anything else surfaces.
+            if (UniqueViolation::on($e, 'audit_checkpoints', 'audit_checkpoints_generation_from_audit_id_unique')
+                || UniqueViolation::on($e, 'audit_checkpoints', 'audit_checkpoints_to_audit_id_unique')) {
+                return null;
+            }
+
+            throw $e;
         }
 
         return $checkpoint;

@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Validation\ValidationException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Market;
 use Modules\Registry\Models\Region;
 use Modules\Registry\Support\Names;
@@ -51,8 +52,8 @@ class RegionService
 
                 return $region;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'regions', 'regions_market_id_parent_key_name_unique') ? $this->taken() : $e;
         }
     }
 
@@ -72,8 +73,8 @@ class RegionService
                 $this->audit->record('region.renamed', $locked, ['market' => $market->ulid], $this->actor($actor));
                 $region->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken();
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'regions', 'regions_market_id_parent_key_name_unique') ? $this->taken() : $e;
         }
     }
 

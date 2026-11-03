@@ -13,6 +13,7 @@ use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
+use Modules\Platform\Database\UniqueViolation;
 use Modules\Registry\Models\Brand;
 use Modules\Registry\Models\Competitor;
 use Modules\Registry\Models\Product;
@@ -55,8 +56,8 @@ class BrandService
 
                 return $brand;
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken($competitor);
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'brands', 'brands_competitor_key_name_unique') ? $this->taken($competitor) : $e;
         }
     }
 
@@ -77,8 +78,8 @@ class BrandService
                 $this->audit->record('brand.renamed', $locked, $this->context($owner), $this->actor($actor), $this->classification($owner));
                 $brand->setRawAttributes($locked->getAttributes(), true);
             });
-        } catch (UniqueConstraintViolationException) {
-            throw $this->taken($owner);
+        } catch (UniqueConstraintViolationException $e) {
+            throw UniqueViolation::on($e, 'brands', 'brands_competitor_key_name_unique') ? $this->taken($owner) : $e;
         }
     }
 
