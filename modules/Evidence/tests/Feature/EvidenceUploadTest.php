@@ -218,6 +218,7 @@ class EvidenceUploadTest extends TestCase
         $this->assertThrows(fn () => app(EvidenceUploadService::class)->upload($this->analyst, $this->file('a.pdf', self::PDF), $this->fields()), RuntimeException::class, 'Synthetic write failure.');
         $log->shouldHaveReceived('warning')->once()->with('evidence.quarantine_orphan', Mockery::on(fn (array $context): bool => preg_match('#^quarantine/[0-9A-Z]{26}$#', $context['quarantine_key']) === 1
             && $context['cleanup_error'] === RuntimeException::class));
+        $this->assertSame([0, 0], [EvidenceAsset::query()->count(), EvidenceCustodyEvent::query()->count()]); // TASK-0066
     }
 
     public function test_malformed_text_suspended_users_and_disguised_archives_are_refused(): void
