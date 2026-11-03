@@ -8,6 +8,8 @@ namespace Modules\Platform\Outbox;
  * Delivery is at least once. The relay runs handle() inside a transaction on the default connection and records a
  * receipt in the same transaction, so database changes made there happen exactly once per event and handler.
  * Effects outside the database (search index, broadcast, mail) must be idempotent on $message->ulid.
+ * Handlers never write receipts: only the relay does, so a duplicate receipt always means a concurrent delivery won,
+ * and any other duplicate-key error from handle() fails the delivery (TASK-0067; CodeRulesTest).
  */
 interface OutboxHandler
 {

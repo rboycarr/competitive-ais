@@ -63,3 +63,20 @@ test('only Platform reads Pennant', function () {
 
     expect($users)->toBe($allowed);
 });
+
+// Outbox receipts are written only by the relay, so a duplicate receipt can only mean that a concurrent delivery of
+// the same event and handler won (TASK-0067 #3): a handler that wrote one could make its own failure look handled. A
+// tripwire for ordinary use: a table name built at run time is a code-review matter.
+test('only the outbox relay names the receipts table', function () {
+    $root = dirname(__DIR__, 2);
+    $users = [];
+    foreach ([...glob("$root/modules/*/src", GLOB_ONLYDIR) ?: [], ...glob("$root/modules/*/routes", GLOB_ONLYDIR) ?: [], "$root/app", "$root/routes"] as $dir) {
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)) as $file) {
+            if ($file->getExtension() === 'php' && str_contains((string) file_get_contents($file->getPathname()), 'outbox_receipts')) {
+                $users[] = str_replace('\\', '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+    }
+
+    expect($users)->toBe(['modules/Platform/src/Outbox/OutboxRelay.php']);
+});

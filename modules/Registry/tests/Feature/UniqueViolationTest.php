@@ -10,8 +10,12 @@ use Illuminate\Validation\ValidationException;
 use Modules\Identity\Models\User;
 use Modules\Platform\Classification;
 use Modules\Platform\Database\UniqueViolation;
+use Modules\Registry\Actions\BrandService;
 use Modules\Registry\Actions\CategoryService;
+use Modules\Registry\Actions\ChannelService;
+use Modules\Registry\Actions\CompetitorService;
 use Modules\Registry\Actions\CurrencyService;
+use Modules\Registry\Actions\MarketService;
 use Modules\Registry\Actions\TagService;
 use Symfony\Component\Uid\Ulid;
 use Tests\Support\CreatesUsers;
@@ -70,18 +74,26 @@ class UniqueViolationTest extends TestCase
         Str::createUlidsUsing(fn () => $fixed);
         app(CurrencyService::class)->create($this->director, 'QQA', 'Probe units', 2);
 
+        // Each service's expected key, which the forced duplicate is not.
         foreach ([
-            fn () => app(CurrencyService::class)->create($this->director, 'QQB', 'Other units', 2),
-            fn () => app(CategoryService::class)->create($this->director, 'Drinks', null),
-            fn () => app(TagService::class)->create($this->director, 'segment', 'Premium'),
-        ] as $call) {
+            [fn () => app(CurrencyService::class)->create($this->director, 'QQB', 'Other units', 2), 'currencies', 'PRIMARY'],
+            [fn () => app(CategoryService::class)->create($this->director, 'Drinks', null), 'product_categories', 'product_categories_parent_key_name_unique'],
+            [fn () => app(TagService::class)->create($this->director, 'segment', 'Premium'), 'tags', 'tags_taxonomy_name_unique'],
+            [fn () => app(ChannelService::class)->create($this->director, 'Online shops', 'ecommerce'), 'channels', 'channels_name_unique'],
+            [fn () => app(BrandService::class)->create($this->director, null, 'House brand'), 'brands', 'brands_competitor_key_name_unique'],
+            [fn () => app(MarketService::class)->create($this->director, ['code' => 'MK1', 'name' => 'Probe market', 'country' => 'PH', 'currency' => 'PHP']), 'markets', 'markets_code_unique'],
+            // The slug retry must not consume its attempts on another key (TASK-0067).
+            [fn () => app(CompetitorService::class)->create($this->director, ['name' => 'Acme', 'classification' => 'internal']), 'competitors', 'competitors_slug_unique'],
+        ] as [$call, $table, $expected]) {
             try {
                 $call();
-                $this->fail('Expected the audit row\'s duplicate ULID to surface.');
+                $this->fail("Expected the forced duplicate to surface instead of [$table.$expected].");
             } catch (UniqueConstraintViolationException $e) {
-                $this->assertTrue(UniqueViolation::on($e, 'audit_events', 'audit_events_ulid_unique'), $e->getMessage());
+                $this->assertFalse(UniqueViolation::on($e, $table, $expected), $e->getMessage());
+                $this->assertMatchesRegularExpression("/for key '(audit_events\\.audit_events_ulid_unique|$table\\.{$table}_ulid_unique)'\\z/", (string) ($e->errorInfo[2] ?? ''));
             }
         }
+        $this->assertSame([0, 0, 0], [DB::table('competitors')->count(), DB::table('markets')->count(), DB::table('brands')->count()]);
     }
 
     public function test_the_index_is_read_from_the_error(): void
