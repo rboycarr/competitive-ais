@@ -1,0 +1,94 @@
+import { mount } from '@vue/test-utils';
+import { describe, expect, it, vi } from 'vitest';
+import { reactive } from 'vue';
+
+const post = vi.fn();
+const get = vi.fn();
+let transformed: Record<string, unknown> | null = null;
+vi.mock('@inertiajs/vue3', async () => {
+    const { defineComponent, h } = await import('vue');
+
+    return {
+        Head: { render: () => null },
+        Link: defineComponent({ props: { href: { type: String, required: true } }, setup: (props, { slots }) => () => h('a', { href: props.href }, slots.default?.()) }),
+        router: { get },
+        usePage: () => ({ props: {} }),
+        useForm: (initial: Record<string, unknown>) => {
+            const form = reactive({ ...initial, errors: {}, processing: false, progress: null as null | { percentage: number },
+                transform(fn: (data: Record<string, unknown>) => Record<string, unknown>) {
+                    transformed = fn({ ...initial, ...Object.fromEntries(Object.entries(form).filter(([key]) => key in initial)) });
+
+                    return form;
+                },
+                post });
+
+            return form;
+        },
+    };
+});
+
+const { default: Index } = await import('./Index.vue');
+const { default: Show } = await import('./Show.vue');
+const { sizeLabel } = await import('./labels');
+
+const row = { ulid: '01JASSET000000000000000000', title: '<b>Shelf</b>', status: 'quarantined', capturedAt: '2026-11-02T08:00:00Z', uploadedBy: 'Ana', classification: 'internal' };
+const options = { filters: {}, statuses: ['quarantined', 'available', 'rejected', 'withdrawn'], maxBytes: 50 * 1024 * 1024 };
+
+describe('Evidence/Index', () => {
+    it('lists titles as text with readable statuses, and filters by status', async () => {
+        const wrapper = mount(Index, { props: { assets: [row], canUpload: false, classifications: [], ...options } });
+        expect(wrapper.find('b').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<b>Shelf</b>');
+        expect(wrapper.text()).toContain('In quarantine');
+        expect(wrapper.find('#evidence-file').exists()).toBe(false);
+
+        await wrapper.get('#filter-status').setValue('rejected');
+        await wrapper.get('form').trigger('submit');
+        expect(get).toHaveBeenCalledWith('/evidence', { status: 'rejected' }, expect.any(Object));
+    });
+
+    it('uploads as form data with the capture time in UTC, and states the limits', async () => {
+        const wrapper = mount(Index, { props: { assets: [], canUpload: true, classifications: ['public', 'internal'], ...options } });
+        expect(wrapper.text()).toContain('up to 50 MB');
+        expect(wrapper.text()).toContain('only you and directors see it');
+        expect(wrapper.get('button[type="submit"]:not(.px-4.py-1\\.5)').attributes('disabled')).toBeDefined();
+
+        const file = new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' });
+        const input = wrapper.get('#evidence-file');
+        Object.defineProperty(input.element, 'files', { value: [file] });
+        await input.trigger('change');
+        await wrapper.get('#evidence-title').setValue('Shelf prices');
+        await wrapper.get('#evidence-captured').setValue('2026-11-02T08:30');
+        await wrapper.get('section form').trigger('submit');
+
+        expect(post).toHaveBeenCalledWith('/evidence', expect.objectContaining({ forceFormData: true }));
+        expect(transformed?.file).toBe(file);
+        expect(transformed?.captured_at).toBe(new Date('2026-11-02T08:30').toISOString());
+        expect(transformed?.classification).toBe('internal');
+    });
+});
+
+describe('Evidence/Show', () => {
+    const asset = {
+        ulid: row.ulid, title: 'Shelf', description: '<img src=x onerror=alert(1)>', status: 'quarantined', scanStatus: 'pending', originalFilename: '<i>a</i>.pdf',
+        sizeBytes: 2048, sourceUrl: 'https://shop.example/item?id=7', capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal',
+    };
+
+    it('explains quarantine, shows stored text as text, and links only http(s) sources', () => {
+        const wrapper = mount(Show, { props: { asset, custody: [{ event: 'uploaded', actor: '<u>Ana</u>', occurredAt: row.capturedAt }] } });
+        expect(wrapper.get('[role="status"]').text()).toContain('nobody can open it');
+        expect(wrapper.find('img').exists() || wrapper.find('i').exists() || wrapper.find('u').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
+        expect(wrapper.text()).toContain('<i>a</i>.pdf (2.0 KB)');
+        expect(wrapper.text()).toContain('Uploaded by <u>Ana</u>');
+        expect(wrapper.get('a[target="_blank"]').attributes('rel')).toBe('noopener noreferrer nofollow');
+
+        const unsafe = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean', sourceUrl: 'javascript:alert(1)' }, custody: [] } });
+        expect(unsafe.find('a[target="_blank"]').exists()).toBe(false);
+        expect(unsafe.find('[role="status"]').exists()).toBe(false);
+    });
+
+    it('formats sizes', () => {
+        expect([sizeLabel(512), sizeLabel(2048), sizeLabel(50 * 1024 * 1024)]).toEqual(['512 B', '2.0 KB', '50.0 MB']);
+    });
+});

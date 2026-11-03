@@ -2,6 +2,7 @@
 
 namespace Modules\Platform;
 
+use Aws\S3\S3Client;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Scheduling\Schedule;
@@ -9,13 +10,19 @@ use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Database\Events\NoPendingMigrations;
+use Illuminate\Filesystem\AwsS3V3Adapter;
+use Illuminate\Filesystem\FilesystemAdapter;
+use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Exceptions\Handler;
 use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Pennant\FeatureManager;
+use League\Flysystem\AwsS3V3\AwsS3V3Adapter as S3Adapter;
+use League\Flysystem\Filesystem;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
 use Modules\Platform\Console\CreateAuditCheckpoint;
@@ -32,6 +39,7 @@ use Modules\Platform\Jobs\CreateAuditCheckpointJob;
 use Modules\Platform\Jobs\RelayOutboxJob;
 use Modules\Platform\Jobs\VerifyAuditChainJob;
 use Modules\Platform\Outbox\OutboxEvents;
+use Modules\Platform\Storage\PrivateBucketVisibility;
 use Modules\Platform\Support\Features;
 use Modules\Platform\Support\ModuleServiceProvider;
 use RuntimeException;
@@ -78,6 +86,28 @@ class PlatformServiceProvider extends ModuleServiceProvider
         $this->scheduleJobs();
         $this->secureHttpDefaults();
         $this->featureFlags();
+        $this->privateObjectStorage();
+    }
+
+    /**
+     * The `s3-private` filesystem driver for the private buckets (evidence, exports; ADR-0007): Laravel's S3 disk, but
+     * writes send no ACL (PrivateBucketVisibility), so the application's key needs no ACL permission. Same client and
+     * Laravel adapter as the `s3` driver, so pre-signed URLs work (P1-34).
+     */
+    private function privateObjectStorage(): void
+    {
+        Storage::extend('s3-private', function (Application $app, array $config): FilesystemAdapter {
+            $client = new S3Client(array_filter([
+                'credentials' => ($config['key'] ?? '') !== '' && ($config['secret'] ?? '') !== '' ? ['key' => $config['key'], 'secret' => $config['secret']] : null,
+                'region' => $config['region'] ?? null,
+                'version' => 'latest',
+                'endpoint' => ($config['endpoint'] ?? '') !== '' ? $config['endpoint'] : null,
+                'use_path_style_endpoint' => (bool) ($config['use_path_style_endpoint'] ?? false),
+            ], fn (mixed $value): bool => $value !== null));
+            $adapter = new S3Adapter($client, (string) $config['bucket'], (string) ($config['root'] ?? ''), new PrivateBucketVisibility);
+
+            return new AwsS3V3Adapter(new Filesystem($adapter, $config), $adapter, $config, $client);
+        });
     }
 
     /**

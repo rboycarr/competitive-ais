@@ -166,6 +166,7 @@ class IdentityServiceProvider extends ModuleServiceProvider
                     'productView' => $user->checkPermissionTo('product.view'),
                     'taxonomyManage' => $user->checkPermissionTo('taxonomy.manage'),
                     'sourceView' => $user->checkPermissionTo('source.view'),
+                    'evidenceView' => $user->checkPermissionTo('evidence.view'),
                 ] : [],
             ];
         });
