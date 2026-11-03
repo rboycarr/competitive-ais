@@ -14,7 +14,9 @@ Task numbers are sequential and never reused.
 ## Session handoffs
 `SESSION-YYYY-MM-DD.md` (Claude Code, when the PO asks): context for Codex's next review rounds. It covers the project state, what changed in the session, the decisions in force, the conventions earlier reviews established, known gaps, and what comes next. No secrets, ever. Codex reads the latest one before a review when its brief points to it.
 
-## Running Codex as the implementer (from 2026-11-03)
+## Running Codex as the implementer (2026-11-03 only; no longer in force)
+
+Since 2026-11-04, Codex reviews read-only again (see the next section). This is kept only in case the PO assigns Codex a bounded implementation task.
 
 Codex now implements (`AGENTS.md`). **Read-only mode blocks it**: it cannot create a branch, edit files, or run the tests.
 - **VS Code Codex panel (recommended):**
