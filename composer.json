@@ -7,12 +7,14 @@
     "license": "Apache-2.0",
     "require": {
         "php": "^8.3",
+        "aws/aws-sdk-php": "3.401.4",
         "inertiajs/inertia-laravel": "3.5.1",
         "laravel/fortify": "1.41.0",
         "laravel/framework": "^13.17",
         "laravel/horizon": "^5.50",
         "laravel/pennant": "1.26.0",
         "laravel/tinker": "^3.0",
+        "league/flysystem-aws-s3-v3": "3.35.3",
         "spatie/laravel-permission": "8.3.0"
     },
     "require-dev": {
@@ -30,6 +32,7 @@
             "App\\": "app/",
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/",
+            "Modules\\Evidence\\": "modules/Evidence/src/",
             "Modules\\Identity\\": "modules/Identity/src/",
             "Modules\\Platform\\": "modules/Platform/src/",
             "Modules\\Registry\\": "modules/Registry/src/",
@@ -39,6 +42,7 @@
     "autoload-dev": {
         "psr-4": {
             "Tests\\": "tests/",
+            "Modules\\Evidence\\Tests\\": "modules/Evidence/tests/",
             "Modules\\Identity\\Tests\\": "modules/Identity/tests/",
             "Modules\\Platform\\Tests\\": "modules/Platform/tests/",
             "Modules\\Registry\\Tests\\": "modules/Registry/tests/",

@@ -242,6 +242,7 @@ return [
         'no_delete' => [
             'access_grants',
             'competitors', // archived, never deleted (P1-20)
+            'evidence_assets', // rejected or withdrawn, never deleted: custody and claims refer to them (P1-32a)
             'currencies', // edited by taxonomy managers, never deleted (P1-23b, PO decision O29)
             'markets', // grants and prices refer to them (P1-23a)
             'product_variants', // retired with a status (P1-22b)

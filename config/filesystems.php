@@ -62,6 +62,21 @@ return [
             'report' => false,
         ],
 
+        // Evidence (ADR-0007): uploads land in the private quarantine bucket under a generated key and stay there
+        // until scanned (P1-32b promotes clean bytes to `evidence`). The application's key, never the admin's.
+        // Failures throw, so an upload is never recorded without its object.
+        'evidence-quarantine' => [
+            'driver' => 's3-private', // sends no ACL (Modules\Platform\Storage\PrivateBucketVisibility)
+            'key' => env('AWS_ACCESS_KEY_ID'),
+            'secret' => env('AWS_SECRET_ACCESS_KEY'),
+            'region' => env('AWS_DEFAULT_REGION'),
+            'bucket' => env('EVIDENCE_QUARANTINE_BUCKET', 'evidence-quarantine'),
+            'endpoint' => env('AWS_ENDPOINT'),
+            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'throw' => true,
+            'report' => false,
+        ],
+
     ],
 
     /*
