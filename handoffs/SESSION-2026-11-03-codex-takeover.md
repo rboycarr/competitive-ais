@@ -5,7 +5,7 @@
 | Written by | Claude Code (Opus 5.5), the implementer until now |
 | For | OpenAI Codex, taking over implementation at the Product Owner's request (2026-11-03) |
 | Supersedes | `handoffs/SESSION-2026-11-03.md` (which remains true for everything up to pull request #25) |
-| State | `main` @ `1ee8b46` (pull request #26). Three branches wait for the PO's merge, **in this order**: `feature/evidence-upload` @ `ada8ddc` (P1-32a), then `fix/registry-unique-violations` @ `74ad7e4` (P1-25a, built on P1-32a), then `docs/codex-takeover-handoff` (this file, built on P1-25a) |
+| State | `main` @ `401f29c`: P1-32a (pull request #27) and P1-25a (#28) are merged. Only this file's branch, `docs/codex-takeover-handoff`, waits for the PO's merge. Claude Code has stopped: P1-32b is **not started** (PO, 2026-11-03: "don't start, Codex takes over") |
 | Next task number | **TASK-0069** |
 | Next story | **P1-32b**: scan and store evidence (§7) |
 
@@ -33,7 +33,7 @@ Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify 
 | Phase | Status | Done | Pending |
 |---|---|---|---|
 | 0 Discovery | **Done** | Architecture, ERD, threat model, backlog, Claude ↔ Codex protocol | — |
-| 1 Secure Foundation | **In progress** | Sprint 1.0 (P1-01 to P1-09); Sprint 1.1 (P1-10 to P1-17); Sprint 1.2 (P1-20 to P1-25); Sprint 1.3: P1-30, P1-30a, P1-31a, P1-31b merged; P1-32a and P1-25a done, awaiting merge | Sprint 1.3: **P1-32b**, P1-33 to P1-38. Sprint 1.4: P1-40 to P1-45, P1-48. Sprint 1.5: P1-50 to P1-54, P1-46, P1-24 (stretch), P1-47 |
+| 1 Secure Foundation | **In progress** | Sprint 1.0 (P1-01 to P1-09); Sprint 1.1 (P1-10 to P1-17); Sprint 1.2 (P1-20 to P1-25); Sprint 1.3: P1-30, P1-30a, P1-31a, P1-31b, P1-32a merged; P1-25a (Sprint 1.2 follow-up) merged | Sprint 1.3: **P1-32b**, P1-33 to P1-38. Sprint 1.4: P1-40 to P1-45, P1-48. Sprint 1.5: P1-50 to P1-54, P1-46, P1-24 (stretch), P1-47 |
 | 2 Intelligence Ops | Not started | — | Prices, field reports, search, alerts, battlecards, reports, exports |
 | 3 Approved Collection | Not started | — | Collectors, snapshots, dedupe, source health (the `collection` flag stays off) |
 | 4 AI & RAG | Not started | — | AI gateway, hybrid retrieval, citations, evals (after the hardware spike) |
@@ -51,13 +51,8 @@ Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify 
 | #24 | `feature/source-lifecycle` (P1-31b) | `8d69b1d` | #124 passed | `c7be62c` |
 | #25 | `chore/timestamp-story-category-flake` (P1-53, P1-54 added; test diagnostics) | `71ff22d` | #130 passed | `541811d` |
 | #26 | `docs/session-handoff-merge-info` (handoff) | `ac74e4f` | #133 passed | `1ee8b46` |
-
-**Awaiting merge:**
-
-| Branch | Story | Final commit | CI | Reviews |
-|---|---|---|---|---|
-| `feature/evidence-upload` | P1-32a: upload into quarantine | `ada8ddc` | #136 passed | TASK-0064 to 0066, ending "yes" |
-| `fix/registry-unique-violations` | P1-25a: a duplicate is "already taken" only when it is one | `74ad7e4` | #137 passed | TASK-0067, 0068, ending "yes" |
+| #27 | `feature/evidence-upload` (P1-32a: upload into quarantine; reviews TASK-0064 to 0066, ending "yes") | `ada8ddc` | #136 passed | `aed673c` |
+| #28 | `fix/registry-unique-violations` (P1-25a: a duplicate is "already taken" only when it is one; reviews TASK-0067, 0068, ending "yes") | `74ad7e4` | #137 passed | `401f29c` |
 
 **P1-32a (Evidence module):**
 - `evidence_assets` (`no_delete`) and `evidence_custody_events` (`append_only`); the database holds the status rules.
@@ -111,7 +106,7 @@ Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify 
 - **Laravel's fake uploads** (`UploadedFile::fake()`) report a MIME type from the *file name*. Production code must detect the type from the bytes (`EvidenceUploadService::detectedType`).
 - **Windows text files:** write UTF-8 without a BOM. PowerShell's `Set-Content` and `Out-File` add a BOM or mangle non-ASCII text.
 - **Pinning dependencies:** check release dates, and pin only versions at least two weeks old (`aws/aws-sdk-php` had to be pinned to an older release). Run `composer audit`, and record the versions in ADR-0003.
-- **`RegistryConcurrencyTest` failed twice under load**, with "already taken" from a create in the test process. The root cause isn't proven. With P1-25a merged, the next occurrence will name the real key. If it shows up, investigate rather than retry.
+- **`RegistryConcurrencyTest` failed twice under load**, with "already taken" from a create in the test process. The root cause isn't proven. Now that P1-25a is merged, the next occurrence will name the real key. If it shows up, investigate rather than retry.
 
 ## 5. Hard rules (from `AGENTS.md`, `CLAUDE.md` and the PO)
 
@@ -152,7 +147,7 @@ Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify 
 
 ## 7. Next work: P1-32b, then Sprint 1.3
 
-**P1-32b: "my upload is scanned and stored once"** (`docs/11`; ADR-0007; `docs/02` §3.5; `docs/03` Evidence). Start once P1-32a is merged.
+**P1-32b: "my upload is scanned and stored once"** (`docs/11`; ADR-0007; `docs/02` §3.5; `docs/03` Evidence). P1-32a is merged; start from `main` once this handoff is merged and the PO has confirmed §1.
 
 **Acceptance:**
 1. **The scan job:** a queued `ScanEvidenceJob` on the `evidence` queue.
@@ -193,7 +188,7 @@ Until now you reviewed read-only, and `AGENTS.md` still says so: "Do not modify 
 
 ## 8. Open items for the PO
 
-- **Merge order:** P1-32a, then P1-25a, then this handoff.
+- **Merge:** this handoff's branch (P1-32a and P1-25a are already merged).
 - **Codex's role:** confirm the takeover in `AGENTS.md`, and name who reviews Codex's branches (§1).
 - **The two P1-32b design points** in §7.
 - **npm advisories:** the review of the dev-tool advisories is due 2026-11-15.
