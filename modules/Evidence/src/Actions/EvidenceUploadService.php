@@ -114,8 +114,8 @@ class EvidenceUploadService
         }
 
         // Outside the cleanup boundary (P1-32b): the asset is already committed here, so a dispatch failure must
-        // never delete its quarantine object. The scan queue picks up any asset still `quarantined`/`pending` through
-        // its own retries; a missing dispatch is not otherwise fatal to the upload itself.
+        // never delete its quarantine object. The scheduled evidence:dispatch-scans queues the scan again once the
+        // asset has waited `evidence.scan_stale_minutes` (TASK-0070 #1).
         try {
             ScanEvidenceJob::dispatch($saved->id)->afterCommit();
         } catch (Throwable $e) {

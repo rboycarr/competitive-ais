@@ -11,6 +11,14 @@ return [
     // P1-35 sets retention per asset (PO decision O33, 2026-11-03).
     'blob_retention_days' => 30,
 
+    // Seconds a scan waits for another scan storing the same bytes (a MySQL named lock per hash) before it fails and
+    // is retried: long enough for one 50 MB upload to the object store.
+    'blob_lock_seconds' => 120,
+
+    // Minutes an asset may wait `quarantined`/`pending` before evidence:dispatch-scans queues its scan again (a lost
+    // dispatch or a worker that died mid-scan). The job's unique lock keeps a queued or running scan from doubling.
+    'scan_stale_minutes' => 15,
+
     // Largest accepted upload. PHP (upload_max_filesize 50M, post_max_size 55M) and nginx (client_max_body_size 55m)
     // allow a little more, so this limit is the one users meet, with a clear message.
     'max_bytes' => 50 * 1024 * 1024,

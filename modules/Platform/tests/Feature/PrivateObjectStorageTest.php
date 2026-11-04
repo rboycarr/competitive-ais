@@ -12,6 +12,7 @@ use League\Flysystem\Visibility;
 use Modules\Platform\Storage\LockedObjects;
 use Modules\Platform\Storage\PrivateBucketVisibility;
 use Psr\Http\Message\RequestInterface;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -104,5 +105,44 @@ class PrivateObjectStorageTest extends TestCase
         $this->assertNull($version);
         Storage::disk('evidence')->assertExists('sha256/ab/cd/abcdef');
         $this->assertSame('Synthetic blob bytes.', Storage::disk('evidence')->get('sha256/ab/cd/abcdef'));
+    }
+
+    /** ADR-0007: retention and legal hold act on the stored version, so a write without one fails closed. */
+    public function test_locked_objects_fail_closed_without_a_version(): void
+    {
+        config(['filesystems.disks.evidence.key' => 'synthetic-key', 'filesystems.disks.evidence.secret' => 'synthetic-secret']);
+        $disk = Storage::disk('evidence');
+        $this->assertInstanceOf(AwsS3V3Adapter::class, $disk);
+        $disk->getClient()->getHandlerList()->setHandler(new MockHandler([new Result([])]));
+
+        $stream = fopen('php://memory', 'r+') ?: $this->fail('Could not open a memory stream.');
+        fwrite($stream, 'Synthetic blob bytes.');
+        rewind($stream);
+        try {
+            LockedObjects::write($disk, 'sha256/ab/cd/abcdef', $stream, 'application/pdf', CarbonImmutable::now('UTC')->addDays(30));
+            $this->fail('A write without a version was accepted.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('no version', $e->getMessage());
+        } finally {
+            fclose($stream);
+        }
+    }
+
+    /** Outside tests, a disk without object lock would store evidence without retention: refused. */
+    public function test_locked_objects_refuse_a_plain_disk_outside_tests(): void
+    {
+        Storage::fake('evidence');
+        $this->app['env'] = 'production';
+        $stream = fopen('php://memory', 'r+') ?: $this->fail('Could not open a memory stream.');
+        try {
+            LockedObjects::write(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', $stream, 'application/pdf', CarbonImmutable::now('UTC')->addDays(30));
+            $this->fail('A plain disk was accepted outside tests.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('S3 object store', $e->getMessage());
+        } finally {
+            $this->app['env'] = 'testing';
+            fclose($stream);
+        }
+        Storage::disk('evidence')->assertMissing('sha256/ab/cd/abcdef');
     }
 }

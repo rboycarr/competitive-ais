@@ -8,6 +8,8 @@ use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
@@ -240,6 +242,16 @@ class EvidenceUploadTest extends TestCase
         $this->assertSame('quarantined', $asset->status);
         Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists((string) $asset->quarantine_key);
         $this->assertSame(1, EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->count());
+
+        // TASK-0070 #1: once the queue is back, the scheduled sweep queues the lost scan (not before it is stale).
+        app()->instance(Dispatcher::class, app(\Illuminate\Bus\Dispatcher::class));
+        Bus::clearResolvedInstance(Dispatcher::class);
+        Bus::fake();
+        Artisan::call('evidence:dispatch-scans');
+        Bus::assertNotDispatched(ScanEvidenceJob::class);
+        $this->travel((int) config('evidence.scan_stale_minutes') + 1)->minutes();
+        Artisan::call('evidence:dispatch-scans');
+        Bus::assertDispatched(ScanEvidenceJob::class, fn (ScanEvidenceJob $job): bool => $job->assetId === $asset->id);
     }
 
     public function test_malformed_text_suspended_users_and_disguised_archives_are_refused(): void

@@ -26,8 +26,9 @@ use Throwable;
  * 3. The type is detected again from the bytes, and must still match the extension. A mismatch rejects the asset
  *    outright (PO decision O34).
  * 4. Clean bytes are stored once, content-addressed at `sha256/<2>/<2>/<hash>` in the locked `evidence` bucket, with
- *    governance retention for `evidence.blob_retention_days` on that same write (PO decision O33). Bytes already
- *    stored are not uploaded again. `evidence_blobs` is filled by an atomic insert-or-reload on the hash.
+ *    governance retention for `evidence.blob_retention_days` on that same write (PO decision O33). Under a named lock
+ *    per hash, bytes already stored are not uploaded again, and `evidence_blobs` is filled by an atomic
+ *    insert-or-reload on the hash.
  * 5. Under a lock on the asset row, a scan result is written only from `quarantined` with a pending scan, so a
  *    terminal result is never overwritten, and a duplicate or retried job changes nothing. The custody events and the
  *    audit record (codes and the hash only) are written in the same transaction.
@@ -145,13 +146,39 @@ final class EvidenceScanService
         }
     }
 
-    /** Stores clean bytes once and returns the blob's ID (an existing blob for the same hash is reused). */
+    /**
+     * Stores clean bytes once and returns the blob's ID (an existing blob for the same hash is reused). A MySQL named
+     * lock per hash serialises scans of identical bytes, so only one of them writes the object: without it, two could
+     * both miss the row and each leave a retained version in the locked bucket.
+     */
     private function store(string $path, int $size, string $type): int
     {
         $sha256 = hash_file('sha256', $path);
         if (! is_string($sha256)) {
             throw new RuntimeException('The file could not be hashed.');
         }
+
+        $connection = $this->db->connection();
+        $lock = self::blobLockName($sha256);
+        $acquired = $connection->selectOne('SELECT GET_LOCK(?, ?) AS acquired', [$lock, (int) config('evidence.blob_lock_seconds')]);
+        if ((int) ($acquired->acquired ?? 0) !== 1) {
+            throw new RuntimeException('Another scan is still storing the same bytes.');
+        }
+        try {
+            return $this->storeLocked($path, $size, $type, $sha256);
+        } finally {
+            $connection->select('SELECT RELEASE_LOCK(?)', [$lock]);
+        }
+    }
+
+    /** MySQL lock names are limited to 64 characters; a hash prefix this long cannot collide in practice. */
+    public static function blobLockName(string $sha256): string
+    {
+        return 'evidence-blob:'.substr($sha256, 0, 48);
+    }
+
+    private function storeLocked(string $path, int $size, string $type, string $sha256): int
+    {
         $existing = EvidenceBlob::query()->where('sha256', $sha256)->value('id');
         if ($existing !== null) {
             return (int) $existing;

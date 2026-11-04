@@ -2,8 +2,11 @@
 
 namespace Modules\Evidence\Tests\Feature;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -253,6 +256,56 @@ class EvidenceScanTest extends TestCase
         $migration = require base_path('modules/Evidence/database/migrations/2026_11_19_000100_create_evidence_blobs_table.php');
         $this->assertThrows(fn () => $migration->down(), RuntimeException::class, 'Evidence blobs exist');
         $this->assertSame(1, EvidenceBlob::query()->count());
+    }
+
+    /**
+     * TASK-0070 #2: scans of identical bytes are serialised by a named lock per hash, so only one writes the object.
+     * Another session holding the lock (a concurrent scan of the same bytes) makes this scan wait, then fail and
+     * retry, with nothing written; once the lock is free, the retry stores the bytes once.
+     */
+    public function test_a_scan_waits_for_another_storing_the_same_bytes(): void
+    {
+        config(['evidence.blob_lock_seconds' => 1, 'database.connections.lockholder' => config('database.connections.mysql')]);
+        $holder = DB::connection('lockholder');
+        $this->assertSame(1, (int) $holder->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [EvidenceScanService::blobLockName(hash('sha256', self::PDF))])->acquired);
+
+        $asset = $this->quarantined('locked.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        try {
+            $this->assertThrows(fn () => app(EvidenceScanService::class)->scan($asset->id), RuntimeException::class, 'Another scan is still storing the same bytes.');
+            $this->assertSame(['quarantined', 'error'], [$asset->fresh()?->status, $asset->fresh()?->scan_status]);
+            $this->assertSame(0, EvidenceBlob::query()->count());
+            $this->assertSame([], Storage::disk(EvidenceScanService::EVIDENCE_DISK)->allFiles());
+        } finally {
+            $holder->select('SELECT RELEASE_LOCK(?)', [EvidenceScanService::blobLockName(hash('sha256', self::PDF))]);
+            DB::purge('lockholder');
+        }
+
+        app(EvidenceScanService::class)->scan($asset->id);
+        $this->assertSame('available', $asset->fresh()?->status);
+        $this->assertCount(1, Storage::disk(EvidenceScanService::EVIDENCE_DISK)->allFiles());
+    }
+
+    /** TASK-0070 #1: an asset left waiting (a lost dispatch, a dead worker) has its scan queued again; others do not. */
+    public function test_scans_left_waiting_are_queued_again_on_a_schedule(): void
+    {
+        $stale = $this->quarantined('stale.pdf', self::PDF);
+        $this->quarantined('fresh.pdf', self::PDF); // pending, but not yet stale
+        $failed = $this->quarantined('failed.pdf', self::PDF);
+        $done = $this->quarantined('done.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($done->id);
+        $old = now('UTC')->subMinutes(16);
+        DB::table('evidence_assets')->whereIn('id', [$stale->id, $done->id])->update(['updated_at' => $old]);
+        DB::table('evidence_assets')->where('id', $failed->id)->update(['scan_status' => 'error', 'scanned_at' => $old, 'updated_at' => $old]);
+        Bus::fake();
+
+        $this->assertSame(0, Artisan::call('evidence:dispatch-scans'));
+
+        Bus::assertDispatchedTimes(ScanEvidenceJob::class, 1);
+        Bus::assertDispatched(ScanEvidenceJob::class, fn (ScanEvidenceJob $job): bool => $job->assetId === $stale->id);
+        $events = collect($this->app->make(Schedule::class)->events())->map(fn ($event): array => [(string) $event->command, $event->expression]);
+        $this->assertTrue($events->contains(fn (array $e): bool => str_contains($e[0], 'evidence:dispatch-scans') && $e[1] === '*/5 * * * *'));
     }
 
     private function clamReturns(string $result): void

@@ -2,6 +2,8 @@
 
 namespace Modules\Evidence;
 
+use Illuminate\Console\Scheduling\Schedule;
+use Modules\Evidence\Console\DispatchPendingScans;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
 
@@ -16,6 +18,14 @@ class EvidenceServiceProvider extends ModuleServiceProvider
     public function boot(): void
     {
         parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([DispatchPendingScans::class]);
+        }
+        // A lost dispatch or a dead worker must not leave an upload in quarantine for good (TASK-0070 #1).
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            $schedule->command('evidence:dispatch-scans')->everyFiveMinutes();
+        });
 
         // Codes only: never the title, file name, URL or description (audit context holds no user input).
         $actions = $this->app->make(AuditActions::class);
