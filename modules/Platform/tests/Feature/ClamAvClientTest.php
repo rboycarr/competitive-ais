@@ -31,10 +31,8 @@ class ClamAvClientTest extends TestCase
         config(['services.clamav.chunk_bytes' => 4]); // forces several chunks for an 11-byte payload
         // The reply callback runs inside the forked server, a separate process: capture through a file, not a
         // by-reference variable (which would only change that process's own copy of memory).
-        $capture = tempnam(sys_get_temp_dir(), 'clamd-received-');
-        if ($capture === false) {
-            $this->fail('Could not create a capture file.');
-        }
+        // Not tempnam() (CodeRulesTest's "no insecure functions"): a name this random needs no atomicity guarantee.
+        $capture = sys_get_temp_dir().'/clamd-received-'.bin2hex(random_bytes(16));
         $this->scanAgainst(function (string $bytes) use ($capture): string {
             file_put_contents($capture, $bytes);
 
