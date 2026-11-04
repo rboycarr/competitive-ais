@@ -3,6 +3,7 @@
 namespace Modules\Evidence\Tests\Feature;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -217,6 +218,10 @@ class EvidenceScanTest extends TestCase
     {
         $job = new ScanEvidenceJob(42);
         $this->assertSame(['evidence', 3, [30, 120, 600], '42'], [$job->queue, $job->tries, $job->backoff(), $job->uniqueId()]);
+        // TASK-0071: the unique lock outlives the longest job (3 × timeout + backoff), but lapses within 30 minutes if
+        // its worker dies, so evidence:dispatch-scans can recover the scan.
+        $this->assertGreaterThan(3 * $job->timeout + array_sum($job->backoff()), $job->uniqueFor);
+        $this->assertLessThanOrEqual(1800, $job->uniqueFor);
     }
 
     public function test_the_database_holds_the_blob_rules(): void
@@ -306,6 +311,27 @@ class EvidenceScanTest extends TestCase
         Bus::assertDispatched(ScanEvidenceJob::class, fn (ScanEvidenceJob $job): bool => $job->assetId === $stale->id);
         $events = collect($this->app->make(Schedule::class)->events())->map(fn ($event): array => [(string) $event->command, $event->expression]);
         $this->assertTrue($events->contains(fn (array $e): bool => str_contains($e[0], 'evidence:dispatch-scans') && $e[1] === '*/5 * * * *'));
+    }
+
+    /** TASK-0071: a dispatch that fails for one asset does not stop the others; the command reports the failure. */
+    public function test_one_failed_dispatch_does_not_stop_the_sweep(): void
+    {
+        $first = $this->quarantined('first.pdf', self::PDF);
+        $second = $this->quarantined('second.pdf', self::PDF);
+        DB::table('evidence_assets')->update(['updated_at' => now('UTC')->subMinutes(16)]);
+        $dispatched = [];
+        app()->instance(Dispatcher::class, Mockery::mock(Dispatcher::class, function ($mock) use ($first, &$dispatched): void {
+            $mock->shouldReceive('dispatch')->twice()->andReturnUsing(function (ScanEvidenceJob $job) use ($first, &$dispatched): void {
+                if ($job->assetId === $first->id) {
+                    throw new RuntimeException('Synthetic queue failure.');
+                }
+                $dispatched[] = $job->assetId;
+            });
+        }));
+
+        $this->assertSame(1, Artisan::call('evidence:dispatch-scans'));
+        $this->assertSame([$second->id], $dispatched);
+        $this->assertStringContainsString('failed to queue: 1', Artisan::output());
     }
 
     private function clamReturns(string $result): void

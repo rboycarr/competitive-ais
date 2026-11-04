@@ -23,7 +23,9 @@ final class ScanEvidenceJob implements ShouldBeUnique, ShouldQueue
 
     public int $timeout = 300;
 
-    public int $uniqueFor = 3600;
+    // Just over the longest life of a job (3 tries × 300 s + 750 s of backoff = 1650 s): if its worker dies, the
+    // lock lapses within 30 minutes and evidence:dispatch-scans can queue the scan again (TASK-0071).
+    public int $uniqueFor = 1800;
 
     public function __construct(public readonly int $assetId)
     {
