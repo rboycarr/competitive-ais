@@ -3,18 +3,23 @@
 namespace Modules\Evidence\Tests\Feature;
 
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
 use Mockery;
 use Modules\Evidence\Actions\EvidenceUploadService;
+use Modules\Evidence\Jobs\ScanEvidenceJob;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Models\User;
@@ -50,6 +55,7 @@ class EvidenceUploadTest extends TestCase
 
         $this->withoutVite();
         Storage::fake(EvidenceUploadService::QUARANTINE_DISK);
+        Queue::fake();
         $this->analyst = $this->createUser('analyst@example.test', 'ci_analyst', clearance: Classification::Confidential);
     }
 
@@ -71,6 +77,7 @@ class EvidenceUploadTest extends TestCase
         Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists('quarantine/'.$asset->ulid);
         $this->assertSame(self::PDF, Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->get('quarantine/'.$asset->ulid));
         $this->assertSame(['quarantine/'.$asset->ulid], Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->allFiles());
+        Queue::assertPushed(ScanEvidenceJob::class, fn (ScanEvidenceJob $job): bool => $job->assetId === $asset->id && $job->queue === 'evidence');
 
         $custody = EvidenceCustodyEvent::query()->sole();
         $this->assertSame([$asset->id, 'uploaded', 'user', $this->analyst->id, null], [$custody->evidence_asset_id, $custody->event, $custody->actor_type, $custody->actor_id, $custody->details]);
@@ -221,6 +228,32 @@ class EvidenceUploadTest extends TestCase
         $this->assertSame([0, 0], [EvidenceAsset::query()->count(), EvidenceCustodyEvent::query()->count()]); // TASK-0066
     }
 
+    public function test_a_failed_scan_dispatch_does_not_undo_an_already_committed_upload(): void
+    {
+        // The asset is committed before the job is ever dispatched (P1-32b rework): a queue outage must not delete an
+        // upload that already succeeded. app(Dispatcher::class) is what Job::dispatch()'s PendingDispatch calls.
+        app()->instance(Dispatcher::class, Mockery::mock(Dispatcher::class, function ($mock): void {
+            $mock->shouldReceive('dispatch')->once()->andThrow(new RuntimeException('Synthetic queue failure.'));
+        }));
+
+        $this->actingAs($this->analyst)->post('/evidence', $this->form('report.pdf', self::PDF))->assertSessionHasNoErrors();
+
+        $asset = EvidenceAsset::query()->sole();
+        $this->assertSame('quarantined', $asset->status);
+        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists((string) $asset->quarantine_key);
+        $this->assertSame(1, EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->count());
+
+        // TASK-0070 #1: once the queue is back, the scheduled sweep queues the lost scan (not before it is stale).
+        app()->instance(Dispatcher::class, app(\Illuminate\Bus\Dispatcher::class));
+        Bus::clearResolvedInstance(Dispatcher::class);
+        Bus::fake();
+        Artisan::call('evidence:dispatch-scans');
+        Bus::assertNotDispatched(ScanEvidenceJob::class);
+        $this->travel((int) config('evidence.scan_stale_minutes') + 1)->minutes();
+        Artisan::call('evidence:dispatch-scans');
+        Bus::assertDispatched(ScanEvidenceJob::class, fn (ScanEvidenceJob $job): bool => $job->assetId === $asset->id);
+    }
+
     public function test_malformed_text_suspended_users_and_disguised_archives_are_refused(): void
     {
         foreach (['title', 'description', 'source_url'] as $field) {
@@ -309,11 +342,12 @@ class EvidenceUploadTest extends TestCase
             ['quarantine_key' => null], ['scan_status' => 'clean', 'scanned_at' => now()], ['status' => 'available', 'quarantine_key' => null],
             ['status' => 'rejected', 'quarantine_key' => null], ['scan_status' => 'error'], ['scanned_at' => now()],
             ['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now()], // still holding its quarantine object
+            ['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now(), 'quarantine_key' => null], // no blob (evidence_assets_blob_check, P1-32b)
         ] as $overrides) {
             $this->assertDatabaseError(3819, fn () => DB::table('evidence_assets')->insert($row($overrides)), (string) json_encode($overrides));
         }
         $id = DB::table('evidence_assets')->insertGetId($row([]));
-        DB::table('evidence_assets')->insert($row(['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now(), 'quarantine_key' => null]));
+        DB::table('evidence_assets')->insert($row(['status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now(), 'quarantine_key' => null, 'evidence_blob_id' => $this->blob()]));
         DB::table('evidence_assets')->insert($row(['scan_status' => 'error', 'scanned_at' => now()])); // a failed scan, to be retried
 
         $event = fn (array $overrides): array => $overrides + ['evidence_asset_id' => $id, 'event' => 'uploaded', 'actor_type' => 'user', 'actor_id' => $this->analyst->id, 'occurred_at' => now()];
@@ -364,9 +398,21 @@ class EvidenceUploadTest extends TestCase
             'ulid' => (string) Str::ulid(), 'status' => $status, 'scan_status' => $scan, 'scanned_at' => $scan === 'pending' ? null : now(),
             'quarantine_key' => $status === 'quarantined' ? 'quarantine/'.Str::ulid() : null, 'original_filename' => 'a.pdf', 'size_bytes' => 10,
             'title' => $title, 'captured_at' => now(), 'uploaded_by' => ($uploader ?? $this->analyst)->id, 'classification' => $classification,
+            // An available asset always has its blob (evidence_assets_blob_check, P1-32b).
+            'evidence_blob_id' => $status === 'available' ? $this->blob() : null,
         ])->save();
 
         return $asset;
+    }
+
+    /** A blob row for fixtures that need one; its content is never actually stored. */
+    private function blob(): int
+    {
+        return (int) DB::table('evidence_blobs')->insertGetId([
+            'sha256' => hash('sha256', (string) Str::ulid()), 'storage_disk' => 'evidence', 'storage_key' => 'sha256/'.Str::random(60),
+            'size_bytes' => 10, 'detected_mime' => 'application/pdf', 'first_scan_engine' => 'clamd', 'first_scanned_at' => now(),
+            'integrity_status' => 'ok', 'created_at' => now(),
+        ]);
     }
 
     private function assertDatabaseError(int $code, callable $statement, string $case): void

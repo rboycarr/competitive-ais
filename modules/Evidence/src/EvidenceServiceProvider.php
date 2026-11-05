@@ -2,13 +2,16 @@
 
 namespace Modules\Evidence;
 
+use Illuminate\Console\Scheduling\Schedule;
+use Modules\Evidence\Console\DispatchPendingScans;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
 
 /**
  * Evidence (M09, docs/03): uploads, quarantine, scanning, content-addressed storage, custody. P1-32a stores uploads
- * in quarantine with their custody trail; the scan and promotion follow in P1-32b, downloads in P1-34, legal hold in
- * P1-35, scopes in P1-36, the source policy at capture in P1-37. Uploads are untrusted (docs/07 T7).
+ * in quarantine with their custody trail; P1-32b scans them and promotes clean bytes to content-addressed storage, or
+ * rejects them. Downloads come in P1-34, legal hold in P1-35, scopes in P1-36, the source policy at capture in P1-37.
+ * Uploads are untrusted (docs/07 T7).
  */
 class EvidenceServiceProvider extends ModuleServiceProvider
 {
@@ -16,7 +19,18 @@ class EvidenceServiceProvider extends ModuleServiceProvider
     {
         parent::boot();
 
+        if ($this->app->runningInConsole()) {
+            $this->commands([DispatchPendingScans::class]);
+        }
+        // A lost dispatch or a dead worker must not leave an upload in quarantine for good (TASK-0070 #1).
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            $schedule->command('evidence:dispatch-scans')->everyFiveMinutes();
+        });
+
         // Codes only: never the title, file name, URL or description (audit context holds no user input).
-        $this->app->make(AuditActions::class)->define('evidence.uploaded', ['classification' => 'code']);
+        $actions = $this->app->make(AuditActions::class);
+        $actions->define('evidence.uploaded', ['classification' => 'code']);
+        $actions->define('evidence.scanned', ['result' => 'code', 'sha256' => 'sha256']);
+        $actions->define('evidence.rejected', ['reason' => 'code']);
     }
 }

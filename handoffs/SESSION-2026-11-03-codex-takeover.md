@@ -13,7 +13,9 @@ This file is synthetic project information; it contains no secrets.
 
 ## 1. What changes for you
 
-**Decided by the PO (2026-11-03):**
+> **Superseded 2026-11-04:** the PO switched the roles back. Claude Code implements again and Codex reviews read-only (`AGENTS.md`, `docs/12` §1). Codex's unfinished P1-32b work is kept in commit `30bb995` on `feature/evidence-scan`. The rest of this file (state, commands, gotchas, conventions, the plan) remains useful context for reviews.
+
+**Decided by the PO (2026-11-03), no longer in force:**
 - You are the **standing implementer**. `AGENTS.md` now says so and lists what you may and may not do.
 - **Claude Code reviews your branches read-only.**
 - Your first assignment is `handoffs/TASK-0069.md` (P1-32b).

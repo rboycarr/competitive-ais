@@ -7,6 +7,7 @@ use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Modules\Platform\Access\Classifiable;
 use Modules\Platform\Access\Scoped;
@@ -25,6 +26,7 @@ use Modules\Platform\Classification;
  * @property ?string $scan_engine
  * @property ?CarbonInterface $scanned_at
  * @property ?string $quarantine_key
+ * @property ?int $evidence_blob_id
  * @property string $original_filename
  * @property int $size_bytes
  * @property string $title
@@ -76,6 +78,12 @@ class EvidenceAsset extends Model implements Classifiable, Scoped
         return $this->hasMany(EvidenceCustodyEvent::class);
     }
 
+    /** @return BelongsTo<EvidenceBlob, $this> */
+    public function blob(): BelongsTo
+    {
+        return $this->belongsTo(EvidenceBlob::class, 'evidence_blob_id');
+    }
+
     public function classification(): Classification
     {
         return $this->classification;
@@ -106,6 +114,7 @@ class EvidenceAsset extends Model implements Classifiable, Scoped
             'captured_at' => 'datetime',
             'scanned_at' => 'datetime',
             'size_bytes' => 'integer',
+            'evidence_blob_id' => 'integer',
         ];
     }
 }

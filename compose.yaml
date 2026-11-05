@@ -201,6 +201,10 @@ services:
 
   clamav:
     image: clamav/clamav:1.5.4
+    # The image's /init writes CLAMD_CONF_* into clamd.conf. The default stream limit (25M) is below the 50 MB evidence
+    # limit, so larger uploads could never be scanned (P1-32b).
+    environment:
+      CLAMD_CONF_StreamMaxLength: 60M
     volumes: [clamav-db:/var/lib/clamav]
     networks: [data]
     restart: unless-stopped

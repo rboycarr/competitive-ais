@@ -13,6 +13,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Modules\Evidence\Jobs\ScanEvidenceJob;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Platform\Access\AccessScope;
@@ -82,7 +83,7 @@ class EvidenceUploadService
                 fclose($stream);
             }
 
-            return $this->db->transaction(function () use ($actor, $asset): EvidenceAsset {
+            $saved = $this->db->transaction(function () use ($actor, $asset): EvidenceAsset {
                 $asset->save();
                 $event = new EvidenceCustodyEvent;
                 $event->forceFill([
@@ -111,6 +112,17 @@ class EvidenceUploadService
 
             throw $e;
         }
+
+        // Outside the cleanup boundary (P1-32b): the asset is already committed here, so a dispatch failure must
+        // never delete its quarantine object. The scheduled evidence:dispatch-scans queues the scan again once the
+        // asset has waited `evidence.scan_stale_minutes` (TASK-0070 #1).
+        try {
+            ScanEvidenceJob::dispatch($saved->id)->afterCommit();
+        } catch (Throwable $e) {
+            report($e);
+        }
+
+        return $saved;
     }
 
     /**
