@@ -22,7 +22,8 @@ use Modules\Platform\Storage\SignedDownloads;
  * - needs evidence.download, and the asset must be one the viewer sees (EvidenceAsset::seenBy, the same rule as the
  *   list and detail pages); a hidden asset is "not found";
  * - only an `available` asset whose blob passed its integrity checks is served: nothing in quarantine, rejected or
- *   withdrawn (withdrawn evidence stays for provenance, not for use), and nothing whose bytes are in doubt;
+ *   withdrawn (withdrawn evidence stays for provenance, not for use), nothing whose bytes are in doubt, and outside
+ *   tests nothing whose stored version is unknown;
  * - the link is attachment-only, for the blob's stored version, valid `evidence.download_seconds` (at most 60);
  * - the checks, under a shared lock on the asset, the `downloaded` custody event and the audit event are one
  *   transaction, and the link is handed out only after it commits: no link without its record.
@@ -53,6 +54,11 @@ class EvidenceDownloadService
             }
             if ($blob->integrity_status !== 'ok') {
                 throw ValidationException::withMessages(['download' => 'This file failed an integrity check and cannot be downloaded.']);
+            }
+            // Without its version, a link serves the object's latest version, not necessarily the stored one
+            // (TASK-0073; ADR-0007). Only the test fakes store none.
+            if ($blob->object_version_id === null && ! app()->environment('testing')) {
+                throw ValidationException::withMessages(['download' => 'The stored version of this file is not recorded, so it cannot be downloaded.']);
             }
 
             $seconds = min(60, max(1, (int) config('evidence.download_seconds')));

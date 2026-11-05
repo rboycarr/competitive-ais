@@ -131,6 +131,22 @@ class EvidenceDownloadTest extends TestCase
         }
     }
 
+    /** TASK-0073: a link without the version would serve the latest version, not necessarily the stored one. */
+    public function test_a_blob_without_its_stored_version_is_not_served_outside_tests(): void
+    {
+        $asset = $this->asset('available');
+        $this->app['env'] = 'production';
+        try {
+            app(EvidenceDownloadService::class)->link($this->analyst, $asset);
+            $this->fail('A blob without its stored version was served.');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('stored version', (string) collect($e->errors())->flatten()->first());
+        } finally {
+            $this->app['env'] = 'testing';
+        }
+        $this->assertNothingIssued($asset);
+    }
+
     public function test_a_get_or_a_guest_gets_nothing(): void
     {
         $asset = $this->asset('available');
