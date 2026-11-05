@@ -17,14 +17,15 @@ use Modules\Platform\Classification;
 use Modules\Sources\Actions\SourcePolicyService;
 use Modules\Sources\Actions\SourceService;
 use Modules\Sources\Models\Source;
+use RuntimeException;
 use Tests\Support\Concurrently;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
 /**
  * P1-37 (TASK-0077 #1, #3), with committed data and separate processes (Concurrently):
- * - a capture racing a suspension reads the source's status under its share lock, after the suspension commits,
- *   and is refused, instead of recording the policy its earlier, non-locking read saw;
+ * - a capture racing a suspension (in a forced order) reads the source's status under its share lock, after the
+ *   suspension commits, and is refused, instead of recording the policy its earlier, non-locking read saw;
  * - the migration rolls back on a database where no evidence names a source, and applies again.
  * DatabaseMigrations, so tearDown removes the governance rows (the app account cannot, and the migrations refuse to
  * roll back while they exist).
@@ -55,24 +56,31 @@ class EvidenceSourcePolicyLockTest extends TestCase
         Queue::fake();
         [$analyst, $source] = $this->approvedSource();
 
-        // The suspension holds the source row for update (as SourceLifecycleService does) and commits after 3 s; the
-        // capture starts 1 s in, so its first check still sees `approved`. Only the share lock in the transaction makes
-        // it read the status again after the suspension commits: without it the asset insert would wait on the
-        // foreign key's own lock and then record the policy of a source that was suspended before the capture
-        // committed (TASK-0077 #3).
+        // The order is enforced, not timed (TASK-0078):
+        // 1. the suspension holds the source row for update (as SourceLifecycleService does), uncommitted, and signals;
+        // 2. only then does the capture start, so its first check (a plain read) still sees `approved`;
+        // 3. the suspension commits only once the capture's share-locked read of the row is waiting on it (both
+        //    sessions are the app account, so SHOW PROCESSLIST lists the capture's query without extra privileges).
+        // Without the share lock, step 3 never happens: the suspension gives up (RuntimeException) and the capture,
+        // whose asset insert waited only on the foreign key's own lock, records the policy (TASK-0077 #3).
+        $held = sys_get_temp_dir().'/cais-p137-held-'.bin2hex(random_bytes(6));
         $results = Concurrently::run([
-            function () use ($source): void {
-                DB::transaction(function () use ($source): void {
+            function () use ($source, $held): void {
+                DB::transaction(function () use ($source, $held): void {
                     DB::table('sources')->where('id', $source->id)->lockForUpdate()->first();
                     DB::table('sources')->where('id', $source->id)->update(['status' => 'suspended']);
-                    usleep(3_000_000);
+                    touch($held);
+                    self::until(fn (): bool => collect(DB::select('SHOW FULL PROCESSLIST'))->contains(
+                        fn (object $process): bool => (bool) preg_match('/from `sources`.*(lock in share mode|for share)/is', (string) ((array) $process)['Info']),
+                    ), 'The capture never waited on the source row.');
                 });
             },
-            function () use ($analyst, $source): void {
-                usleep(1_000_000);
+            function () use ($analyst, $source, $held): void {
+                self::until(fn (): bool => file_exists($held), 'The suspension never took the source row.');
                 app(EvidenceUploadService::class)->upload($analyst, $this->file(), $this->fields($source));
             },
-        ]);
+        ], 60.0);
+        @unlink($held);
 
         $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
         $this->assertSame('suspended', DB::table('sources')->where('id', $source->id)->value('status'));
@@ -97,6 +105,18 @@ class EvidenceSourcePolicyLockTest extends TestCase
         $this->assertSame([[], []], [$columns(), $constraints()]);
         $this->assertSame(0, Artisan::call('migrate', ['--path' => self::MIGRATION, '--force' => true]));
         $this->assertSame($applied, [$columns(), $constraints()]);
+    }
+
+    /** Polls a condition in a task process, failing after 30 seconds. */
+    private static function until(callable $condition, string $failure): void
+    {
+        $deadline = microtime(true) + 30;
+        while (! $condition()) {
+            if (microtime(true) > $deadline) {
+                throw new RuntimeException($failure);
+            }
+            usleep(50_000);
+        }
     }
 
     /** @return array{User, Source} */
