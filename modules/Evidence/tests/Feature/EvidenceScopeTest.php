@@ -3,16 +3,20 @@
 namespace Modules\Evidence\Tests\Feature;
 
 use DateTimeInterface;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia;
+use Modules\Evidence\Actions\EvidenceDownloadService;
 use Modules\Evidence\Actions\EvidenceHoldService;
 use Modules\Evidence\Actions\EvidenceScanService;
 use Modules\Evidence\Actions\EvidenceUploadService;
@@ -88,6 +92,50 @@ class EvidenceScopeTest extends TestCase
 
             return $status === 302;
         }, 'POST /evidence/{ulid}/download');
+
+        // Legal hold (TASK-0075 #2): the same users as directors (two-factor on); refused = 404, allowed = a redirect
+        // (placed, or "already on hold" once another holder placed it).
+        foreach ($active as $entry) {
+            $entry['user']->assignRole('ci_director');
+            $this->enableTwoFactor($entry['user']);
+        }
+        AuthorizationMatrix::assertMatrix($active, $records, function (User $user, array $record) use ($ulids): bool {
+            $status = $this->actingAs($user)->post("/evidence/{$ulids[$record['label']]}/hold", ['hold' => true, 'reason' => 'Matrix'])->getStatusCode();
+            $this->assertContains($status, [302, 404]);
+
+            return $status === 302;
+        }, 'POST /evidence/{ulid}/hold');
+    }
+
+    /**
+     * TASK-0075 #1: a scope added between the first visibility check and the locked row (the race, made deterministic
+     * by adding it as the transaction begins) is seen under the lock: no link, no hold, nothing recorded.
+     */
+    public function test_a_scope_added_after_the_first_check_is_enforced_under_the_lock(): void
+    {
+        AuthorizationMatrix::users();
+        $uploader = $this->createUser('uploader@example.test', 'data_collector', clearance: Classification::Restricted);
+        $director = $this->enableTwoFactor($this->createUser('director@example.test', 'ci_director', clearance: Classification::Restricted));
+        $this->grant($director, 'competitor', AuthorizationMatrix::competitorId('A'), null, 'internal');
+
+        foreach (['download' => EvidenceDownloadService::class, 'hold' => EvidenceHoldService::class] as $action => $service) {
+            $asset = $this->available("About A ($action)", Classification::Internal, $uploader, [AuthorizationMatrix::competitorId('A')], []);
+            $added = false;
+            Event::listen(TransactionBeginning::class, function () use (&$added, $asset, $uploader): void {
+                if (! $added) {
+                    $added = true;
+                    DB::table('evidence_asset_competitor')->insert(['evidence_asset_id' => $asset->id, 'competitor_id' => AuthorizationMatrix::competitorId('B'), 'origin' => 'inherited', 'added_by' => $uploader->id, 'created_at' => now()]);
+                }
+            });
+            $call = $action === 'download'
+                ? fn () => app(EvidenceDownloadService::class)->link($director, $asset)
+                : fn () => app(EvidenceHoldService::class)->change($director, $asset, true, 'Notice');
+            $this->assertThrows($call, ModelNotFoundException::class);
+            $this->assertTrue($added, "$service: the scope was added inside the transaction");
+            $this->assertSame(0, DB::table('evidence_custody_events')->where('evidence_asset_id', $asset->id)->count());
+            $this->assertFalse((bool) $asset->fresh()?->legal_hold);
+            Event::forget(TransactionBeginning::class);
+        }
     }
 
     public function test_a_director_without_a_covering_grant_cannot_hold_scoped_evidence(): void
@@ -151,6 +199,8 @@ class EvidenceScopeTest extends TestCase
             'competitor above clearance' => ['competitors', ['competitors' => [$this->ulidOf('competitors', $hidden)]]],
             'not a ULID' => ['competitors', ['competitors' => ['../../etc']]],
             'not a list' => ['competitors', ['competitors' => 'nope']],
+            'empty entry' => ['competitors', ['competitors' => ['']]],
+            'null entry' => ['markets', ['markets' => [null]]],
             'unknown market' => ['markets', ['markets' => [(string) Str::ulid()]]],
             'too many' => ['markets', ['markets' => array_fill(0, EvidenceUploadService::MAX_SCOPES + 1, (string) Str::ulid())]],
             'competitor without a grant' => ['scopes', ['competitors' => [$b]]],

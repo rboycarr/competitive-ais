@@ -167,9 +167,7 @@ class EvidenceUploadService
             }
             $ids[$field] = [];
             foreach ($ulids as $ulid) {
-                if ($ulid === null || $ulid === '') {
-                    continue;
-                }
+                // An empty or malformed entry is refused, not skipped (TASK-0075 #3): the same contract as the form.
                 $found = ! is_string($ulid) || preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/', $ulid) !== 1 ? null
                     : ($field === 'competitors' ? $this->competitors->findVisible($actor, $ulid) : $this->markets->find($ulid));
                 if ($found === null) {

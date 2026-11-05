@@ -54,8 +54,12 @@ class EvidenceHoldService
         $reason = $this->reason($reason);
         $userId = (int) $actor->getAuthIdentifier();
 
-        $released = $this->db->transaction(function () use ($asset, $hold, $reason, $userId): ?int {
+        $released = $this->db->transaction(function () use ($actor, $asset, $hold, $reason, $userId): ?int {
             $current = EvidenceAsset::query()->lockForUpdate()->findOrFail($asset->id);
+            // Visibility again, under the lock (TASK-0075 #1): a scope added after the first check narrows who sees it.
+            if (! EvidenceAsset::seenBy(EvidenceAsset::query(), $actor, $this->gate)->whereKey($current->id)->exists()) {
+                throw (new ModelNotFoundException)->setModel(EvidenceAsset::class, [$current->ulid]);
+            }
             if ($current->status !== 'available' || $current->evidence_blob_id === null) {
                 throw ValidationException::withMessages(['hold' => 'Only available evidence can be placed on legal hold.']);
             }
