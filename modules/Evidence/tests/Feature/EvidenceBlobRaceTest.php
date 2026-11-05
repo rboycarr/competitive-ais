@@ -4,8 +4,10 @@ namespace Modules\Evidence\Tests\Feature;
 
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -22,6 +24,7 @@ use Modules\Platform\Classification;
 use Modules\Platform\Scanning\ClamAvClient;
 use Modules\Sources\Actions\SourcePolicyService;
 use Modules\Sources\Actions\SourceService;
+use RuntimeException;
 use Tests\Support\Concurrently;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
@@ -30,9 +33,10 @@ use Tests\TestCase;
  * P1-38 / docs/09 #15, with committed data and separate processes (Concurrently): duplicate uploads whose scan jobs run
  * at the same time, one of them found infected, end with one blob and one stored object, shared by the clean copies
  * and kept for the longest of them; the infected copy touches no blob; a retried job changes nothing. Also with
- * committed data: the retention migration's backfill and rollback, and the deletion check refusing to run outside a
- * transaction. DatabaseMigrations, so tearDown removes the evidence and source rows (the app account cannot, and the migrations refuse to roll back while they
- * exist).
+ * committed data: an upload stalled inside its transaction keeps its quarantine object through a sweep (TASK-0082 #1),
+ * the retention migration's backfill and rollback, and the deletion check refusing to run outside a transaction.
+ * DatabaseMigrations, so tearDown removes the evidence and source rows (the app account cannot, and the migrations
+ * refuse to roll back while they exist).
  */
 class EvidenceBlobRaceTest extends TestCase
 {
@@ -86,6 +90,61 @@ class EvidenceBlobRaceTest extends TestCase
         app(EvidenceScanService::class)->scan($longer->id);
         $this->assertSame(1, EvidenceBlob::query()->count());
         $this->assertSame(1, EvidenceCustodyEvent::query()->where('evidence_asset_id', $longer->id)->count());
+    }
+
+    /**
+     * TASK-0082 #1: the upload is held inside its transaction (after the write, before the commit) while the sweep runs
+     * with every object counting as old; the sweep finds no committed asset, but the upload's lock keeps it off the key.
+     * Without that lock, the sweep deletes the object and the upload then commits an asset without one.
+     */
+    public function test_a_sweep_during_a_stalled_upload_leaves_its_object(): void
+    {
+        Storage::fake(EvidenceUploadService::QUARANTINE_DISK);
+        Queue::fake();
+        config(['evidence.quarantine_orphan_minutes' => -5]); // every object counts as old
+        $analyst = $this->createUser('analyst@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        $stalled = sys_get_temp_dir().'/cais-p138-stalled-'.bin2hex(random_bytes(6));
+        $swept = "$stalled.swept";
+        EvidenceCustodyEvent::saving(function () use ($stalled, $swept): void {
+            touch($stalled); // inside the upload's transaction, its object already written
+            self::until(fn (): bool => is_file($swept), 'The sweep never ran.');
+        });
+
+        try {
+            $results = Concurrently::run([
+                fn () => app(EvidenceUploadService::class)->upload($analyst, UploadedFile::fake()->createWithContent('a.pdf', self::PDF),
+                    ['title' => 'Stalled', 'captured_at' => '2026-11-01T10:00:00Z', 'classification' => 'internal']),
+                function () use ($stalled, $swept): void {
+                    self::until(fn (): bool => is_file($stalled), 'The upload never reached its transaction.');
+                    $code = Artisan::call('evidence:sweep-quarantine');
+                    file_put_contents($swept, $code.' '.Artisan::output());
+                },
+            ], 60.0);
+            $sweep = (string) file_get_contents($swept);
+        } finally {
+            foreach ([$stalled, $swept] as $file) {
+                if (file_exists($file)) {
+                    unlink($file);
+                }
+            }
+        }
+
+        $this->assertSame(['ok', 'ok'], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertStringContainsString('removed: 0; failed: 0; in use by an upload: 1;', $sweep);
+        $asset = EvidenceAsset::query()->sole();
+        Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->assertExists((string) $asset->quarantine_key);
+    }
+
+    /** Polls a condition in a task process, failing after 30 seconds. */
+    private static function until(callable $condition, string $failure): void
+    {
+        $deadline = microtime(true) + 30;
+        while (! $condition()) {
+            if (microtime(true) > $deadline) {
+                throw new RuntimeException($failure);
+            }
+            usleep(50_000);
+        }
     }
 
     /** The migration fills existing assets by the upload rule, from their creation time; rollback and re-apply agree. */

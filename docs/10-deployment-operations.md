@@ -191,7 +191,7 @@ Scheduled commands (the `scheduler` service):
 | Command | When | Exit 1 means | What to do |
 |---|---|---|---|
 | `evidence:reconcile-blobs` | daily 02:30 UTC | a blob failed (e.g. its version is missing from the store; the exception is reported), or an object is held while none of its assets is | A missing version is an integrity incident: compare `evidence_blobs.storage_key`/`object_version_id` with the store. An unexpected hold is either a hold placed outside the application (leave it) or a release that failed (the log line above): once confirmed, run `php artisan evidence:reconcile-blobs --release-unheld`, which releases object holds no asset holds and audits each as `evidence.blob_reconciled` (`object_hold` = `off`). |
-| `evidence:sweep-quarantine` | hourly | a quarantine object could not be deleted (`evidence.quarantine_orphan`), or a key not of the form `quarantine/<ULID>` was found | Check the store's permissions for the app identity on `evidence-quarantine`; remove unexpected keys by hand after review. |
+| `evidence:sweep-quarantine` | hourly (objects whose upload still holds its key's lock are counted "in use" and left; not an error) | a quarantine object could not be deleted (`evidence.quarantine_orphan`), or a key not of the form `quarantine/<ULID>` was found | Check the store's permissions for the app identity on `evidence-quarantine`; remove unexpected keys by hand after review. |
 
 **After deploying P1-38:** run `php artisan evidence:reconcile-blobs` once (it also runs nightly), so blobs stored before per-asset retention are extended to their assets' dates. It never shortens a lock.
 
