@@ -175,6 +175,31 @@ class PrivateObjectStorageTest extends TestCase
         }
     }
 
+    /** P1-35: a legal hold needs the stored version (never "the latest"), and the S3 store outside tests. */
+    public function test_legal_holds_need_the_version_and_the_s3_store(): void
+    {
+        config(['filesystems.disks.evidence.key' => 'synthetic-key', 'filesystems.disks.evidence.secret' => 'synthetic-secret']);
+        $disk = Storage::disk('evidence');
+        $this->assertInstanceOf(AwsS3V3Adapter::class, $disk);
+        $sent = 0;
+        $disk->getClient()->getHandlerList()->setHandler(new MockHandler([function () use (&$sent): Result {
+            $sent++;
+
+            return new Result([]);
+        }]));
+        $this->assertThrows(fn () => LockedObjects::legalHold($disk, 'sha256/ab/cd/abcdef', null, true), RuntimeException::class, 'stored version');
+        $this->assertSame(0, $sent);
+
+        Storage::fake('evidence');
+        LockedObjects::legalHold(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', null, true); // the fakes, in tests: skipped
+        $this->app['env'] = 'production';
+        try {
+            $this->assertThrows(fn () => LockedObjects::legalHold(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', 'v1', true), RuntimeException::class, 'S3 object store');
+        } finally {
+            $this->app['env'] = 'testing';
+        }
+    }
+
     /** Outside tests, a disk without object lock would store evidence without retention: refused. */
     public function test_locked_objects_refuse_a_plain_disk_outside_tests(): void
     {
