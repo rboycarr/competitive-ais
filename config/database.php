@@ -216,7 +216,10 @@ return [
             'channels', // P1-23b: channels no retailer uses may be removed (audited)
             'competitor_aliases', // P1-21: removing one is an audited correction
             'competitor_relationships', // P1-21: ended with valid_to; removing one is an audited correction
+            'competitor_intelligence_item', // P1-40: an editable item's subjects change (audited)
             'failed_jobs',
+            'intelligence_item_market', // P1-40: an editable item's subjects change (audited)
+            'intelligence_item_product', // P1-40
             'job_batches',
             'jobs',
             'model_has_permissions',
@@ -244,6 +247,8 @@ return [
             'competitors', // archived, never deleted (P1-20)
             'evidence_assets', // rejected or withdrawn, never deleted: custody and claims refer to them (P1-32a)
             'evidence_blobs', // clean content is retained and referenced by evidence assets (P1-32b)
+            'intelligence_claims', // withdrawn, never deleted: what a reviewer saw stays on record (P1-40)
+            'intelligence_items', // lifecycle by status: retracted or superseded, never deleted (P1-40)
             'currencies', // edited by taxonomy managers, never deleted (P1-23b, PO decision O29)
             'markets', // grants and prices refer to them (P1-23a)
             'product_variants', // retired with a status (P1-22b)

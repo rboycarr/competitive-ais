@@ -26,4 +26,15 @@ interface CompetitorLookup
      * @return array<int, CompetitorSummary>
      */
     public function summaries(Authenticatable $viewer, array $ids): array;
+
+    /**
+     * Inside the caller's transaction: share-locks these competitors' rows until it ends and returns the IDs among them
+     * that are not archived. A record that starts referring to a competitor calls this first, and archiving locks the
+     * row for update before it checks for references (P1-40), so neither can miss the other. No visibility filter:
+     * the caller has already checked that.
+     *
+     * @param  list<int>  $ids
+     * @return list<int>
+     */
+    public function lockUnarchived(array $ids): array;
 }

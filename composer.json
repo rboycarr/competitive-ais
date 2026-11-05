@@ -34,6 +34,7 @@
             "Database\\Seeders\\": "database/seeders/",
             "Modules\\Evidence\\": "modules/Evidence/src/",
             "Modules\\Identity\\": "modules/Identity/src/",
+            "Modules\\Intelligence\\": "modules/Intelligence/src/",
             "Modules\\Platform\\": "modules/Platform/src/",
             "Modules\\Registry\\": "modules/Registry/src/",
             "Modules\\Sources\\": "modules/Sources/src/"
@@ -44,6 +45,7 @@
             "Tests\\": "tests/",
             "Modules\\Evidence\\Tests\\": "modules/Evidence/tests/",
             "Modules\\Identity\\Tests\\": "modules/Identity/tests/",
+            "Modules\\Intelligence\\Tests\\": "modules/Intelligence/tests/",
             "Modules\\Platform\\Tests\\": "modules/Platform/tests/",
             "Modules\\Registry\\Tests\\": "modules/Registry/tests/",
             "Modules\\Sources\\Tests\\": "modules/Sources/tests/"

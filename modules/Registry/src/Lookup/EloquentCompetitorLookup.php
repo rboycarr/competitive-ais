@@ -33,6 +33,16 @@ class EloquentCompetitorLookup implements CompetitorLookup
             ->mapWithKeys(fn (Competitor $c): array => [$c->id => $this->summary($c)])->all();
     }
 
+    public function lockUnarchived(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        return array_values(array_map('intval', Competitor::query()->whereIn('id', $ids)->orderBy('id')->sharedLock()
+            ->get(['id', 'lifecycle'])->where('lifecycle', '!=', 'archived')->pluck('id')->all()));
+    }
+
     private function summary(Competitor $competitor): CompetitorSummary
     {
         return new CompetitorSummary($competitor->id, $competitor->ulid, $competitor->name);
