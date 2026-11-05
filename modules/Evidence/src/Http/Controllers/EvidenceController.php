@@ -10,6 +10,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Modules\Evidence\Actions\EvidenceDownloadService;
 use Modules\Evidence\Actions\EvidenceUploadService;
 use Modules\Evidence\Http\Requests\UploadEvidenceRequest;
 use Modules\Evidence\Models\EvidenceAsset;
@@ -17,11 +18,12 @@ use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
  * Evidence (P1-32a): list and detail for evidence.view holders (EvidenceAsset::seenBy: AccessScope, and until an
  * asset is available only its uploader and evidence.hold holders; hidden assets are 404), the upload form for
- * evidence.upload holders. Contents are not served yet: downloads come with P1-34.
+ * evidence.upload holders, and downloads for evidence.download holders (P1-34, EvidenceDownloadService).
  */
 class EvidenceController
 {
@@ -89,12 +91,23 @@ class EvidenceController
                 'uploadedAt' => $asset->created_at?->toIso8601ZuluString(),
                 'classification' => $asset->classification->value,
             ],
+            // Offered only where it would succeed; EvidenceDownloadService checks again.
+            'canDownload' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.download'),
             'custody' => $events->map(fn (EvidenceCustodyEvent $e): array => [
                 'event' => $e->event,
                 'actor' => $e->actor_id === null ? null : ($names[$e->actor_id]->name ?? null),
                 'occurredAt' => $e->occurred_at->toIso8601ZuluString(),
             ])->all(),
         ]);
+    }
+
+    /**
+     * A POST, so a link from another site cannot record a download in someone's name; the browser is sent to the
+     * short-lived link (Inertia::location: a full-page visit, never an XHR that would expose it to scripts).
+     */
+    public function download(Request $request, EvidenceAsset $asset, EvidenceDownloadService $downloads): SymfonyResponse
+    {
+        return Inertia::location($downloads->link($this->viewer($request), $asset));
     }
 
     public function store(UploadEvidenceRequest $request, EvidenceUploadService $uploads): RedirectResponse

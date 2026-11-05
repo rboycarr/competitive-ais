@@ -19,6 +19,10 @@ return [
     // dispatch or a worker that died mid-scan). The job's unique lock keeps a queued or running scan from doubling.
     'scan_stale_minutes' => 15,
 
+    // Seconds a download link stays valid (P1-34, ADR-0007: at most 60; larger values are cut to 60). Each link is
+    // issued after the policy check and recorded as a `downloaded` custody event.
+    'download_seconds' => 60,
+
     // Largest accepted upload. PHP (upload_max_filesize 50M, post_max_size 55M) and nginx (client_max_body_size 55m)
     // allow a little more, so this limit is the one users meet, with a clear message.
     'max_bytes' => 50 * 1024 * 1024,

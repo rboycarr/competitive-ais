@@ -84,6 +84,9 @@ return [
             'region' => env('AWS_DEFAULT_REGION'),
             'bucket' => env('EVIDENCE_BUCKET', 'evidence'),
             'endpoint' => env('AWS_ENDPOINT'),
+            // The address browsers reach this store on, for download links (P1-34: a pre-signed URL signs its host,
+            // and `endpoint` is internal). Empty: links use `endpoint`. Must be https outside local.
+            'download_endpoint' => env('EVIDENCE_DOWNLOAD_ENDPOINT'),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
             'throw' => true,
             'report' => false,

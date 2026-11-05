@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Storage;
 use League\Flysystem\Visibility;
 use Modules\Platform\Storage\LockedObjects;
 use Modules\Platform\Storage\PrivateBucketVisibility;
+use Modules\Platform\Storage\SignedDownloads;
 use Psr\Http\Message\RequestInterface;
 use RuntimeException;
 use Tests\TestCase;
@@ -125,6 +126,52 @@ class PrivateObjectStorageTest extends TestCase
             $this->assertStringContainsString('no version', $e->getMessage());
         } finally {
             fclose($stream);
+        }
+    }
+
+    /**
+     * P1-34: a download link is signed for the address browsers use (the internal endpoint is unreachable for them),
+     * for the stored version, attachment-only as octet-stream, and expires when asked. Signing is local: no request.
+     */
+    public function test_download_links_are_signed_for_the_browser_endpoint(): void
+    {
+        config([
+            'filesystems.disks.evidence.key' => 'synthetic-key', 'filesystems.disks.evidence.secret' => 'synthetic-secret',
+            'filesystems.disks.evidence.endpoint' => 'http://seaweedfs:8333', 'filesystems.disks.evidence.use_path_style_endpoint' => true,
+            'filesystems.disks.evidence.download_endpoint' => 'https://files.example.test',
+        ]);
+        $this->app['env'] = 'production';
+        try {
+            $url = SignedDownloads::url(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', 'synthetic-version-1', 'report.pdf', CarbonImmutable::now('UTC')->addSeconds(60));
+        } finally {
+            $this->app['env'] = 'testing';
+        }
+
+        $parts = parse_url($url);
+        parse_str($parts['query'] ?? '', $query);
+        $this->assertSame(['https', 'files.example.test', '/evidence/sha256/ab/cd/abcdef'], [$parts['scheme'] ?? null, $parts['host'] ?? null, $parts['path'] ?? null]);
+        $this->assertSame(['60', 'synthetic-version-1', 'application/octet-stream', 'attachment; filename=report.pdf'], [
+            $query['X-Amz-Expires'] ?? null, $query['versionId'] ?? null, $query['response-content-type'] ?? null, $query['response-content-disposition'] ?? null,
+        ]);
+        $this->assertArrayHasKey('X-Amz-Signature', $query);
+    }
+
+    /** Outside local and tests, a link that would travel over plain http is refused. */
+    public function test_download_links_must_use_https_outside_local(): void
+    {
+        config([
+            'filesystems.disks.evidence.key' => 'synthetic-key', 'filesystems.disks.evidence.secret' => 'synthetic-secret',
+            'filesystems.disks.evidence.endpoint' => 'http://seaweedfs:8333', 'filesystems.disks.evidence.use_path_style_endpoint' => true,
+            'filesystems.disks.evidence.download_endpoint' => 'http://files.example.test',
+        ]);
+        $this->app['env'] = 'production';
+        try {
+            SignedDownloads::url(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', null, 'report.pdf', CarbonImmutable::now('UTC')->addSeconds(60));
+            $this->fail('A plain-http download link was issued outside local.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('https', $e->getMessage());
+        } finally {
+            $this->app['env'] = 'testing';
         }
     }
 

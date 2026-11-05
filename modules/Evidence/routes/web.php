@@ -9,6 +9,9 @@ Route::middleware('auth')->group(function () {
     Route::middleware('can:evidence.view')->group(function () {
         Route::get('/evidence', [EvidenceController::class, 'index'])->name('evidence.index');
         Route::get('/evidence/{asset}', [EvidenceController::class, 'show'])->name('evidence.show');
+        // P1-34: evidence.download too; EvidenceDownloadService checks again. Rate-limited per user.
+        Route::post('/evidence/{asset}/download', [EvidenceController::class, 'download'])
+            ->middleware(['can:evidence.download', 'throttle:evidence-downloads'])->name('evidence.download');
     });
     Route::post('/evidence', [EvidenceController::class, 'store'])->middleware('can:evidence.upload')->name('evidence.store');
 });
