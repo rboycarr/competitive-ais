@@ -9,14 +9,14 @@ type Option = { value: string; label: string };
 
 const props = defineProps<{
     assets: Row[]; filters: { status?: string }; statuses: string[]; canUpload: boolean; classifications: string[]; maxBytes: number;
-    competitors: Option[]; markets: Option[];
+    competitors: Option[]; markets: Option[]; sources: Option[];
 }>();
 
 const filter = reactive({ status: props.filters.status ?? '' });
 const form = useForm<{
-    file: File | null; title: string; description: string; source_url: string; captured_at: string; classification: string; competitors: string[]; markets: string[];
+    file: File | null; title: string; description: string; source: string; source_url: string; captured_at: string; classification: string; competitors: string[]; markets: string[];
 }>({
-    file: null, title: '', description: '', source_url: '', captured_at: '',
+    file: null, title: '', description: '', source: '', source_url: '', captured_at: '',
     classification: props.classifications.includes('internal') ? 'internal' : (props.classifications[0] ?? ''),
     competitors: [], markets: [],
 });
@@ -116,6 +116,14 @@ function upload(): void {
                         Only people with access to every competitor and market you choose will see this evidence. Choose several with Ctrl or Cmd. Scopes cannot be removed later.
                     </p>
                 </fieldset>
+                <div>
+                    <label for="evidence-source" class="block font-medium">Source (optional)</label>
+                    <select id="evidence-source" v-model="form.source" aria-describedby="evidence-source-help" :aria-invalid="form.errors.source ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                        <option value="">Unregistered source</option>
+                        <option v-for="source in props.sources" :key="source.value" :value="source.value">{{ source.label }}</option>
+                    </select>
+                    <p id="evidence-source-help" class="mt-1 text-xs text-slate-600">Only approved sources are listed. The source's policy in force is recorded with the evidence.</p>
+                </div>
                 <div>
                     <label for="evidence-source-url" class="block font-medium">Where it was found (optional)</label>
                     <input id="evidence-source-url" v-model="form.source_url" type="url" inputmode="url" maxlength="2048" placeholder="https://" aria-describedby="evidence-source-url-help" :aria-invalid="form.errors.source_url ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">

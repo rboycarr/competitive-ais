@@ -33,7 +33,7 @@ const { default: Show } = await import('./Show.vue');
 const { sizeLabel } = await import('./labels');
 
 const row = { ulid: '01JASSET000000000000000000', title: '<b>Shelf</b>', status: 'quarantined', capturedAt: '2026-11-02T08:00:00Z', uploadedBy: 'Ana', classification: 'internal' };
-const options = { filters: {}, statuses: ['quarantined', 'available', 'rejected', 'withdrawn'], maxBytes: 50 * 1024 * 1024, competitors: [], markets: [] };
+const options = { filters: {}, statuses: ['quarantined', 'available', 'rejected', 'withdrawn'], maxBytes: 50 * 1024 * 1024, competitors: [], markets: [], sources: [] };
 
 describe('Evidence/Index', () => {
     it('lists titles as text with readable statuses, and filters by status', async () => {
@@ -66,7 +66,7 @@ describe('Evidence/Index', () => {
         expect(transformed?.file).toBe(file);
         expect(transformed?.captured_at).toBe(new Date('2026-11-02T08:30').toISOString());
         expect(transformed?.classification).toBe('internal');
-        expect([transformed?.competitors, transformed?.markets]).toEqual([[], []]);
+        expect([transformed?.competitors, transformed?.markets, transformed?.source]).toEqual([[], [], '']);
     });
 
     it('offers the competitors and markets it is given, sends the chosen ones, and warns that scopes narrow who sees it', async () => {
@@ -84,13 +84,28 @@ describe('Evidence/Index', () => {
         await wrapper.get('section form').trigger('submit');
         expect([transformed?.competitors, transformed?.markets]).toEqual([['01JCOMP0000000000000000000'], ['01JMARK0000000000000000000']]);
     });
+
+    it('offers the approved sources it is given as text and sends the chosen one', async () => {
+        const sourced = { ...options, sources: [{ value: '01JSRC00000000000000000000', label: '<b>Trade news</b>' }] };
+        const wrapper = mount(Index, { props: { assets: [], canUpload: true, classifications: ['internal'], ...sourced } });
+        expect(wrapper.get('#evidence-source').text()).toBe('Unregistered source<b>Trade news</b>');
+        expect(wrapper.find('b').exists()).toBe(false);
+        expect(wrapper.text()).toContain("The source's policy in force is recorded with the evidence.");
+
+        const file = new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' });
+        Object.defineProperty(wrapper.get('#evidence-file').element, 'files', { value: [file] });
+        await wrapper.get('#evidence-file').trigger('change');
+        await wrapper.get('#evidence-source').setValue('01JSRC00000000000000000000');
+        await wrapper.get('section form').trigger('submit');
+        expect(transformed?.source).toBe('01JSRC00000000000000000000');
+    });
 });
 
 describe('Evidence/Show', () => {
     const asset = {
         ulid: row.ulid, title: 'Shelf', description: '<img src=x onerror=alert(1)>', status: 'quarantined', scanStatus: 'pending', originalFilename: '<i>a</i>.pdf',
         sizeBytes: 2048, sourceUrl: 'https://shop.example/item?id=7', capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal', legalHold: false,
-        competitors: ['<b>Nord</b>'], markets: [],
+        competitors: ['<b>Nord</b>'], markets: [], source: null,
     };
 
     it('explains quarantine, shows stored text as text, and links only http(s) sources', () => {
@@ -108,6 +123,22 @@ describe('Evidence/Show', () => {
         expect(unsafe.find('a[target="_blank"]').exists()).toBe(false);
         expect(unsafe.find('[role="status"]').exists()).toBe(false);
         expect(unsafe.find('button').exists()).toBe(false);
+    });
+
+    it('shows the source and the policy version that authorized the capture, or a placeholder when it is hidden', () => {
+        const none = mount(Show, { props: { asset, canDownload: false, canHold: false, custody: [] } });
+        expect(none.text()).toContain('SourceUnregistered source'); // PO decision O12
+
+        const source = { visible: true as const, ulid: '01JSRC00000000000000000000', name: '<b>Trade news</b>', status: 'suspended', policyVersion: 2, policyDecidedAt: '2026-11-01T09:00:00Z' };
+        const shown = mount(Show, { props: { asset: { ...asset, source }, canDownload: false, canHold: false, custody: [] } });
+        expect(shown.get('a[href="/sources/01JSRC00000000000000000000"]').text()).toBe('<b>Trade news</b>');
+        expect(shown.find('b').exists()).toBe(false);
+        expect(shown.text()).toContain('captured under policy version 2');
+        expect(shown.text()).toContain('(the source is now suspended)');
+
+        const hidden = mount(Show, { props: { asset: { ...asset, source: { visible: false as const } }, canDownload: false, canHold: false, custody: [] } });
+        expect(hidden.text()).toContain('Recorded, but not visible at your access');
+        expect(hidden.find('a[href^="/sources/"]').exists()).toBe(false);
     });
 
     it('offers the download only when allowed, posts it, and shows a refusal as text', async () => {

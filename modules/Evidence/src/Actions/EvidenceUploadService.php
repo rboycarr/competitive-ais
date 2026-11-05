@@ -26,6 +26,8 @@ use Modules\Platform\Classification;
 use Modules\Platform\Support\WebAddress;
 use Modules\Registry\Contracts\CompetitorLookup;
 use Modules\Registry\Contracts\MarketLookup;
+use Modules\Sources\Contracts\SourceLookup;
+use Modules\Sources\Contracts\SourcePolicySummary;
 use Normalizer;
 use RuntimeException;
 use Throwable;
@@ -42,6 +44,10 @@ use Throwable;
  * - the file name is cleaned for display only (no path, no control or format characters, NFC, at most 255
  *   characters) and is never part of the storage key, which is `quarantine/<asset ULID>`;
  * - the source URL, if given, is an http(s) address without a user name or password: recorded, never fetched;
+ * - the source, if named (P1-37, docs/04 §2), is one the uploader can see and `approved`, with a policy in force; it
+ *   is checked before the file is stored and again in the transaction under a share lock on the source row, and the
+ *   policy in force then is recorded with the asset, so a suspension or a new policy decision (which lock the row
+ *   for update) lands wholly before or after the capture;
  * - the object is written first, then the asset, its `uploaded` custody event and the audit event in one
  *   transaction; if the transaction fails, the object is deleted, so an asset never exists without its object.
  *   An object whose deletion also fails is left in the quarantine bucket without an asset (reported).
@@ -62,10 +68,11 @@ class EvidenceUploadService
         private readonly Filesystems $storage,
         private readonly CompetitorLookup $competitors,
         private readonly MarketLookup $markets,
+        private readonly SourceLookup $sources,
     ) {}
 
     /**
-     * @param  array<string, mixed>  $data  title, description?, source_url?, captured_at (Y-m-d H:i or ISO 8601, UTC), classification
+     * @param  array<string, mixed>  $data  title, description?, source_url?, source? (ULID), captured_at (Y-m-d H:i or ISO 8601, UTC), classification, competitors?, markets?
      */
     public function upload(Authenticatable $actor, UploadedFile $file, array $data): EvidenceAsset
     {
@@ -91,6 +98,10 @@ class EvidenceUploadService
         if (! $this->access->allows($actor, $asset)) {
             throw ValidationException::withMessages(['scopes' => 'At this classification, you need access to every competitor and market you choose.']);
         }
+        $sourceUlid = $this->sourceUlid($data);
+        if ($sourceUlid !== null) {
+            $this->policyInForce($actor, $sourceUlid, false); // refused before anything is stored
+        }
         $key = $asset->quarantine_key = 'quarantine/'.$asset->ulid;
         $disk = $this->storage->disk(self::QUARANTINE_DISK);
 
@@ -104,7 +115,12 @@ class EvidenceUploadService
                 fclose($stream);
             }
 
-            $saved = $this->db->transaction(function () use ($actor, $asset, $userId): EvidenceAsset {
+            $saved = $this->db->transaction(function () use ($actor, $asset, $userId, $sourceUlid): EvidenceAsset {
+                if ($sourceUlid !== null) {
+                    // P1-37: again under the share lock, so the policy recorded is the one in force at commit.
+                    $source = $this->policyInForce($actor, $sourceUlid, true);
+                    $asset->forceFill(['source_id' => $source->sourceId, 'source_policy_id' => $source->policyId]);
+                }
                 $asset->save();
                 $now = CarbonImmutable::now('UTC');
                 foreach ([...$asset->competitorScopes, ...$asset->marketScopes] as $scope) {
@@ -118,7 +134,10 @@ class EvidenceUploadService
                     'actor_id' => (int) $actor->getAuthIdentifier(),
                     'occurred_at' => CarbonImmutable::now('UTC'),
                 ])->save();
-                $this->audit->record('evidence.uploaded', $asset, ['classification' => $asset->classification->value], Actor::user((int) $actor->getAuthIdentifier()));
+                $this->audit->record('evidence.uploaded', $asset, array_filter([
+                    'classification' => $asset->classification->value,
+                    'source_policy' => $asset->source_policy_id,
+                ], fn (mixed $value): bool => $value !== null), Actor::user((int) $actor->getAuthIdentifier()));
 
                 return $asset;
             });
@@ -148,6 +167,41 @@ class EvidenceUploadService
         }
 
         return $saved;
+    }
+
+    /**
+     * The source the uploader names, by ULID (P1-37); null when none is named. A malformed value is refused.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function sourceUlid(array $data): ?string
+    {
+        $value = $data['source'] ?? null;
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (! is_string($value) || preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/', $value) !== 1) {
+            throw ValidationException::withMessages(['source' => 'Choose a source you can see.']);
+        }
+
+        return $value;
+    }
+
+    /**
+     * The source, as the uploader sees it, with its policy in force (P1-37). A source the uploader cannot see is
+     * refused like an unknown one; a visible one that is not approved says so.
+     */
+    private function policyInForce(Authenticatable $actor, string $ulid, bool $lock): SourcePolicySummary
+    {
+        $source = $this->sources->forCapture($actor, $ulid, $lock);
+        if ($source === null) {
+            throw ValidationException::withMessages(['source' => 'Choose a source you can see.']);
+        }
+        if ($source->policyId === null) {
+            throw ValidationException::withMessages(['source' => 'This source has no approved policy in force, so evidence cannot be captured from it.']);
+        }
+
+        return $source;
     }
 
     /**

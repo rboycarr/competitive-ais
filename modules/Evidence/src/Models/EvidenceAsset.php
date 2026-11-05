@@ -33,6 +33,8 @@ use Modules\Platform\Classification;
  * @property string $title
  * @property ?string $description
  * @property ?string $source_url
+ * @property ?int $source_id the source the evidence came from (P1-37); written once, at upload
+ * @property ?int $source_policy_id the source's policy in force at capture (P1-37); set exactly when source_id is
  * @property CarbonInterface $captured_at
  * @property int $uploaded_by
  * @property Classification $classification

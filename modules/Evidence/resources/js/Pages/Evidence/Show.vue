@@ -7,8 +7,10 @@ import { eventLabel, scanLabel, sizeLabel, statusLabel } from './labels';
 type Asset = {
     ulid: string; title: string; description: string | null; status: string; scanStatus: string; originalFilename: string; sizeBytes: number;
     sourceUrl: string | null; capturedAt: string; uploadedBy: string | null; uploadedAt: string | null; classification: string; legalHold: boolean;
-    competitors: string[]; markets: string[];
+    competitors: string[]; markets: string[]; source: CaptureSource | null;
 };
+// P1-37: the source and the policy version in force at capture; a placeholder when the source is hidden from the viewer.
+type CaptureSource = { visible: false } | { visible: true; ulid: string; name: string; status: string; policyVersion: number | null; policyDecidedAt: string | null };
 type CustodyEvent = { event: string; actor: string | null; occurredAt: string; reason: string | null };
 
 const props = defineProps<{ asset: Asset; canDownload: boolean; canHold: boolean; custody: CustodyEvent[] }>();
@@ -56,6 +58,16 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
             <dd>
                 <a v-if="safeUrl" :href="safeUrl" rel="noopener noreferrer nofollow" target="_blank" class="break-all underline">{{ safeUrl }}</a>
                 <template v-else>—</template>
+            </dd>
+            <dt class="font-medium">Source</dt>
+            <dd>
+                <template v-if="props.asset.source === null">Unregistered source</template>
+                <template v-else-if="!props.asset.source.visible">Recorded, but not visible at your access</template>
+                <template v-else>
+                    <Link :href="`/sources/${props.asset.source.ulid}`" class="underline">{{ props.asset.source.name }}</Link>
+                    — captured under policy version {{ props.asset.source.policyVersion }}, approved {{ when(props.asset.source.policyDecidedAt) }}
+                    <span v-if="props.asset.source.status !== 'approved'" class="text-slate-600">(the source is now {{ props.asset.source.status.replace('_', ' ') }})</span>
+                </template>
             </dd>
             <dt class="font-medium">Uploaded by</dt><dd>{{ props.asset.uploadedBy ?? '—' }}</dd>
             <dt class="font-medium">Uploaded</dt><dd>{{ when(props.asset.uploadedAt) }}</dd>
