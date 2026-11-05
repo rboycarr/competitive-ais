@@ -150,6 +150,7 @@ class EvidenceBlobRaceTest extends TestCase
     /** The migration fills existing assets by the upload rule, from their creation time; rollback and re-apply agree. */
     public function test_the_migration_derives_retention_for_existing_evidence(): void
     {
+        Storage::fake(EvidenceUploadService::QUARANTINE_DISK); // never the real store (CI #182 had none to reach)
         $analyst = $this->createUser('analyst@example.test', 'ci_analyst', clearance: Classification::Confidential);
         $director = $this->enableTwoFactor($this->createUser('director@example.test', 'ci_director', clearance: Classification::Confidential));
         $source = app(SourceService::class)->propose($analyst, ['name' => 'Long-kept filings', 'source_type' => 'website', 'classification' => 'internal']);
