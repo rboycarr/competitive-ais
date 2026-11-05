@@ -4,6 +4,7 @@ import { reactive } from 'vue';
 
 const post = vi.fn();
 const get = vi.fn();
+const routerPost = vi.fn();
 let transformed: Record<string, unknown> | null = null;
 vi.mock('@inertiajs/vue3', async () => {
     const { defineComponent, h } = await import('vue');
@@ -11,7 +12,7 @@ vi.mock('@inertiajs/vue3', async () => {
     return {
         Head: { render: () => null },
         Link: defineComponent({ props: { href: { type: String, required: true } }, setup: (props, { slots }) => () => h('a', { href: props.href }, slots.default?.()) }),
-        router: { get },
+        router: { get, post: routerPost },
         usePage: () => ({ props: {} }),
         useForm: (initial: Record<string, unknown>) => {
             const form = reactive({ ...initial, errors: {}, processing: false, progress: null as null | { percentage: number },
@@ -75,7 +76,7 @@ describe('Evidence/Show', () => {
     };
 
     it('explains quarantine, shows stored text as text, and links only http(s) sources', () => {
-        const wrapper = mount(Show, { props: { asset, custody: [{ event: 'uploaded', actor: '<u>Ana</u>', occurredAt: row.capturedAt }] } });
+        const wrapper = mount(Show, { props: { asset, canDownload: false, custody: [{ event: 'uploaded', actor: '<u>Ana</u>', occurredAt: row.capturedAt }] } });
         expect(wrapper.get('[role="status"]').text()).toContain('nobody can open it');
         expect(wrapper.find('img').exists() || wrapper.find('i').exists() || wrapper.find('u').exists()).toBe(false);
         expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
@@ -83,9 +84,22 @@ describe('Evidence/Show', () => {
         expect(wrapper.text()).toContain('Uploaded by <u>Ana</u>');
         expect(wrapper.get('a[target="_blank"]').attributes('rel')).toBe('noopener noreferrer nofollow');
 
-        const unsafe = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean', sourceUrl: 'javascript:alert(1)' }, custody: [] } });
+        const unsafe = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean', sourceUrl: 'javascript:alert(1)' }, canDownload: false, custody: [] } });
         expect(unsafe.find('a[target="_blank"]').exists()).toBe(false);
         expect(unsafe.find('[role="status"]').exists()).toBe(false);
+        expect(unsafe.find('button').exists()).toBe(false);
+    });
+
+    it('offers the download only when allowed, posts it, and shows a refusal as text', async () => {
+        const wrapper = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean' }, canDownload: true, custody: [] } });
+        await wrapper.get('button').trigger('click');
+        expect(routerPost).toHaveBeenCalledWith(`/evidence/${row.ulid}/download`, {}, expect.any(Object));
+
+        const options = routerPost.mock.calls[0]?.[2] as { onError: (errors: Record<string, string>) => void };
+        options.onError({ download: '<b>Only available evidence can be downloaded.</b>' });
+        await wrapper.vm.$nextTick();
+        expect(wrapper.get('[role="alert"]').text()).toBe('<b>Only available evidence can be downloaded.</b>');
+        expect(wrapper.find('b').exists()).toBe(false);
     });
 
     it('formats sizes', () => {
