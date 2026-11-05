@@ -3,9 +3,11 @@
 namespace Modules\Evidence\Tests\Feature;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -109,6 +111,51 @@ class EvidenceScanTest extends TestCase
         $blobId = EvidenceBlob::query()->sole()->id;
         $this->assertSame([$blobId, $blobId], [$first->fresh()?->evidence_blob_id, $second->fresh()?->evidence_blob_id]);
         $this->assertCount(1, Storage::disk(EvidenceScanService::EVIDENCE_DISK)->allFiles());
+    }
+
+    /**
+     * P1-33: the same bytes uploaded twice, by different people from different sources, are stored once, yet each
+     * asset keeps its own provenance (title, source, capture time, uploader, classification), its own custody trail
+     * and audit records, and its own visibility: sharing a blob never widens who sees an asset.
+     */
+    public function test_shared_bytes_keep_each_assets_own_provenance(): void
+    {
+        Bus::fake();
+        $colleague = $this->createUser('colleague@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        $reader = $this->createUser('reader@example.test', 'ci_analyst', clearance: Classification::Internal);
+        $uploads = app(EvidenceUploadService::class);
+        $first = $uploads->upload($this->analyst, UploadedFile::fake()->createWithContent('shelf.pdf', self::PDF), [
+            'title' => 'Shelf photo list', 'source_url' => 'https://shop-a.example/list', 'captured_at' => '2026-11-01T09:00:00Z', 'classification' => 'internal',
+        ]);
+        $second = $uploads->upload($colleague, UploadedFile::fake()->createWithContent('brochure.pdf', self::PDF), [
+            'title' => 'Trade brochure', 'source_url' => 'https://fair-b.example/brochure', 'captured_at' => '2026-11-02T15:30:00Z', 'classification' => 'confidential',
+        ]);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($first->id);
+        app(EvidenceScanService::class)->scan($second->id);
+
+        $blob = EvidenceBlob::query()->sole();
+        $this->assertCount(1, Storage::disk(EvidenceScanService::EVIDENCE_DISK)->allFiles());
+        $assets = EvidenceAsset::query()->orderBy('id')->get();
+        $this->assertSame([
+            [$blob->id, 'available', 'shelf.pdf', 'Shelf photo list', 'https://shop-a.example/list', '2026-11-01 09:00:00', $this->analyst->id, Classification::Internal],
+            [$blob->id, 'available', 'brochure.pdf', 'Trade brochure', 'https://fair-b.example/brochure', '2026-11-02 15:30:00', $colleague->id, Classification::Confidential],
+        ], $assets->map(fn (EvidenceAsset $a): array => [
+            $a->evidence_blob_id, $a->status, $a->original_filename, $a->title, $a->source_url, $a->captured_at->format('Y-m-d H:i:s'), $a->uploaded_by, $a->classification,
+        ])->all());
+
+        foreach ([[$first, $this->analyst], [$second, $colleague]] as [$asset, $uploader]) {
+            $trail = EvidenceCustodyEvent::query()->where('evidence_asset_id', $asset->id)->orderBy('id')->get()
+                ->map(fn (EvidenceCustodyEvent $e): array => [$e->event, $e->actor_type, $e->actor_id])->all();
+            $this->assertSame([['uploaded', 'user', $uploader->id], ['scanned', 'system', null]], $trail);
+            $audit = DB::table('audit_events')->where('subject_ulid', $asset->ulid)->orderBy('id')->get(['action', 'actor_id'])
+                ->map(fn (object $row): array => [$row->action, $row->actor_id])->all();
+            $this->assertEquals([['evidence.uploaded', $uploader->id], ['evidence.scanned', null]], $audit);
+        }
+
+        $seen = fn (User $viewer): array => EvidenceAsset::seenBy(EvidenceAsset::query(), $viewer, app(Gate::class))->orderBy('id')->pluck('id')->all();
+        $this->assertSame([$first->id], $seen($reader));
+        $this->assertSame([$first->id, $second->id], $seen($colleague));
     }
 
     public function test_a_type_mismatch_at_scan_time_is_rejected_outright(): void
