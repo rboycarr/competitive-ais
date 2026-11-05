@@ -4,6 +4,7 @@ namespace Modules\Evidence\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Modules\Evidence\Actions\EvidenceUploadService;
 use Modules\Platform\Classification;
 
 /** An evidence upload (P1-32a); the type, size, classification and URL rules are decided in EvidenceUploadService. */
@@ -24,6 +25,11 @@ class UploadEvidenceRequest extends FormRequest
             'source_url' => ['nullable', 'string', 'max:2048'],
             'captured_at' => ['required', 'string', 'max:40'],
             'classification' => ['required', Rule::enum(Classification::class)],
+            // P1-36a: competitor and market ULIDs; visibility and existence are checked in EvidenceUploadService.
+            'competitors' => ['nullable', 'array', 'max:'.EvidenceUploadService::MAX_SCOPES],
+            'competitors.*' => ['string', 'size:26'],
+            'markets' => ['nullable', 'array', 'max:'.EvidenceUploadService::MAX_SCOPES],
+            'markets.*' => ['string', 'size:26'],
         ];
     }
 }

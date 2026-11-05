@@ -5,15 +5,20 @@ import AppLayout from '@/Layouts/AppLayout.vue';
 import { statusLabel } from './labels';
 
 type Row = { ulid: string; title: string; status: string; capturedAt: string; uploadedBy: string | null; classification: string };
+type Option = { value: string; label: string };
 
 const props = defineProps<{
     assets: Row[]; filters: { status?: string }; statuses: string[]; canUpload: boolean; classifications: string[]; maxBytes: number;
+    competitors: Option[]; markets: Option[];
 }>();
 
 const filter = reactive({ status: props.filters.status ?? '' });
-const form = useForm<{ file: File | null; title: string; description: string; source_url: string; captured_at: string; classification: string }>({
+const form = useForm<{
+    file: File | null; title: string; description: string; source_url: string; captured_at: string; classification: string; competitors: string[]; markets: string[];
+}>({
     file: null, title: '', description: '', source_url: '', captured_at: '',
     classification: props.classifications.includes('internal') ? 'internal' : (props.classifications[0] ?? ''),
+    competitors: [], markets: [],
 });
 const maxMegabytes = Math.floor(props.maxBytes / (1024 * 1024));
 
@@ -93,6 +98,24 @@ function upload(): void {
                         </select>
                     </div>
                 </div>
+                <fieldset class="grid gap-3 sm:grid-cols-2" aria-describedby="evidence-scopes-help">
+                    <legend class="sr-only">What the evidence is about</legend>
+                    <div>
+                        <label for="evidence-competitors" class="block font-medium">Competitors it is about (optional)</label>
+                        <select id="evidence-competitors" v-model="form.competitors" multiple size="4" :aria-invalid="form.errors.competitors ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                            <option v-for="competitor in props.competitors" :key="competitor.value" :value="competitor.value">{{ competitor.label }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="evidence-markets" class="block font-medium">Markets it is about (optional)</label>
+                        <select id="evidence-markets" v-model="form.markets" multiple size="4" :aria-invalid="form.errors.markets ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                            <option v-for="market in props.markets" :key="market.value" :value="market.value">{{ market.label }}</option>
+                        </select>
+                    </div>
+                    <p id="evidence-scopes-help" class="text-xs text-slate-600 sm:col-span-2">
+                        Only people with access to every competitor and market you choose will see this evidence. Choose several with Ctrl or Cmd. Scopes cannot be removed later.
+                    </p>
+                </fieldset>
                 <div>
                     <label for="evidence-source-url" class="block font-medium">Where it was found (optional)</label>
                     <input id="evidence-source-url" v-model="form.source_url" type="url" inputmode="url" maxlength="2048" placeholder="https://" aria-describedby="evidence-source-url-help" :aria-invalid="form.errors.source_url ? 'true' : undefined" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">

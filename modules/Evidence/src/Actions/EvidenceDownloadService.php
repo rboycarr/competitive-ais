@@ -48,6 +48,7 @@ class EvidenceDownloadService
 
         return $this->db->transaction(function () use ($actor, $asset): string {
             $current = EvidenceAsset::query()->sharedLock()->findOrFail($asset->id);
+            $this->ensureStillSeen($actor, $current);
             $blob = $current->evidence_blob_id === null ? null : EvidenceBlob::query()->find($current->evidence_blob_id);
             if ($current->status !== 'available' || $blob === null) {
                 throw ValidationException::withMessages(['download' => 'Only available evidence can be downloaded.']);
@@ -80,5 +81,17 @@ class EvidenceDownloadService
 
             return $url;
         });
+    }
+
+    /**
+     * Visibility again, under the lock (TASK-0075 #1): a scope added after the first check narrows who sees the asset.
+     * Anything that adds a scope locks the asset row first (P1-36b), so it waits for this transaction or this one
+     * waits for it and sees the scope.
+     */
+    private function ensureStillSeen(Authenticatable $actor, EvidenceAsset $current): void
+    {
+        if (! EvidenceAsset::seenBy(EvidenceAsset::query(), $actor, $this->gate)->whereKey($current->id)->exists()) {
+            throw (new ModelNotFoundException)->setModel(EvidenceAsset::class, [$current->ulid]);
+        }
     }
 }

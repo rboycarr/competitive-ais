@@ -266,6 +266,8 @@ return [
             'audit_events',
             'audit_event_network',
             'audit_checkpoints',
+            'evidence_asset_competitor', // P1-36a: scopes are only added; removing one would widen visibility
+            'evidence_asset_market',
             'evidence_custody_events',
             'outbox_receipts',
             'source_policies',
