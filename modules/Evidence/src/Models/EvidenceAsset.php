@@ -15,9 +15,9 @@ use Modules\Platform\Access\VisibleTo;
 use Modules\Platform\Classification;
 
 /**
- * One captured piece of evidence (P1-32a, docs/02 §3.5, ADR-0007). Visibility: its classification through AccessScope
- * (competitor and market scopes come with P1-36), and, until it is available, only its uploader and evidence.hold
- * holders see it (PO decision O32, 2026-11-03). No mass assignment; rejected or withdrawn, never deleted.
+ * One captured piece of evidence (P1-32a, docs/02 §3.5, ADR-0007). Visibility: its classification and its competitor
+ * and market scopes (P1-36a, all-of) through AccessScope, and, until it is available, only its uploader and
+ * evidence.hold holders see it (PO decision O32, 2026-11-03). No mass assignment; rejected or withdrawn, never deleted.
  *
  * @property int $id
  * @property string $ulid
@@ -90,19 +90,37 @@ class EvidenceAsset extends Model implements Classifiable, Scoped
         return $this->classification;
     }
 
+    /** The competitors the asset is about (P1-36a); from the loaded relation when set (an upload's unsaved asset). */
     public function competitorIds(): array
     {
-        return [];
+        $scopes = $this->relationLoaded('competitorScopes') ? $this->competitorScopes : $this->competitorScopes()->get();
+
+        return array_values(array_unique(array_map(fn (EvidenceAssetCompetitor $s): int => $s->competitor_id, $scopes->all())));
     }
 
+    /** The markets the asset is about (P1-36a); from the loaded relation when set. */
     public function marketIds(): array
     {
-        return [];
+        $scopes = $this->relationLoaded('marketScopes') ? $this->marketScopes : $this->marketScopes()->get();
+
+        return array_values(array_unique(array_map(fn (EvidenceAssetMarket $s): int => $s->market_id, $scopes->all())));
     }
 
     public static function scopeRelations(): array
     {
-        return [];
+        return ['competitor' => ['competitorScopes', 'competitor_id'], 'market' => ['marketScopes', 'market_id']];
+    }
+
+    /** @return HasMany<EvidenceAssetCompetitor, $this> */
+    public function competitorScopes(): HasMany
+    {
+        return $this->hasMany(EvidenceAssetCompetitor::class);
+    }
+
+    /** @return HasMany<EvidenceAssetMarket, $this> */
+    public function marketScopes(): HasMany
+    {
+        return $this->hasMany(EvidenceAssetMarket::class);
     }
 
     /**

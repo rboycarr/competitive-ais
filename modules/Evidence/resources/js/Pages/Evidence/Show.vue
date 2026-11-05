@@ -7,6 +7,7 @@ import { eventLabel, scanLabel, sizeLabel, statusLabel } from './labels';
 type Asset = {
     ulid: string; title: string; description: string | null; status: string; scanStatus: string; originalFilename: string; sizeBytes: number;
     sourceUrl: string | null; capturedAt: string; uploadedBy: string | null; uploadedAt: string | null; classification: string; legalHold: boolean;
+    competitors: string[]; markets: string[];
 };
 type CustodyEvent = { event: string; actor: string | null; occurredAt: string; reason: string | null };
 
@@ -59,6 +60,8 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
             <dt class="font-medium">Uploaded by</dt><dd>{{ props.asset.uploadedBy ?? '—' }}</dd>
             <dt class="font-medium">Uploaded</dt><dd>{{ when(props.asset.uploadedAt) }}</dd>
             <dt class="font-medium">Classification</dt><dd>{{ props.asset.classification }}</dd>
+            <dt class="font-medium">Competitors</dt><dd>{{ props.asset.competitors.length > 0 ? props.asset.competitors.join(', ') : '—' }}</dd>
+            <dt class="font-medium">Markets</dt><dd>{{ props.asset.markets.length > 0 ? props.asset.markets.join(', ') : '—' }}</dd>
             <dt class="font-medium">Description</dt><dd class="whitespace-pre-line">{{ props.asset.description ?? '—' }}</dd>
         </dl>
         <div v-if="props.canDownload" class="mb-6">

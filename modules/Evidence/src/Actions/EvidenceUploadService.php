@@ -9,18 +9,23 @@ use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Filesystem\Factory as Filesystems;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Evidence\Jobs\ScanEvidenceJob;
 use Modules\Evidence\Models\EvidenceAsset;
+use Modules\Evidence\Models\EvidenceAssetCompetitor;
+use Modules\Evidence\Models\EvidenceAssetMarket;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Platform\Support\WebAddress;
+use Modules\Registry\Contracts\CompetitorLookup;
+use Modules\Registry\Contracts\MarketLookup;
 use Normalizer;
 use RuntimeException;
 use Throwable;
@@ -28,6 +33,9 @@ use Throwable;
 /**
  * Uploading evidence into quarantine (P1-32a, docs/03 Evidence, ADR-0007, docs/07 T7: uploads are untrusted):
  * - needs evidence.upload; nobody classifies an asset above what they can see;
+ * - the competitors and markets it is about (P1-36a) are declared by ULID: competitors the uploader can see, markets
+ *   that exist, at most MAX_SCOPES each; the uploader must be able to see the resulting asset (all-of), so nobody
+ *   uploads evidence they could not read back. The scopes are saved with the asset, in its transaction;
  * - the file must be non-empty, at most `evidence.max_bytes`, of a type in `evidence.types` detected from its bytes,
  *   with an extension that matches that type (a renamed executable or a PDF called .png is refused before it is
  *   stored); the scan checks the stored bytes again (P1-32b);
@@ -42,6 +50,8 @@ class EvidenceUploadService
 {
     public const QUARANTINE_DISK = 'evidence-quarantine';
 
+    public const MAX_SCOPES = 20;
+
     private const MAX_TEXT = 10000;
 
     public function __construct(
@@ -50,6 +60,8 @@ class EvidenceUploadService
         private readonly AccessScope $access,
         private readonly Gate $gate,
         private readonly Filesystems $storage,
+        private readonly CompetitorLookup $competitors,
+        private readonly MarketLookup $markets,
     ) {}
 
     /**
@@ -60,15 +72,24 @@ class EvidenceUploadService
         if (! $this->gate->forUser($actor)->allows('evidence.upload')) {
             throw new AuthorizationException('You are not allowed to upload evidence.');
         }
+        $userId = (int) $actor->getAuthIdentifier();
         $asset = new EvidenceAsset;
         $asset->forceFill($this->attributes($file, $data) + [
             'ulid' => (string) Str::ulid(),
             'status' => 'quarantined',
             'scan_status' => 'pending',
-            'uploaded_by' => (int) $actor->getAuthIdentifier(),
+            'uploaded_by' => $userId,
         ]);
+        [$competitorIds, $marketIds] = $this->scopes($actor, $data);
+        $asset->setRelation('competitorScopes', new Collection)->setRelation('marketScopes', new Collection);
         if (! $this->access->allows($actor, $asset)) {
             throw ValidationException::withMessages(['classification' => 'You cannot classify evidence above what you can see.']);
+        }
+        // P1-36a: declared scopes, checked as the asset will be seen (all-of): the uploader must see the result.
+        $asset->setRelation('competitorScopes', new Collection(array_map(fn (int $id): EvidenceAssetCompetitor => (new EvidenceAssetCompetitor)->forceFill(['competitor_id' => $id]), $competitorIds)));
+        $asset->setRelation('marketScopes', new Collection(array_map(fn (int $id): EvidenceAssetMarket => (new EvidenceAssetMarket)->forceFill(['market_id' => $id]), $marketIds)));
+        if (! $this->access->allows($actor, $asset)) {
+            throw ValidationException::withMessages(['scopes' => 'At this classification, you need access to every competitor and market you choose.']);
         }
         $key = $asset->quarantine_key = 'quarantine/'.$asset->ulid;
         $disk = $this->storage->disk(self::QUARANTINE_DISK);
@@ -83,8 +104,12 @@ class EvidenceUploadService
                 fclose($stream);
             }
 
-            $saved = $this->db->transaction(function () use ($actor, $asset): EvidenceAsset {
+            $saved = $this->db->transaction(function () use ($actor, $asset, $userId): EvidenceAsset {
                 $asset->save();
+                $now = CarbonImmutable::now('UTC');
+                foreach ([...$asset->competitorScopes, ...$asset->marketScopes] as $scope) {
+                    $scope->forceFill(['evidence_asset_id' => $asset->id, 'origin' => 'declared', 'added_by' => $userId, 'created_at' => $now])->save();
+                }
                 $event = new EvidenceCustodyEvent;
                 $event->forceFill([
                     'evidence_asset_id' => $asset->id,
@@ -123,6 +148,38 @@ class EvidenceUploadService
         }
 
         return $saved;
+    }
+
+    /**
+     * The competitors and markets the uploader declares, by ULID (P1-36a): each competitor one the uploader can see,
+     * each market one that exists; at most MAX_SCOPES of each, duplicates ignored.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{list<int>, list<int>}
+     */
+    private function scopes(Authenticatable $actor, array $data): array
+    {
+        $ids = [];
+        foreach (['competitors', 'markets'] as $field) {
+            $ulids = $data[$field] ?? [];
+            if (! is_array($ulids) || count($ulids) > self::MAX_SCOPES) {
+                throw ValidationException::withMessages([$field => 'Choose at most '.self::MAX_SCOPES.'.']);
+            }
+            $ids[$field] = [];
+            foreach ($ulids as $ulid) {
+                if ($ulid === null || $ulid === '') {
+                    continue;
+                }
+                $found = ! is_string($ulid) || preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/', $ulid) !== 1 ? null
+                    : ($field === 'competitors' ? $this->competitors->findVisible($actor, $ulid) : $this->markets->find($ulid));
+                if ($found === null) {
+                    throw ValidationException::withMessages([$field => $field === 'competitors' ? 'Choose competitors you can see.' : 'Choose known markets.']);
+                }
+                $ids[$field][] = $found->id;
+            }
+        }
+
+        return [array_values(array_unique($ids['competitors'])), array_values(array_unique($ids['markets']))];
     }
 
     /**

@@ -4,6 +4,7 @@ namespace Modules\Evidence\Http\Controllers;
 
 use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -19,6 +20,10 @@ use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
+use Modules\Registry\Contracts\CompetitorLookup;
+use Modules\Registry\Contracts\CompetitorSummary;
+use Modules\Registry\Contracts\MarketLookup;
+use Modules\Registry\Contracts\MarketSummary;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
@@ -33,6 +38,8 @@ class EvidenceController
         private readonly AccessScope $access,
         private readonly UserDirectory $users,
         private readonly Gate $gate,
+        private readonly CompetitorLookup $competitors,
+        private readonly MarketLookup $markets,
     ) {}
 
     public function index(Request $request): Response
@@ -66,6 +73,9 @@ class EvidenceController
                 array_filter(Classification::cases(), fn (Classification $c): bool => $this->access->allows($viewer, $this->probe($c))),
             )) : [],
             'maxBytes' => (int) config('evidence.max_bytes'),
+            // P1-36a: what the evidence is about. Competitors the viewer can see; markets are unclassified.
+            'competitors' => $canUpload ? array_map(fn (CompetitorSummary $c): array => ['value' => $c->ulid, 'label' => $c->name], $this->competitors->visibleTo($viewer)) : [],
+            'markets' => $canUpload ? array_map(fn (MarketSummary $m): array => ['value' => $m->ulid, 'label' => "{$m->name} ({$m->code})"], $this->markets->all()) : [],
         ]);
     }
 
@@ -93,6 +103,10 @@ class EvidenceController
                 'uploadedAt' => $asset->created_at?->toIso8601ZuluString(),
                 'classification' => $asset->classification->value,
                 'legalHold' => $asset->legal_hold,
+                // P1-36a: a viewer who sees the asset is covered for all its scopes; names only of competitors the
+                // viewer can see (a competitor may be classified above the asset).
+                'competitors' => array_values(array_map(fn (CompetitorSummary $c): string => $c->name, $this->competitors->summaries($viewer, $asset->competitorIds()))),
+                'markets' => array_values(array_map(fn (MarketSummary $m): string => "{$m->name} ({$m->code})", $this->markets->summaries($asset->marketIds()))),
             ],
             // Offered only where it would succeed; EvidenceDownloadService and EvidenceHoldService check again.
             'canDownload' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.download'),
@@ -142,7 +156,7 @@ class EvidenceController
         $probe = new EvidenceAsset;
         $probe->forceFill(['classification' => $classification]);
 
-        return $probe;
+        return $probe->setRelation('competitorScopes', new Collection)->setRelation('marketScopes', new Collection);
     }
 
     private function viewer(Request $request): Authenticatable

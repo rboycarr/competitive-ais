@@ -33,7 +33,7 @@ const { default: Show } = await import('./Show.vue');
 const { sizeLabel } = await import('./labels');
 
 const row = { ulid: '01JASSET000000000000000000', title: '<b>Shelf</b>', status: 'quarantined', capturedAt: '2026-11-02T08:00:00Z', uploadedBy: 'Ana', classification: 'internal' };
-const options = { filters: {}, statuses: ['quarantined', 'available', 'rejected', 'withdrawn'], maxBytes: 50 * 1024 * 1024 };
+const options = { filters: {}, statuses: ['quarantined', 'available', 'rejected', 'withdrawn'], maxBytes: 50 * 1024 * 1024, competitors: [], markets: [] };
 
 describe('Evidence/Index', () => {
     it('lists titles as text with readable statuses, and filters by status', async () => {
@@ -66,6 +66,23 @@ describe('Evidence/Index', () => {
         expect(transformed?.file).toBe(file);
         expect(transformed?.captured_at).toBe(new Date('2026-11-02T08:30').toISOString());
         expect(transformed?.classification).toBe('internal');
+        expect([transformed?.competitors, transformed?.markets]).toEqual([[], []]);
+    });
+
+    it('offers the competitors and markets it is given, sends the chosen ones, and warns that scopes narrow who sees it', async () => {
+        const scoped = { ...options, competitors: [{ value: '01JCOMP0000000000000000000', label: '<b>Nord</b>' }], markets: [{ value: '01JMARK0000000000000000000', label: 'Philippines (PH)' }] };
+        const wrapper = mount(Index, { props: { assets: [], canUpload: true, classifications: ['internal'], ...scoped } });
+        expect(wrapper.get('#evidence-competitors').text()).toBe('<b>Nord</b>');
+        expect(wrapper.find('b').exists()).toBe(false);
+        expect(wrapper.text()).toContain('Only people with access to every competitor and market you choose will see this evidence.');
+
+        const file = new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' });
+        Object.defineProperty(wrapper.get('#evidence-file').element, 'files', { value: [file] });
+        await wrapper.get('#evidence-file').trigger('change');
+        await wrapper.get('#evidence-competitors').setValue(['01JCOMP0000000000000000000']);
+        await wrapper.get('#evidence-markets').setValue(['01JMARK0000000000000000000']);
+        await wrapper.get('section form').trigger('submit');
+        expect([transformed?.competitors, transformed?.markets]).toEqual([['01JCOMP0000000000000000000'], ['01JMARK0000000000000000000']]);
     });
 });
 
@@ -73,6 +90,7 @@ describe('Evidence/Show', () => {
     const asset = {
         ulid: row.ulid, title: 'Shelf', description: '<img src=x onerror=alert(1)>', status: 'quarantined', scanStatus: 'pending', originalFilename: '<i>a</i>.pdf',
         sizeBytes: 2048, sourceUrl: 'https://shop.example/item?id=7', capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal', legalHold: false,
+        competitors: ['<b>Nord</b>'], markets: [],
     };
 
     it('explains quarantine, shows stored text as text, and links only http(s) sources', () => {
@@ -82,6 +100,8 @@ describe('Evidence/Show', () => {
         expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
         expect(wrapper.text()).toContain('<i>a</i>.pdf (2.0 KB)');
         expect(wrapper.text()).toContain('Uploaded by <u>Ana</u>');
+        expect(wrapper.text()).toContain('Competitors<b>Nord</b>');
+        expect(wrapper.find('b').exists()).toBe(false);
         expect(wrapper.get('a[target="_blank"]').attributes('rel')).toBe('noopener noreferrer nofollow');
 
         const unsafe = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean', sourceUrl: 'javascript:alert(1)' }, canDownload: false, canHold: false, custody: [] } });
