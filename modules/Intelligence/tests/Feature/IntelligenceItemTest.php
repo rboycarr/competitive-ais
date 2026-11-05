@@ -242,13 +242,66 @@ class IntelligenceItemTest extends TestCase
 
     public function test_subjects_the_viewer_cannot_see_are_counted_not_named_and_block_editing(): void
     {
-        $item = $this->draft();
-        // Acme becomes restricted: the analyst (confidential clearance) still sees the item through the grant, not Acme.
+        $product = $this->product('Globex Widget', $this->globex);
+        $item = $this->draft(['products' => [$this->ulid('products', $product)], 'markets' => [$this->ulid('markets', $this->market)]]);
+        // Acme and the product become restricted: the analyst (confidential clearance) still sees the item through the
+        // grant, Globex and the market, but neither Acme nor the product (TASK-0084: several hidden subjects).
         DB::table('competitors')->where('id', $this->acme)->update(['classification' => 'restricted']);
+        DB::table('products')->where('id', $product)->update(['classification' => 'restricted']);
+        $this->actingAs($this->analyst)->get('/intelligence')->assertOk()->assertInertia(fn ($page) => $page->where('items.0.competitors', ['Globex']));
         $this->actingAs($this->analyst)->get("/intelligence/{$item->ulid}")->assertOk()->assertInertia(fn ($page) => $page
-            ->where('subjects.competitors', [])->where('subjects.hidden', 1)->where('canEdit', false));
+            ->where('subjects.competitors', [['ulid' => $this->ulid('competitors', $this->globex), 'name' => 'Globex']])
+            ->where('subjects.products', [])->where('subjects.markets.0.code', 'PH-NCR')
+            ->where('subjects.hidden', 2)->where('canEdit', false)->where('form', null));
         $this->expectValidation(fn () => app(IntelligenceItemService::class)->update($this->analyst, $item, $this->fields(['competitors' => [], 'markets' => [$this->ulid('markets', $this->market)], 'version' => 1])), 'subjects');
-        $this->assertSame([$this->acme], $item->refresh()->competitorIds());
+        $this->assertSame([$this->acme, $this->globex], $item->refresh()->competitorIds());
+        $this->assertSame([$product], $item->productIds());
+    }
+
+    /** TASK-0084: nothing about the content changes in any status but draft and changes requested. */
+    public function test_content_is_frozen_in_every_status_that_is_not_editable(): void
+    {
+        $item = $this->draft();
+        $claim = app(IntelligenceClaimService::class)->add($this->analyst, $item, $this->claim() + ['version' => 1]);
+        $items = app(IntelligenceItemService::class);
+        $claims = app(IntelligenceClaimService::class);
+        foreach (array_diff(IntelligenceItem::STATUSES, IntelligenceItem::EDITABLE) as $status) {
+            DB::table('intelligence_items')->where('id', $item->id)->update(['status' => $status]);
+            $item->refresh();
+            foreach ([
+                'edit' => fn () => $items->update($this->analyst, $item, $this->fields(['title' => 'Changed', 'version' => 2])),
+                'add' => fn () => $claims->add($this->analyst, $item, $this->claim() + ['version' => 2]),
+                'update' => fn () => $claims->update($this->analyst, $item, $claim->ulid, $this->claim(['statement' => 'Changed']) + ['version' => 2]),
+                'withdraw' => fn () => $claims->withdraw($this->analyst, $item, $claim->ulid, ['version' => 2]),
+                'move' => fn () => $claims->move($this->analyst, $item, $claim->ulid, ['direction' => 'down', 'version' => 2]),
+            ] as $action => $call) {
+                try {
+                    $call();
+                    $this->fail("$action changed a $status item.");
+                } catch (ValidationException $e) {
+                    $this->assertArrayHasKey('item', $e->errors(), "$action on $status");
+                }
+            }
+            $this->actingAs($this->analyst)->get("/intelligence/{$item->ulid}")->assertInertia(fn ($page) => $page->where('canEdit', false));
+        }
+        $this->assertSame([2, 'Widget launch', 'Acme listed the widget on its site', 'active'], [$item->refresh()->version, $item->title, $claim->refresh()->statement, $claim->status]);
+        $this->assertSame(1, IntelligenceClaim::query()->count());
+    }
+
+    /** TASK-0084: repeated subjects, and a product whose competitor is chosen too, give one row each. */
+    public function test_repeated_subjects_are_recorded_once(): void
+    {
+        $product = $this->product('Acme Widget', $this->acme);
+        $acme = $this->ulid('competitors', $this->acme);
+        $item = app(IntelligenceItemService::class)->create($this->analyst, $this->fields([
+            'competitors' => [$acme, strtolower($acme)],
+            'products' => [$this->ulid('products', $product), $this->ulid('products', $product)],
+            'markets' => [$this->ulid('markets', $this->market), $this->ulid('markets', $this->market)],
+        ]));
+        $this->assertSame([[$this->acme], [$product], [$this->market]], [$item->competitorIds(), $item->productIds(), $item->marketIds()]);
+        $this->assertSame([1, 1, 1], [
+            DB::table('competitor_intelligence_item')->count(), DB::table('intelligence_item_product')->count(), DB::table('intelligence_item_market')->count(),
+        ]);
     }
 
     public function test_the_summary_is_shown_through_the_markdown_allowlist(): void

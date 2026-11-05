@@ -55,6 +55,49 @@ class SafeMarkdownTest extends TestCase
         }
     }
 
+    /** TASK-0084: encoded protocols, autolinks, mailto, and nesting. */
+    public function test_edge_cases_keep_only_safe_links_and_allowlisted_nesting(): void
+    {
+        $links = fn (string $markdown): array => self::hrefs(SafeMarkdown::tree($markdown));
+
+        $this->assertSame([], $links('[x](&#106;avascript:alert(1))'), 'an entity-encoded protocol is still refused');
+        $this->assertSame([], $links('[x](java&#x09;script:alert(1))'));
+        $this->assertSame([], $links('[x](%6A%61vascript:alert(1))'));
+        $this->assertSame([], $links('[x](HTTPS:/missing-slash.example)'));
+        $this->assertSame(['HTTPS://Example.test/A'], $links('[x](HTTPS://Example.test/A)'), 'upper-case schemes are http(s) too');
+        $this->assertSame(['https://example.test/auto'], $links('<https://example.test/auto>'));
+        $this->assertSame(['http://www.example.test'], $links('see www.example.test today'), 'GFM autolinks become http links');
+        $this->assertSame(['mailto:analyst@example.test'], $links('<analyst@example.test>'));
+        $this->assertSame([], $links('<javascript:alert(1)>'));
+        $this->assertSame([], $links('[x](file:///etc/passwd) [y](ftp://example.test/f)'));
+
+        $nested = SafeMarkdown::tree("- one\n  - two\n    > quoted [link](https://example.test)\n");
+        $this->assertSame('ul', $nested[0]['tag']);
+        $json = (string) json_encode($nested, JSON_UNESCAPED_SLASHES);
+        preg_match_all('/"tag":"([a-z0-9]+)"/', $json, $tags);
+        $this->assertSame(['ul', 'li', 'ul', 'li', 'blockquote', 'p', 'a'], $tags[1]);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $nodes
+     * @return list<string>
+     */
+    private static function hrefs(array $nodes): array
+    {
+        $found = [];
+        foreach ($nodes as $node) {
+            $attrs = $node['attrs'] ?? [];
+            if (is_array($attrs) && is_string($attrs['href'] ?? null)) {
+                $found[] = $attrs['href'];
+            }
+            if (is_array($node['children'] ?? null)) {
+                $found = [...$found, ...self::hrefs($node['children'])];
+            }
+        }
+
+        return $found;
+    }
+
     public function test_raw_html_is_shown_as_text(): void
     {
         $this->assertSame([['tag' => 'p', 'attrs' => [], 'children' => [['text' => '<b onclick="x">bold</b>']]]], SafeMarkdown::tree('<b onclick="x">bold</b>'));
