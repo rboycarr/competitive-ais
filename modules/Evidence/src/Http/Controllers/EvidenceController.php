@@ -11,6 +11,7 @@ use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 use Modules\Evidence\Actions\EvidenceDownloadService;
+use Modules\Evidence\Actions\EvidenceHoldService;
 use Modules\Evidence\Actions\EvidenceUploadService;
 use Modules\Evidence\Http\Requests\UploadEvidenceRequest;
 use Modules\Evidence\Models\EvidenceAsset;
@@ -23,7 +24,8 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 /**
  * Evidence (P1-32a): list and detail for evidence.view holders (EvidenceAsset::seenBy: AccessScope, and until an
  * asset is available only its uploader and evidence.hold holders; hidden assets are 404), the upload form for
- * evidence.upload holders, and downloads for evidence.download holders (P1-34, EvidenceDownloadService).
+ * evidence.upload holders, downloads for evidence.download holders (P1-34, EvidenceDownloadService), and legal hold
+ * for evidence.hold holders (P1-35, EvidenceHoldService).
  */
 class EvidenceController
 {
@@ -90,13 +92,17 @@ class EvidenceController
                 'uploadedBy' => $names[$asset->uploaded_by]->name ?? null,
                 'uploadedAt' => $asset->created_at?->toIso8601ZuluString(),
                 'classification' => $asset->classification->value,
+                'legalHold' => $asset->legal_hold,
             ],
-            // Offered only where it would succeed; EvidenceDownloadService checks again.
+            // Offered only where it would succeed; EvidenceDownloadService and EvidenceHoldService check again.
             'canDownload' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.download'),
+            'canHold' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.hold'),
             'custody' => $events->map(fn (EvidenceCustodyEvent $e): array => [
                 'event' => $e->event,
                 'actor' => $e->actor_id === null ? null : ($names[$e->actor_id]->name ?? null),
                 'occurredAt' => $e->occurred_at->toIso8601ZuluString(),
+                // The reason a holder gave for a legal-hold change (P1-35, O35); shown as text.
+                'reason' => in_array($e->event, ['hold_set', 'hold_released'], true) && is_string($e->details['reason'] ?? null) ? $e->details['reason'] : null,
             ])->all(),
         ]);
     }
@@ -108,6 +114,18 @@ class EvidenceController
     public function download(Request $request, EvidenceAsset $asset, EvidenceDownloadService $downloads): SymfonyResponse
     {
         return Inertia::location($downloads->link($this->viewer($request), $asset));
+    }
+
+    /** P1-35: places or releases a legal hold, with the reason (EvidenceHoldService checks and validates). */
+    public function hold(Request $request, EvidenceAsset $asset, EvidenceHoldService $holds): RedirectResponse
+    {
+        $data = $request->validate([
+            'hold' => ['required', 'boolean'],
+            'reason' => ['required', 'string', 'max:'.EvidenceHoldService::MAX_REASON],
+        ]);
+        $holds->change($this->viewer($request), $asset, (bool) $data['hold'], $data['reason']);
+
+        return redirect()->route('evidence.show', $asset)->with('status', $data['hold'] ? 'Placed on legal hold.' : 'Legal hold released.');
     }
 
     public function store(UploadEvidenceRequest $request, EvidenceUploadService $uploads): RedirectResponse

@@ -72,11 +72,11 @@ describe('Evidence/Index', () => {
 describe('Evidence/Show', () => {
     const asset = {
         ulid: row.ulid, title: 'Shelf', description: '<img src=x onerror=alert(1)>', status: 'quarantined', scanStatus: 'pending', originalFilename: '<i>a</i>.pdf',
-        sizeBytes: 2048, sourceUrl: 'https://shop.example/item?id=7', capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal',
+        sizeBytes: 2048, sourceUrl: 'https://shop.example/item?id=7', capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal', legalHold: false,
     };
 
     it('explains quarantine, shows stored text as text, and links only http(s) sources', () => {
-        const wrapper = mount(Show, { props: { asset, canDownload: false, custody: [{ event: 'uploaded', actor: '<u>Ana</u>', occurredAt: row.capturedAt }] } });
+        const wrapper = mount(Show, { props: { asset, canDownload: false, canHold: false, custody: [{ event: 'uploaded', actor: '<u>Ana</u>', occurredAt: row.capturedAt, reason: null }] } });
         expect(wrapper.get('[role="status"]').text()).toContain('nobody can open it');
         expect(wrapper.find('img').exists() || wrapper.find('i').exists() || wrapper.find('u').exists()).toBe(false);
         expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>');
@@ -84,14 +84,14 @@ describe('Evidence/Show', () => {
         expect(wrapper.text()).toContain('Uploaded by <u>Ana</u>');
         expect(wrapper.get('a[target="_blank"]').attributes('rel')).toBe('noopener noreferrer nofollow');
 
-        const unsafe = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean', sourceUrl: 'javascript:alert(1)' }, canDownload: false, custody: [] } });
+        const unsafe = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean', sourceUrl: 'javascript:alert(1)' }, canDownload: false, canHold: false, custody: [] } });
         expect(unsafe.find('a[target="_blank"]').exists()).toBe(false);
         expect(unsafe.find('[role="status"]').exists()).toBe(false);
         expect(unsafe.find('button').exists()).toBe(false);
     });
 
     it('offers the download only when allowed, posts it, and shows a refusal as text', async () => {
-        const wrapper = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean' }, canDownload: true, custody: [] } });
+        const wrapper = mount(Show, { props: { asset: { ...asset, status: 'available', scanStatus: 'clean' }, canDownload: true, canHold: false, custody: [] } });
         await wrapper.get('button').trigger('click');
         expect(routerPost).toHaveBeenCalledWith(`/evidence/${row.ulid}/download`, {}, expect.any(Object));
 
@@ -100,6 +100,28 @@ describe('Evidence/Show', () => {
         await wrapper.vm.$nextTick();
         expect(wrapper.get('[role="alert"]').text()).toBe('<b>Only available evidence can be downloaded.</b>');
         expect(wrapper.find('b').exists()).toBe(false);
+    });
+
+    it('lets a holder place or release a legal hold with a reason, and shows reasons as text', async () => {
+        const available = { ...asset, status: 'available', scanStatus: 'clean' };
+        const reader = mount(Show, { props: { asset: { ...available, legalHold: true }, canDownload: false, canHold: false, custody: [
+            { event: 'hold_set', actor: 'Dana', occurredAt: row.capturedAt, reason: '<b>Litigation</b> notice 12' },
+        ] } });
+        expect(reader.get('[role="note"]').text()).toContain('On legal hold');
+        expect(reader.find('#hold-reason').exists()).toBe(false);
+        expect(reader.text()).toContain('Reason: <b>Litigation</b> notice 12');
+        expect(reader.find('b').exists()).toBe(false);
+
+        const holder = mount(Show, { props: { asset: available, canDownload: false, canHold: true, custody: [] } });
+        expect(holder.find('[role="note"]').exists()).toBe(false);
+        expect(holder.get('label[for="hold-reason"]').text()).toBe('Reason for placing a legal hold');
+        expect(holder.get('#hold-reason').attributes('required')).toBeDefined();
+        await holder.get('#hold-reason').setValue('Litigation notice 12');
+        await holder.get('form').trigger('submit');
+        expect(post).toHaveBeenLastCalledWith(`/evidence/${row.ulid}/hold`, expect.any(Object));
+
+        const release = mount(Show, { props: { asset: { ...available, legalHold: true }, canDownload: false, canHold: true, custody: [] } });
+        expect(release.get('button[type="submit"]').text()).toBe('Release legal hold');
     });
 
     it('formats sizes', () => {

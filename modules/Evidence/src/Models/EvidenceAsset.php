@@ -27,6 +27,7 @@ use Modules\Platform\Classification;
  * @property ?CarbonInterface $scanned_at
  * @property ?string $quarantine_key
  * @property ?int $evidence_blob_id
+ * @property bool $legal_hold
  * @property string $original_filename
  * @property int $size_bytes
  * @property string $title
@@ -115,6 +116,7 @@ class EvidenceAsset extends Model implements Classifiable, Scoped
             'scanned_at' => 'datetime',
             'size_bytes' => 'integer',
             'evidence_blob_id' => 'integer',
+            'legal_hold' => 'boolean',
         ];
     }
 }

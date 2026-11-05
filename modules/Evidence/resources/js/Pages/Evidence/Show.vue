@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Link, router } from '@inertiajs/vue3';
+import { Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import { eventLabel, scanLabel, sizeLabel, statusLabel } from './labels';
 
 type Asset = {
     ulid: string; title: string; description: string | null; status: string; scanStatus: string; originalFilename: string; sizeBytes: number;
-    sourceUrl: string | null; capturedAt: string; uploadedBy: string | null; uploadedAt: string | null; classification: string;
+    sourceUrl: string | null; capturedAt: string; uploadedBy: string | null; uploadedAt: string | null; classification: string; legalHold: boolean;
 };
-type CustodyEvent = { event: string; actor: string | null; occurredAt: string };
+type CustodyEvent = { event: string; actor: string | null; occurredAt: string; reason: string | null };
 
-const props = defineProps<{ asset: Asset; canDownload: boolean; custody: CustodyEvent[] }>();
+const props = defineProps<{ asset: Asset; canDownload: boolean; canHold: boolean; custody: CustodyEvent[] }>();
+
+// P1-35: a reason is required both to place and to release a hold (PO decision O35); the server checks again.
+const holdForm = useForm<{ hold: boolean; reason: string }>({ hold: true, reason: '' });
+function changeHold(): void {
+    holdForm.hold = !props.asset.legalHold;
+    holdForm.post(`/evidence/${props.asset.ulid}/hold`, { preserveScroll: true, onSuccess: () => (holdForm.reason = '') });
+}
 
 // The server checks again, records the download, and sends the browser to a link valid for a minute (P1-34).
 const downloading = ref(false);
@@ -36,6 +43,9 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
         <p v-if="props.asset.status === 'quarantined'" class="mb-4 max-w-2xl rounded border border-amber-300 bg-amber-50 p-3 text-sm" role="status">
             In quarantine: the file has not been scanned yet, so nobody can open it, and only its uploader and directors see this record.
         </p>
+        <p v-if="props.asset.legalHold" class="mb-4 max-w-2xl rounded border border-red-300 bg-red-50 p-3 text-sm" role="note">
+            On legal hold: the stored file cannot be deleted, whatever its retention date, until a director releases the hold.
+        </p>
         <dl class="mb-6 grid max-w-2xl grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
             <dt class="font-medium">Status</dt><dd>{{ statusLabel(props.asset.status) }}</dd>
             <dt class="font-medium">Scan</dt><dd>{{ scanLabel(props.asset.scanStatus) }}</dd>
@@ -58,11 +68,24 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
             <p class="mt-1 text-xs text-slate-600">Saved as a file, never opened in the browser. Each download is recorded in the chain of custody.</p>
             <p v-if="downloadError" class="mt-1 text-sm text-red-700" role="alert">{{ downloadError }}</p>
         </div>
+        <form v-if="props.canHold" class="mb-6 max-w-2xl space-y-2" @submit.prevent="changeHold">
+            <label for="hold-reason" class="block text-sm font-medium">
+                {{ props.asset.legalHold ? 'Reason for releasing the legal hold' : 'Reason for placing a legal hold' }}
+            </label>
+            <textarea id="hold-reason" v-model="holdForm.reason" required maxlength="1000" rows="2" :aria-invalid="holdForm.errors.reason ? 'true' : undefined" class="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+            <button type="submit" class="rounded border border-slate-800 px-4 py-2 text-sm font-medium disabled:opacity-50" :disabled="holdForm.processing">
+                {{ props.asset.legalHold ? 'Release legal hold' : 'Place on legal hold' }}
+            </button>
+            <ul v-if="Object.keys(holdForm.errors).length > 0" class="text-sm text-red-700" role="alert">
+                <li v-for="(message, field) in holdForm.errors" :key="field">{{ message }}</li>
+            </ul>
+        </form>
         <section aria-labelledby="custody-heading" class="max-w-2xl">
             <h2 id="custody-heading" class="mb-2 text-lg font-semibold">Chain of custody</h2>
             <ol class="space-y-1 text-sm">
                 <li v-for="(entry, index) in props.custody" :key="`${entry.occurredAt}-${index}`">
                     {{ when(entry.occurredAt) }}: {{ eventLabel(entry.event) }}<template v-if="entry.actor"> by {{ entry.actor }}</template>
+                    <span v-if="entry.reason" class="block whitespace-pre-line pl-4 text-slate-600">Reason: {{ entry.reason }}</span>
                 </li>
             </ol>
         </section>

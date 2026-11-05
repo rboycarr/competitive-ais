@@ -13,7 +13,7 @@ use Modules\Platform\Support\ModuleServiceProvider;
 /**
  * Evidence (M09, docs/03): uploads, quarantine, scanning, content-addressed storage, custody. P1-32a stores uploads
  * in quarantine with their custody trail; P1-32b scans them and promotes clean bytes to content-addressed storage, or
- * rejects them. P1-34 serves downloads through short-lived links. Legal hold comes in P1-35, scopes in P1-36, the source policy at capture in P1-37.
+ * rejects them. P1-34 serves downloads through short-lived links, P1-35 adds legal hold; scopes in P1-36, the source policy at capture in P1-37.
  * Uploads are untrusted (docs/07 T7).
  */
 class EvidenceServiceProvider extends ModuleServiceProvider
@@ -36,6 +36,8 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         $actions->define('evidence.scanned', ['result' => 'code', 'sha256' => 'sha256']);
         $actions->define('evidence.rejected', ['reason' => 'code']);
         $actions->define('evidence.downloaded', ['sha256' => 'sha256']);
+        $actions->define('evidence.hold_set', ['blob_hold' => 'code']);
+        $actions->define('evidence.hold_released', ['blob_hold' => 'code']);
 
         // P1-34: downloads per user, so a stolen session cannot pull the store in bulk unnoticed.
         RateLimiter::for('evidence-downloads', fn (Request $request) => Limit::perMinute(30)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));
