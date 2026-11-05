@@ -67,27 +67,39 @@ class EvidenceSourcePolicyLockTest extends TestCase
         // whose asset insert waited only on the foreign key's own lock, records the policy (TASK-0077 #3).
         $held = sys_get_temp_dir().'/cais-p137-held-'.bin2hex(random_bytes(6));
         $capture = "$held.capture";
-        $results = Concurrently::run([
-            function () use ($source, $held, $capture): void {
-                DB::transaction(function () use ($source, $held, $capture): void {
-                    DB::table('sources')->where('id', $source->id)->lockForUpdate()->first();
-                    DB::table('sources')->where('id', $source->id)->update(['status' => 'suspended']);
-                    touch($held);
-                    self::until(fn (): bool => is_file($capture) && filesize($capture) > 0, 'The capture never started.');
-                    $thread = (int) file_get_contents($capture);
-                    self::until(fn (): bool => collect(DB::select('SHOW FULL PROCESSLIST'))->contains(fn (object $process): bool => (int) ((array) $process)['Id'] === $thread
-                        && (bool) preg_match('/from `sources`.*(lock in share mode|for share)/is', (string) ((array) $process)['Info'])),
-                        'The capture never waited on the source row.');
-                });
-            },
-            function () use ($analyst, $source, $held, $capture): void {
-                self::until(fn (): bool => file_exists($held), 'The suspension never took the source row.');
-                file_put_contents($capture, (string) ((array) DB::selectOne('SELECT CONNECTION_ID() AS id'))['id']);
-                app(EvidenceUploadService::class)->upload($analyst, $this->file(), $this->fields($source));
-            },
-        ], 60.0);
-        @unlink($held);
-        @unlink($capture);
+        try {
+            $results = Concurrently::run([
+                function () use ($source, $held, $capture): void {
+                    DB::transaction(function () use ($source, $held, $capture): void {
+                        DB::table('sources')->where('id', $source->id)->lockForUpdate()->first();
+                        DB::table('sources')->where('id', $source->id)->update(['status' => 'suspended']);
+                        touch($held);
+                        self::until(fn (): bool => is_file($capture), 'The capture never started.');
+                        $thread = (int) file_get_contents($capture);
+                        if ($thread < 1) {
+                            throw new RuntimeException('The capture published no connection ID.');
+                        }
+                        self::until(fn (): bool => collect(DB::select('SHOW FULL PROCESSLIST'))->contains(fn (object $process): bool => (int) ((array) $process)['Id'] === $thread
+                            && (bool) preg_match('/from `sources`.*(lock in share mode|for share)/is', (string) ((array) $process)['Info'])),
+                            'The capture never waited on the source row.');
+                    });
+                },
+                function () use ($analyst, $source, $held, $capture): void {
+                    self::until(fn (): bool => file_exists($held), 'The suspension never took the source row.');
+                    // Published whole: written aside, then renamed into place (atomic on one filesystem, TASK-0080 #1).
+                    file_put_contents("$capture.tmp", (string) ((array) DB::selectOne('SELECT CONNECTION_ID() AS id'))['id']);
+                    rename("$capture.tmp", $capture);
+                    app(EvidenceUploadService::class)->upload($analyst, $this->file(), $this->fields($source));
+                },
+            ], 60.0);
+        } finally {
+            // Removed whatever happens to the run (TASK-0080 #2).
+            foreach ([$held, $capture, "$capture.tmp"] as $file) {
+                if (file_exists($file)) {
+                    unlink($file);
+                }
+            }
+        }
 
         $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
         $this->assertSame('suspended', DB::table('sources')->where('id', $source->id)->value('status'));
