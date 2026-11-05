@@ -7,9 +7,14 @@
 
 return [
 
-    // Days each stored blob is kept under object lock (governance mode) and in `evidence_blobs.retention_until`, until
-    // P1-35 sets retention per asset (PO decision O33, 2026-11-03).
-    'blob_retention_days' => 30,
+    // Days evidence is kept when its capture names no source, or its source policy sets no `retention_days` (PO
+    // decision O33, 2026-11-03), counted from the upload (O39). Each asset's date is fixed at upload (P1-38); a blob
+    // is kept, under object lock in governance mode, until the latest date of its assets.
+    'default_retention_days' => 30,
+
+    // Minutes a quarantine object without an asset is left before evidence:sweep-quarantine removes it: far longer
+    // than an upload takes between writing the object and committing its asset (TASK-0064 #2).
+    'quarantine_orphan_minutes' => 60,
 
     // Seconds a scan waits for another scan storing the same bytes (a MySQL named lock per hash) before it fails and
     // is retried: long enough for one 50 MB upload to the object store.

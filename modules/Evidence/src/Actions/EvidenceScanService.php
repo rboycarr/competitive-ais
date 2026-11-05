@@ -21,19 +21,22 @@ use Throwable;
  * Scanning one quarantined asset and storing it once (P1-32b, ADR-0007, docs/02 §3.5; uploads are untrusted, docs/07
  * T7). Run by ScanEvidenceJob on the `evidence` queue.
  * 1. The quarantine object is copied to a private temporary file (streamed, never held in memory), and its size must
- *    match the upload.
+ *    match the upload (a missing quarantine object fails the try, and the job retries).
  * 2. ClamAV scans those bytes. A virus rejects the asset; a scanner error marks the scan `error` and is retried.
  * 3. The type is detected again from the bytes, and must still match the extension. A mismatch rejects the asset
  *    outright (PO decision O34).
  * 4. Clean bytes are stored once, content-addressed at `sha256/<2>/<2>/<hash>` in the locked `evidence` bucket, with
- *    governance retention for `evidence.blob_retention_days` on that same write (PO decision O33). Under a named lock
- *    per hash, bytes already stored are not uploaded again, and `evidence_blobs` is filled by an atomic
- *    insert-or-reload on the hash.
+ *    governance retention to the asset's `retention_until` on that same write (P1-38). Under a named lock per hash,
+ *    bytes already stored are not uploaded again, and `evidence_blobs` is filled by an atomic insert-or-reload on the
+ *    hash.
  * 5. Under a lock on the asset row, a scan result is written only from `quarantined` with a pending scan, so a
- *    terminal result is never overwritten, and a duplicate or retried job changes nothing. The custody events and the
- *    audit record (codes and the hash only) are written in the same transaction.
- * 6. The quarantine object is deleted afterwards. A failed delete is logged as `evidence.quarantine_orphan`, for the
- *    sweep (P1-38).
+ *    terminal result is never overwritten, and a duplicate or retried job changes nothing. A clean result links the
+ *    asset under the blob's row lock too, and extends the blob (stored version first) to its assets' latest retention
+ *    date, so a blob shared by assets kept for different periods is kept for the longest (P1-38). The custody events
+ *    and the audit record (codes and the hash only) are written in the same transaction; a failed retention extension
+ *    undoes them, and the job retries.
+ * 6. The quarantine object is deleted afterwards. A failed delete is logged as `evidence.quarantine_orphan`; the
+ *    hourly evidence:sweep-quarantine removes it later (P1-38).
  */
 final class EvidenceScanService
 {
@@ -44,6 +47,7 @@ final class EvidenceScanService
         private readonly Filesystems $storage,
         private readonly ClamAvClient $scanner,
         private readonly AuditLogger $audit,
+        private readonly EvidenceBlobReconciler $reconciler,
     ) {}
 
     public function scan(int $assetId): void
@@ -78,7 +82,7 @@ final class EvidenceScanService
                 return;
             }
 
-            $this->decide($assetId, 'clean', $this->store($temp, $size, $type));
+            $this->decide($assetId, 'clean', $this->store($temp, $size, $type, $asset->retention_until));
             $this->removeQuarantine($quarantine, $key);
         } catch (Throwable $e) {
             $this->markError($assetId, $e);
@@ -151,7 +155,7 @@ final class EvidenceScanService
      * lock per hash serialises scans of identical bytes, so only one of them writes the object: without it, two could
      * both miss the row and each leave a retained version in the locked bucket.
      */
-    private function store(string $path, int $size, string $type): int
+    private function store(string $path, int $size, string $type, string $retentionUntil): int
     {
         $sha256 = hash_file('sha256', $path);
         if (! is_string($sha256)) {
@@ -165,7 +169,7 @@ final class EvidenceScanService
             throw new RuntimeException('Another scan is still storing the same bytes.');
         }
         try {
-            return $this->storeLocked($path, $size, $type, $sha256);
+            return $this->storeLocked($path, $size, $type, $sha256, $retentionUntil);
         } finally {
             $connection->select('SELECT RELEASE_LOCK(?)', [$lock]);
         }
@@ -177,7 +181,8 @@ final class EvidenceScanService
         return 'evidence-blob:'.substr($sha256, 0, 48);
     }
 
-    private function storeLocked(string $path, int $size, string $type, string $sha256): int
+    /** A new blob starts with the scanned asset's retention (P1-38); a reused one is extended in decide(). */
+    private function storeLocked(string $path, int $size, string $type, string $sha256, string $retentionUntil): int
     {
         $existing = EvidenceBlob::query()->where('sha256', $sha256)->value('id');
         if ($existing !== null) {
@@ -186,7 +191,7 @@ final class EvidenceScanService
 
         $key = 'sha256/'.substr($sha256, 0, 2).'/'.substr($sha256, 2, 2).'/'.$sha256;
         $now = CarbonImmutable::now('UTC');
-        $until = $now->addDays((int) config('evidence.blob_retention_days'));
+        $until = EvidenceBlobReconciler::objectRetainUntil($retentionUntil);
         $stream = fopen($path, 'rb');
         if (! is_resource($stream)) {
             throw new RuntimeException('The file could not be opened for storage.');
@@ -203,7 +208,7 @@ final class EvidenceScanService
         $connection->statement(
             'INSERT INTO evidence_blobs (sha256, storage_disk, storage_key, object_version_id, size_bytes, detected_mime, first_scan_engine, first_scanned_at, retention_until, legal_hold, integrity_status, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)',
-            [$sha256, self::EVIDENCE_DISK, $key, $version, $size, $type, (string) config('services.clamav.engine'), $now->format('Y-m-d H:i:s.u'), $until->toDateString(), 'ok', $now->format('Y-m-d H:i:s.u')],
+            [$sha256, self::EVIDENCE_DISK, $key, $version, $size, $type, (string) config('services.clamav.engine'), $now->format('Y-m-d H:i:s.u'), $retentionUntil, 'ok', $now->format('Y-m-d H:i:s.u')],
         );
 
         return (int) $connection->getPdo()->lastInsertId();
@@ -221,6 +226,9 @@ final class EvidenceScanService
             if ($asset === null || $asset->status !== 'quarantined' || $asset->scan_status !== 'pending') {
                 return; // a terminal result is never overwritten
             }
+            // Asset, then blob: the order EvidenceHoldService locks them in. The link and the blob's retention change
+            // under the blob's lock, as every change to what a blob must keep does (EvidenceBlobReconciler).
+            $blob = $blobId === null ? null : EvidenceBlob::query()->lockForUpdate()->findOrFail($blobId);
             $now = CarbonImmutable::now('UTC');
             $asset->forceFill([
                 'status' => $result === 'clean' ? 'available' : 'rejected',
@@ -230,11 +238,14 @@ final class EvidenceScanService
                 'quarantine_key' => null,
                 'evidence_blob_id' => $blobId,
             ])->save();
+            if ($blob !== null) {
+                // P1-38: a blob is kept as long as its longest-kept asset; the stored version is extended first.
+                $this->reconciler->extendToAssets($blob);
+            }
 
             $this->custody($assetId, 'scanned', $now);
-            if ($result === 'clean') {
-                $sha256 = (string) EvidenceBlob::query()->whereKey((int) $blobId)->value('sha256');
-                $this->audit->record('evidence.scanned', $asset, ['result' => 'clean', 'sha256' => $sha256], Actor::system());
+            if ($blob !== null) {
+                $this->audit->record('evidence.scanned', $asset, ['result' => 'clean', 'sha256' => $blob->sha256], Actor::system());
             } else {
                 $this->custody($assetId, 'rejected', $now);
                 $this->audit->record('evidence.rejected', $asset, ['reason' => $result], Actor::system());

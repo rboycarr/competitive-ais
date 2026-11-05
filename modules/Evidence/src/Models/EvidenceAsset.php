@@ -28,6 +28,7 @@ use Modules\Platform\Classification;
  * @property ?string $quarantine_key
  * @property ?int $evidence_blob_id
  * @property bool $legal_hold
+ * @property string $retention_until the last day (UTC, Y-m-d) its bytes must be kept (P1-38); fixed at upload
  * @property string $original_filename
  * @property int $size_bytes
  * @property string $title

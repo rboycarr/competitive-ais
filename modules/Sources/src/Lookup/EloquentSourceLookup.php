@@ -65,6 +65,7 @@ class EloquentSourceLookup implements SourceLookup
         return new SourcePolicySummary(
             $source->id, $source->ulid, $source->name, $source->status,
             $policy?->id, $policy?->version, $policy === null ? null : CarbonImmutable::instance($policy->decided_at)->utc(),
+            $policy?->retention_days,
         );
     }
 }

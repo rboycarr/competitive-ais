@@ -258,7 +258,7 @@ class EvidenceScopeTest extends TestCase
         $asset->forceFill([
             'ulid' => (string) Str::ulid(), 'status' => 'available', 'scan_status' => 'clean', 'scanned_at' => now(), 'evidence_blob_id' => $blobId,
             'original_filename' => 'a.pdf', 'size_bytes' => 10, 'title' => $title, 'captured_at' => now(), 'uploaded_by' => $uploader->id,
-            'classification' => $classification,
+            'classification' => $classification, 'retention_until' => now('UTC')->addDays(30)->toDateString(),
         ])->save();
         foreach ([['evidence_asset_competitor', 'competitor_id', $competitors], ['evidence_asset_market', 'market_id', $markets]] as [$table, $column, $ids]) {
             foreach ($ids as $id) {

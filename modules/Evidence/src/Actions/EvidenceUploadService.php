@@ -48,6 +48,7 @@ use Throwable;
  *   is checked before the file is stored and again in the transaction under a share lock on the source row, and the
  *   policy in force then is recorded with the asset, so a suspension or a new policy decision (which lock the row
  *   for update) lands wholly before or after the capture;
+ * - the asset is kept until today plus that policy's `retention_days`, or the default (O33) without one (P1-38, O39);
  * - the object is written first, then the asset, its `uploaded` custody event and the audit event in one
  *   transaction; if the transaction fails, the object is deleted, so an asset never exists without its object.
  *   An object whose deletion also fails is left in the quarantine bucket without an asset (reported).
@@ -116,11 +117,15 @@ class EvidenceUploadService
             }
 
             $saved = $this->db->transaction(function () use ($actor, $asset, $userId, $sourceUlid): EvidenceAsset {
+                $retentionDays = null;
                 if ($sourceUlid !== null) {
                     // P1-37: again under the share lock, so the policy recorded is the one in force at commit.
                     $source = $this->policyInForce($actor, $sourceUlid, true);
                     $asset->forceFill(['source_id' => $source->sourceId, 'source_policy_id' => $source->policyId]);
+                    $retentionDays = $source->policyRetentionDays;
                 }
+                // P1-38: kept for the recorded policy's retention, or the default (O33), counted from today (O39).
+                $asset->forceFill(['retention_until' => self::retentionUntil($retentionDays)]);
                 $asset->save();
                 $now = CarbonImmutable::now('UTC');
                 foreach ([...$asset->competitorScopes, ...$asset->marketScopes] as $scope) {
@@ -167,6 +172,15 @@ class EvidenceUploadService
         }
 
         return $saved;
+    }
+
+    /**
+     * The last day (UTC, Y-m-d) an asset uploaded today is kept (P1-38): today plus the source policy's retention
+     * days, or `evidence.default_retention_days` (O33) when there is no policy or it sets none.
+     */
+    public static function retentionUntil(?int $days): string
+    {
+        return CarbonImmutable::now('UTC')->startOfDay()->addDays($days ?? (int) config('evidence.default_retention_days'))->toDateString();
     }
 
     /**
