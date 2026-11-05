@@ -1,0 +1,23 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use Modules\Intelligence\Http\Controllers\IntelligenceClaimController;
+use Modules\Intelligence\Http\Controllers\IntelligenceItemController;
+
+// Intelligence (P1-40). Reading needs intelligence.view (and the item's visibility: hidden items are 404), writing
+// intelligence.create; the services check again, including author/owner, editable status and the version read.
+// No delete routes: items are never deleted and claims are withdrawn.
+Route::middleware('auth')->group(function () {
+    Route::middleware('can:intelligence.view')->group(function () {
+        Route::get('/intelligence', [IntelligenceItemController::class, 'index'])->name('intelligence.index');
+        Route::get('/intelligence/{item}', [IntelligenceItemController::class, 'show'])->name('intelligence.show');
+    });
+    Route::middleware('can:intelligence.create')->group(function () {
+        Route::post('/intelligence', [IntelligenceItemController::class, 'store'])->name('intelligence.store');
+        Route::put('/intelligence/{item}', [IntelligenceItemController::class, 'update'])->name('intelligence.update');
+        Route::post('/intelligence/{item}/claims', [IntelligenceClaimController::class, 'store'])->name('intelligence.claims.store');
+        Route::put('/intelligence/{item}/claims/{claim}', [IntelligenceClaimController::class, 'update'])->name('intelligence.claims.update');
+        Route::post('/intelligence/{item}/claims/{claim}/withdraw', [IntelligenceClaimController::class, 'withdraw'])->name('intelligence.claims.withdraw');
+        Route::post('/intelligence/{item}/claims/{claim}/move', [IntelligenceClaimController::class, 'move'])->name('intelligence.claims.move');
+    });
+});

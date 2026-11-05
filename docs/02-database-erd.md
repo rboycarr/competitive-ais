@@ -283,6 +283,8 @@ Scan results are **monotonic**: pending → clean | infected | error; error → 
 
 **retractions**: id, intelligence_item_id FK UNIQUE, reason TEXT, retracted_by FK, retracted_at, replacement_item_id FK NULL.
 
+**Implementation (P1-40, 2026-11-06):** migration `modules/Intelligence/database/migrations/2026_11_24_000100_create_intelligence_tables.php`. `intelligence_items` as specified (all columns now; review, publication and supersession columns are written by P1-43/P1-44), times DATETIME(6) UTC, `summary` TEXT NOT NULL (Markdown source, empty allowed, at most 20,000 characters by the service), CHECKs for type, classification, status, a non-blank title and `version >= 1`; grant class `no_delete`. The three subject pivots as specified (composite PKs, CASCADE item side, RESTRICT subject side), grant class `mutable`: subjects change while the item is editable, and every change is audited. Competitors and markets are the item's AccessScope scopes (all-of); a product subject brings its competitor in as a competitor subject (the service adds it), so an item about a competitor's product is scoped like one about its maker. `intelligence_claims` as specified, grant class `no_delete` (claims are withdrawn, never deleted, so what a reviewer saw stays on record); `source_reliability` CHAR(1) `ascii_bin` (lower case refused); CHECKs for type, the A–F and 1–6 scales, status and a non-blank statement. `down()` refuses while any item exists. `claim_evidence_links` (P1-41), `verification_reviews` (P1-43) and `retractions` (P1-44) come with their stories. Tests: `modules/Intelligence/tests/Feature/IntelligenceItemTest.php`.
+
 ## 4. Later-phase tables (designed, not yet migrated)
 
 | Phase | Table | Key design points |

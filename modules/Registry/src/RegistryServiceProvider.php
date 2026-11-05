@@ -8,8 +8,10 @@ use Modules\Platform\Support\ModuleServiceProvider;
 use Modules\Registry\Console\VerifyCategoryTree;
 use Modules\Registry\Contracts\CompetitorLookup;
 use Modules\Registry\Contracts\MarketLookup;
+use Modules\Registry\Contracts\ProductLookup;
 use Modules\Registry\Lookup\EloquentCompetitorLookup;
 use Modules\Registry\Lookup\EloquentMarketLookup;
+use Modules\Registry\Lookup\EloquentProductLookup;
 
 /**
  * Registry (M02–M04, docs/03): competitors (P1-20), aliases and relationships (P1-21), brands and the category tree
@@ -25,6 +27,7 @@ class RegistryServiceProvider extends ModuleServiceProvider
 
         $this->app->bind(CompetitorLookup::class, EloquentCompetitorLookup::class);
         $this->app->bind(MarketLookup::class, EloquentMarketLookup::class);
+        $this->app->bind(ProductLookup::class, EloquentProductLookup::class);
     }
 
     public function boot(): void

@@ -10,6 +10,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Identity\Contracts\UserDirectory;
+use Modules\Intelligence\Contracts\IntelligenceReferences;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
@@ -27,7 +28,9 @@ use Modules\Registry\Models\Competitor;
  *   (TASK-0031 #2); a later suspension leaves the assignment until someone changes it;
  * - every change is audited in the same transaction. Domain events (docs/03: CompetitorCreated, …) are published
  *   once they have a consumer, the Phase 2 search indexer: the outbox refuses events nobody handles.
- * Archiving is allowed for now: the guard against open intelligence items comes with those items (binding, docs/02).
+ * Archiving is refused while open intelligence items are about the competitor (P1-40, docs/03 Registry). It is checked
+ * under the row lock, which an item takes in share mode before it names the competitor (CompetitorLookup::
+ * lockUnarchived), so neither misses the other. The message names no item: the actor may not see them.
  */
 class CompetitorService
 {
@@ -40,6 +43,7 @@ class CompetitorService
         private readonly AccessScope $access,
         private readonly UserDirectory $users,
         private readonly Gate $gate,
+        private readonly IntelligenceReferences $intelligence,
     ) {}
 
     /**
@@ -119,6 +123,9 @@ class CompetitorService
             $from = $locked->lifecycle;
             if ($from === $lifecycle) {
                 return;
+            }
+            if ($lifecycle === 'archived' && $this->intelligence->hasOpenItemsAbout($locked->id)) {
+                throw ValidationException::withMessages(['lifecycle' => 'Open intelligence items are about this competitor: archive it once none is in progress.']);
             }
 
             $locked->forceFill(['lifecycle' => $lifecycle])->save();
