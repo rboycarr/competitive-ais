@@ -30,6 +30,8 @@ class UploadEvidenceRequest extends FormRequest
             'competitors.*' => ['string', 'size:26'],
             'markets' => ['nullable', 'array', 'max:'.EvidenceUploadService::MAX_SCOPES],
             'markets.*' => ['string', 'size:26'],
+            // P1-37: a source ULID; visibility and an approved policy in force are checked in EvidenceUploadService.
+            'source' => ['nullable', 'string', 'size:26'],
         ];
     }
 }

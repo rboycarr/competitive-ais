@@ -24,6 +24,8 @@ use Modules\Registry\Contracts\CompetitorLookup;
 use Modules\Registry\Contracts\CompetitorSummary;
 use Modules\Registry\Contracts\MarketLookup;
 use Modules\Registry\Contracts\MarketSummary;
+use Modules\Sources\Contracts\SourceLookup;
+use Modules\Sources\Contracts\SourcePolicySummary;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
@@ -40,6 +42,7 @@ class EvidenceController
         private readonly Gate $gate,
         private readonly CompetitorLookup $competitors,
         private readonly MarketLookup $markets,
+        private readonly SourceLookup $sources,
     ) {}
 
     public function index(Request $request): Response
@@ -76,6 +79,8 @@ class EvidenceController
             // P1-36a: what the evidence is about. Competitors the viewer can see; markets are unclassified.
             'competitors' => $canUpload ? array_map(fn (CompetitorSummary $c): array => ['value' => $c->ulid, 'label' => $c->name], $this->competitors->visibleTo($viewer)) : [],
             'markets' => $canUpload ? array_map(fn (MarketSummary $m): array => ['value' => $m->ulid, 'label' => "{$m->name} ({$m->code})"], $this->markets->all()) : [],
+            // P1-37: sources the viewer can see with an approved policy in force; the service checks again at upload.
+            'sources' => $canUpload ? array_map(fn (SourcePolicySummary $s): array => ['value' => $s->sourceUlid, 'label' => $s->sourceName], $this->sources->usableBy($viewer)) : [],
         ]);
     }
 
@@ -107,6 +112,7 @@ class EvidenceController
                 // viewer can see (a competitor may be classified above the asset).
                 'competitors' => array_values(array_map(fn (CompetitorSummary $c): string => $c->name, $this->competitors->summaries($viewer, $asset->competitorIds()))),
                 'markets' => array_values(array_map(fn (MarketSummary $m): string => "{$m->name} ({$m->code})", $this->markets->summaries($asset->marketIds()))),
+                'source' => $this->captureSource($viewer, $asset),
             ],
             // Offered only where it would succeed; EvidenceDownloadService and EvidenceHoldService check again.
             'canDownload' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.download'),
@@ -149,6 +155,30 @@ class EvidenceController
         $asset = $uploads->upload($this->viewer($request), $file, $request->safe()->except('file'));
 
         return redirect()->route('evidence.show', $asset)->with('status', "{$asset->title} uploaded. It stays in quarantine until it has been scanned.");
+    }
+
+    /**
+     * The source and policy version that authorized the capture (P1-37), for an auditor: null when none was named; a
+     * placeholder when the viewer cannot see the source (it may be classified above the asset), so a recorded source
+     * is never mistaken for none, without its name.
+     *
+     * @return array{visible: bool, ulid?: string, name?: string, status?: string, policyVersion?: ?int, policyDecidedAt?: ?string}|null
+     */
+    private function captureSource(Authenticatable $viewer, EvidenceAsset $asset): ?array
+    {
+        if ($asset->source_id === null || $asset->source_policy_id === null) {
+            return null;
+        }
+        $source = $this->sources->recorded($viewer, $asset->source_id, $asset->source_policy_id);
+
+        return $source === null ? ['visible' => false] : [
+            'visible' => true,
+            'ulid' => $source->sourceUlid,
+            'name' => $source->sourceName,
+            'status' => $source->status,
+            'policyVersion' => $source->policyVersion,
+            'policyDecidedAt' => $source->policyDecidedAt?->toIso8601ZuluString(),
+        ];
     }
 
     private function probe(Classification $classification): EvidenceAsset

@@ -4,6 +4,8 @@ namespace Modules\Sources;
 
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
+use Modules\Sources\Contracts\SourceLookup;
+use Modules\Sources\Lookup\EloquentSourceLookup;
 
 /**
  * Sources (M06, M07, docs/03): the source registry. P1-30 lets analysts propose a source; P1-31a adds the policy review
@@ -12,6 +14,14 @@ use Modules\Platform\Support\ModuleServiceProvider;
  */
 class SourcesServiceProvider extends ModuleServiceProvider
 {
+    public function register(): void
+    {
+        parent::register();
+
+        // P1-37: evidence capture records the policy in force through this contract.
+        $this->app->bind(SourceLookup::class, EloquentSourceLookup::class);
+    }
+
     public function boot(): void
     {
         parent::boot();
