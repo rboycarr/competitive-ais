@@ -72,4 +72,4 @@ No credential file was opened (Codex's log). Recommendation "yes"; no findings. 
 | Migration rollback refusal with rows, and an empty rollback | **Deferred to P1-41** (added to its acceptance): it needs committed rows (DatabaseMigrations), like `EvidenceBlobRaceTest`, and P1-41 adds a migration to the same module. |
 | Subject removal widening a draft's visibility | Kept as designed (audited, only while editable); listed for the PO in the P1-40 report. |
 
-The added tests were not run locally: the Docker daemon in WSL stopped responding during the run (calls timed out). CI runs them on the pushed commit.
+The added tests: `SafeMarkdownTest` and `IntelligenceItemTest` 16 passed (865 assertions), after WSL was restarted with the PO's approval (the Docker daemon had stopped responding).

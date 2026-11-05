@@ -79,13 +79,16 @@ class SafeMarkdownTest extends TestCase
     }
 
     /**
-     * @param  list<array<string, mixed>>  $nodes
+     * @param  array<mixed>  $nodes
      * @return list<string>
      */
     private static function hrefs(array $nodes): array
     {
         $found = [];
         foreach ($nodes as $node) {
+            if (! is_array($node)) {
+                continue;
+            }
             $attrs = $node['attrs'] ?? [];
             if (is_array($attrs) && is_string($attrs['href'] ?? null)) {
                 $found[] = $attrs['href'];
