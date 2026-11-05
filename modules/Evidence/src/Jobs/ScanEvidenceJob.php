@@ -12,8 +12,9 @@ use Throwable;
 /**
  * Scans one uploaded asset (P1-32b, docs/03 Evidence): queue `evidence`, unique per asset, 3 tries with backoff of 30,
  * 120 and 600 s. Each failed try leaves the scan `error`; the next try sets it `pending` again. After the last try
- * the asset stays in quarantine with scan `error`, and `evidence.scan_failed` is logged for the operator and the
- * quarantine sweep (P1-38). No content, file name or title is logged.
+ * the asset stays in quarantine with scan `error`, and `evidence.scan_failed` is logged for the operator (its
+ * quarantine object is kept: the asset still waits for it, so evidence:sweep-quarantine leaves it, P1-38). No
+ * content, file name or title is logged.
  */
 final class ScanEvidenceJob implements ShouldBeUnique, ShouldQueue
 {

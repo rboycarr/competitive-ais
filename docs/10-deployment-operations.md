@@ -180,4 +180,19 @@ A pre-signed URL signs its host, and the application's S3 endpoint (`AWS_ENDPOIN
 
 Directors (evidence.hold) place and release a legal hold from the evidence page, with a reason (O35), on available evidence only (O36). The hold is pushed to the stored object version as an S3 legal hold, so the version cannot be deleted whatever its retention date; this needs the app identity's `GetObjectLegalHold`/`PutObjectLegalHold` permissions on `evidence` (ADR-0007), verified 2026-11-05 with the app key against the local SeaweedFS. A blob shared by several assets stays held while any of them is.
 
-If releasing the last hold on a blob cannot reach the store, the records show it released but the object stays held (the safe side), and the log has "Evidence legal hold released in the records, but the stored object is still held." with the `evidence_blob_id`. The next hold change on that blob pushes its state again; until then nothing can delete the version, so no data is at risk. The deletion job (P1-38) must recheck `evidence_blobs.legal_hold` under lock in any case.
+If releasing the last hold on a blob cannot reach the store, the records show it released but the object stays held (the safe side), and the log has "Evidence legal hold released in the records, but the stored object is still held." with the `evidence_blob_id`. The next hold change on that blob pushes its state again; until then nothing can delete the version, so no data is at risk. The daily reconciliation (below) reports it (`object_hold` = `unexpected`).
+
+### Evidence retention, reconciliation and the quarantine sweep (P1-38)
+
+Each asset is kept until `retention_until`: the upload day plus its source policy's `retention_days`, or `evidence.default_retention_days` (30, O33) without one (O39). A blob is kept, under governance-mode object lock, until the start of the day after the latest date of its assets; the application only ever extends that lock (it holds no `BypassGovernanceRetention`), which needs the app identity's `GetObjectRetention`/`PutObjectRetention` on `evidence` (ADR-0007), verified 2026-11-05 against the local SeaweedFS.
+
+Scheduled commands (the `scheduler` service):
+
+| Command | When | Exit 1 means | What to do |
+|---|---|---|---|
+| `evidence:reconcile-blobs` | daily 02:30 UTC | a blob failed (e.g. its version is missing from the store; the exception is reported), or an object is held while none of its assets is | A missing version is an integrity incident: compare `evidence_blobs.storage_key`/`object_version_id` with the store. An unexpected hold is either a hold placed outside the application (leave it) or a release that failed (the log line above): once confirmed, run `php artisan evidence:reconcile-blobs --release-unheld`, which releases object holds no asset holds and audits each as `evidence.blob_reconciled` (`object_hold` = `off`). |
+| `evidence:sweep-quarantine` | hourly (objects whose upload still holds its key's lock are counted "in use" and left; not an error) | a quarantine object could not be deleted (`evidence.quarantine_orphan`), or a key not of the form `quarantine/<ULID>` was found | Check the store's permissions for the app identity on `evidence-quarantine`; remove unexpected keys by hand after review. |
+
+**After deploying P1-38:** run `php artisan evidence:reconcile-blobs` once (it also runs nightly), so blobs stored before per-asset retention are extended to their assets' dates. It never shortens a lock.
+
+Deleting blobs is not implemented (PO decision O38): the job that will do it must call `EvidenceBlobReconciler::deletable()` inside its own deleting transaction, and needs a database permission the application account does not have today.

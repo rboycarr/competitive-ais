@@ -215,7 +215,7 @@ class EvidenceDownloadTest extends TestCase
             'ulid' => (string) Str::ulid(), 'status' => $status, 'scan_status' => $scan, 'scanned_at' => $scan === 'pending' ? null : now(),
             'quarantine_key' => $status === 'quarantined' ? 'quarantine/'.Str::ulid() : null, 'evidence_blob_id' => $blobId,
             'original_filename' => $filename, 'size_bytes' => 10, 'title' => 'Synthetic download', 'captured_at' => now(),
-            'uploaded_by' => $this->analyst->id, 'classification' => $classification,
+            'uploaded_by' => $this->analyst->id, 'classification' => $classification, 'retention_until' => now('UTC')->addDays(30)->toDateString(),
         ])->save();
 
         return $asset;

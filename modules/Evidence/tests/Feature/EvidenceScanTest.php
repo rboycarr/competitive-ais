@@ -395,7 +395,8 @@ class EvidenceScanTest extends TestCase
             'ulid' => (string) Str::ulid(), 'status' => 'quarantined', 'scan_status' => 'pending',
             'quarantine_key' => 'quarantine/'.Str::ulid(), 'original_filename' => $filename, 'size_bytes' => strlen($bytes),
             'title' => 'Synthetic scan', 'captured_at' => now('UTC'), 'uploaded_by' => $this->analyst->id,
-            'classification' => Classification::Internal, 'created_at' => now('UTC'), 'updated_at' => now('UTC'),
+            'classification' => Classification::Internal, 'retention_until' => now('UTC')->addDays(30)->toDateString(),
+            'created_at' => now('UTC'), 'updated_at' => now('UTC'),
         ])->save();
         Storage::disk(EvidenceUploadService::QUARANTINE_DISK)->put((string) $asset->quarantine_key, $bytes);
 

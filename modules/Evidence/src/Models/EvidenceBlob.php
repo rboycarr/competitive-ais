@@ -10,7 +10,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * Content scanned clean once and stored once, content-addressed by its hash (P1-32b, docs/02 §3.5, ADR-0007). A blob
  * is created only by `EvidenceScanService`'s insert-or-reload on `sha256`; it has no visibility of its own and is
  * read only through the assets that reference it. No mass assignment; retained while referenced, never deleted by
- * the app account (grant class `no_delete`; the deletion job comes with P1-38).
+ * the app account (grant class `no_delete`). Retention (the latest of its assets) and hold (OR of its assets) are kept
+ * in step by EvidenceBlobReconciler (P1-38), whose `deletable()` any future deleting job must pass (PO decision O38).
  *
  * @property int $id
  * @property string $sha256

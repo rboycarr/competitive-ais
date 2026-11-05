@@ -222,6 +222,7 @@ class EvidenceHoldTest extends TestCase
         $asset->forceFill($attributes + [
             'ulid' => (string) Str::ulid(), 'original_filename' => 'report.pdf', 'size_bytes' => 10, 'title' => 'Synthetic hold',
             'captured_at' => now(), 'uploaded_by' => $this->analyst->id, 'classification' => Classification::Internal,
+            'retention_until' => now('UTC')->addDays(30)->toDateString(),
         ])->save();
 
         return $asset;

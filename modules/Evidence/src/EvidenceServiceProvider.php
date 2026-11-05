@@ -7,6 +7,8 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Modules\Evidence\Console\DispatchPendingScans;
+use Modules\Evidence\Console\ReconcileBlobs;
+use Modules\Evidence\Console\SweepQuarantine;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
 
@@ -23,11 +25,14 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         parent::boot();
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DispatchPendingScans::class]);
+            $this->commands([DispatchPendingScans::class, SweepQuarantine::class, ReconcileBlobs::class]);
         }
-        // A lost dispatch or a dead worker must not leave an upload in quarantine for good (TASK-0070 #1).
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            // A lost dispatch or a dead worker must not leave an upload in quarantine for good (TASK-0070 #1).
             $schedule->command('evidence:dispatch-scans')->everyFiveMinutes();
+            // P1-38: quarantine objects no asset waits for (TASK-0064 #2); blob holds and retention against the store (TASK-0074).
+            $schedule->command('evidence:sweep-quarantine')->hourly();
+            $schedule->command('evidence:reconcile-blobs')->dailyAt('02:30');
         });
 
         // Codes only: never the title, file name, URL or description (audit context holds no user input).
@@ -38,6 +43,8 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         $actions->define('evidence.downloaded', ['sha256' => 'sha256']);
         $actions->define('evidence.hold_set', ['blob_hold' => 'code']);
         $actions->define('evidence.hold_released', ['blob_hold' => 'code']);
+        // P1-38: what reconciliation changed or found on a blob (each key optional; EvidenceBlobReconciler).
+        $actions->define('evidence.blob_reconciled', ['record_hold' => 'code', 'retention' => 'code', 'object_hold' => 'code', 'object_retention' => 'code']);
 
         // P1-34: downloads per user, so a stolen session cannot pull the store in bulk unnoticed.
         RateLimiter::for('evidence-downloads', fn (Request $request) => Limit::perMinute(30)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));

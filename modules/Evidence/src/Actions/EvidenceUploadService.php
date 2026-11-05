@@ -48,9 +48,12 @@ use Throwable;
  *   is checked before the file is stored and again in the transaction under a share lock on the source row, and the
  *   policy in force then is recorded with the asset, so a suspension or a new policy decision (which lock the row
  *   for update) lands wholly before or after the capture;
+ * - the asset is kept until today plus that policy's `retention_days`, or the default (O33) without one (P1-38, O39);
  * - the object is written first, then the asset, its `uploaded` custody event and the audit event in one
  *   transaction; if the transaction fails, the object is deleted, so an asset never exists without its object.
- *   An object whose deletion also fails is left in the quarantine bucket without an asset (reported).
+ *   An object whose deletion also fails is left in the quarantine bucket without an asset (reported), for
+ *   evidence:sweep-quarantine. From before the write until the asset commits (or the object is cleaned up), the
+ *   upload holds a MySQL named lock on its key (`uploadLockName`), which the sweep honours (P1-38, TASK-0082 #1).
  */
 class EvidenceUploadService
 {
@@ -105,6 +108,17 @@ class EvidenceUploadService
         $key = $asset->quarantine_key = 'quarantine/'.$asset->ulid;
         $disk = $this->storage->disk(self::QUARANTINE_DISK);
 
+        // P1-38 (TASK-0082 #1): this upload owns its quarantine key until its asset commits or its object is cleaned
+        // up, by a MySQL named lock held on its connection. evidence:sweep-quarantine skips a key whose lock is held,
+        // so an upload that stalls between the write and the commit never loses its object. If the process dies, the
+        // lock goes with its connection, and so does the uncommitted asset.
+        $connection = $this->db->connection();
+        $lock = self::uploadLockName($key);
+        if ((int) ($connection->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$lock])->acquired ?? 0) !== 1) {
+            throw new RuntimeException('The quarantine key is already in use.'); // a fresh ULID: never expected
+        }
+        $release = fn () => $connection->select('SELECT RELEASE_LOCK(?)', [$lock]);
+
         // One cleanup boundary for the write and the records (TASK-0064 #1): a write that fails part-way (e.g. during a
         // multipart upload) leaves nothing either. Deleting a key that was never written is harmless.
         try {
@@ -116,11 +130,15 @@ class EvidenceUploadService
             }
 
             $saved = $this->db->transaction(function () use ($actor, $asset, $userId, $sourceUlid): EvidenceAsset {
+                $retentionDays = null;
                 if ($sourceUlid !== null) {
                     // P1-37: again under the share lock, so the policy recorded is the one in force at commit.
                     $source = $this->policyInForce($actor, $sourceUlid, true);
                     $asset->forceFill(['source_id' => $source->sourceId, 'source_policy_id' => $source->policyId]);
+                    $retentionDays = $source->policyRetentionDays;
                 }
+                // P1-38: kept for the recorded policy's retention, or the default (O33), counted from today (O39).
+                $asset->forceFill(['retention_until' => self::retentionUntil($retentionDays)]);
                 $asset->save();
                 $now = CarbonImmutable::now('UTC');
                 foreach ([...$asset->competitorScopes, ...$asset->marketScopes] as $scope) {
@@ -152,10 +170,14 @@ class EvidenceUploadService
                 // (P1-38, TASK-0064 #2). No file name, title or credentials.
                 Log::warning('evidence.quarantine_orphan', ['quarantine_key' => $key, 'cleanup_error' => $cleanup::class]);
                 report($cleanup);
+            } finally {
+                $release();
             }
 
             throw $e;
         }
+        // Released only once the asset is committed (at once when no outer transaction is open).
+        $connection->afterCommit($release);
 
         // Outside the cleanup boundary (P1-32b): the asset is already committed here, so a dispatch failure must
         // never delete its quarantine object. The scheduled evidence:dispatch-scans queues the scan again once the
@@ -167,6 +189,21 @@ class EvidenceUploadService
         }
 
         return $saved;
+    }
+
+    /** The MySQL named lock an upload holds on its quarantine key until its asset commits (P1-38); at most 64 characters. */
+    public static function uploadLockName(string $quarantineKey): string
+    {
+        return 'evidence-upload:'.substr($quarantineKey, -26);
+    }
+
+    /**
+     * The last day (UTC, Y-m-d) an asset uploaded today is kept (P1-38): today plus the source policy's retention
+     * days, or `evidence.default_retention_days` (O33) when there is no policy or it sets none.
+     */
+    public static function retentionUntil(?int $days): string
+    {
+        return CarbonImmutable::now('UTC')->startOfDay()->addDays($days ?? (int) config('evidence.default_retention_days'))->toDateString();
     }
 
     /**

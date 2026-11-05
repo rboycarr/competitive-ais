@@ -2,7 +2,10 @@
 
 namespace Modules\Platform\Tests\Feature;
 
+use ArrayObject;
+use Aws\Api\DateTimeResult;
 use Aws\CommandInterface;
+use Aws\Exception\AwsException;
 use Aws\MockHandler;
 use Aws\Result;
 use Carbon\CarbonImmutable;
@@ -216,5 +219,47 @@ class PrivateObjectStorageTest extends TestCase
             fclose($stream);
         }
         Storage::disk('evidence')->assertMissing('sha256/ab/cd/abcdef');
+    }
+
+    /**
+     * P1-38: retention is extended in governance mode on the stored version, never with a bypass; the lock state is
+     * read from the version, a version never held or retained reads as "off" and "none" (S3's and SeaweedFS's codes,
+     * as the local store answered), and any other error, such as a missing version, is raised.
+     */
+    public function test_locked_objects_extend_retention_and_read_the_lock_state(): void
+    {
+        config(['filesystems.disks.evidence.key' => 'synthetic-key', 'filesystems.disks.evidence.secret' => 'synthetic-secret']);
+        $disk = Storage::disk('evidence');
+        $this->assertInstanceOf(AwsS3V3Adapter::class, $disk);
+        $sent = new ArrayObject;
+        // In order: the extension, then three state reads (no lock; held and retained; a missing version).
+        $answers = [
+            [], ['code' => 'NoSuchObjectLegalHold'], ['code' => 'NoSuchObjectLockConfiguration'],
+            ['LegalHold' => ['Status' => 'ON']], ['Retention' => ['Mode' => 'GOVERNANCE', 'RetainUntilDate' => new DateTimeResult('2027-01-01T00:00:00Z')]],
+            ['code' => 'NoSuchKey'],
+        ];
+        $disk->getClient()->getHandlerList()->setHandler(new MockHandler(array_map(fn (array $answer): callable => function (CommandInterface $command) use ($answer, $sent): Result {
+            $sent->append([$command->getName(), $command['VersionId'] ?? null, $command['Retention'] ?? null, $command['BypassGovernanceRetention'] ?? null]);
+            if (isset($answer['code'])) {
+                throw new AwsException('Synthetic answer.', $command, ['code' => $answer['code']]);
+            }
+
+            return new Result($answer);
+        }, $answers)));
+
+        LockedObjects::extendRetention($disk, 'sha256/ab/cd/abcdef', 'v1', CarbonImmutable::parse('2027-01-01 00:00:00', 'UTC'));
+        $this->assertSame([['PutObjectRetention', 'v1', ['Mode' => 'GOVERNANCE', 'RetainUntilDate' => '2027-01-01T00:00:00Z'], null]], $sent->getArrayCopy());
+
+        $this->assertSame(['legalHold' => false, 'retainUntil' => null], LockedObjects::state($disk, 'sha256/ab/cd/abcdef', 'v1'));
+        $held = LockedObjects::state($disk, 'sha256/ab/cd/abcdef', 'v1');
+        $this->assertNotNull($held);
+        $this->assertSame([true, '2027-01-01T00:00:00Z'], [$held['legalHold'], $held['retainUntil']?->format('Y-m-d\TH:i:s\Z')]);
+        $this->assertThrows(fn () => LockedObjects::state($disk, 'sha256/ab/cd/abcdef', 'v1'), AwsException::class);
+        $this->assertSame(['GetObjectLegalHold', 'GetObjectRetention', 'GetObjectLegalHold', 'GetObjectRetention', 'GetObjectLegalHold'], array_column(array_slice($sent->getArrayCopy(), 1), 0));
+        $this->assertThrows(fn () => LockedObjects::extendRetention($disk, 'sha256/ab/cd/abcdef', null, CarbonImmutable::now('UTC')), RuntimeException::class, 'stored version');
+
+        Storage::fake('evidence'); // the fakes, in tests: skipped, or unknown
+        LockedObjects::extendRetention(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', null, CarbonImmutable::now('UTC'));
+        $this->assertNull(LockedObjects::state(Storage::disk('evidence'), 'sha256/ab/cd/abcdef', null));
     }
 }

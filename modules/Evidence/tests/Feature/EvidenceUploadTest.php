@@ -333,7 +333,7 @@ class EvidenceUploadTest extends TestCase
         $row = fn (array $overrides): array => $overrides + [
             'ulid' => (string) Str::ulid(), 'status' => 'quarantined', 'scan_status' => 'pending', 'quarantine_key' => 'quarantine/'.Str::ulid(),
             'original_filename' => 'a.pdf', 'size_bytes' => 10, 'title' => 'Probe', 'captured_at' => now(), 'uploaded_by' => $this->analyst->id,
-            'classification' => 'internal', 'created_at' => now(), 'updated_at' => now(),
+            'classification' => 'internal', 'retention_until' => now('UTC')->addDays(30)->toDateString(), 'created_at' => now(), 'updated_at' => now(),
         ];
         foreach ([
             ['status' => 'deleted'], ['scan_status' => 'maybe'], ['classification' => 'secret'], ['title' => ' '], ['size_bytes' => 0],
@@ -398,6 +398,7 @@ class EvidenceUploadTest extends TestCase
             'ulid' => (string) Str::ulid(), 'status' => $status, 'scan_status' => $scan, 'scanned_at' => $scan === 'pending' ? null : now(),
             'quarantine_key' => $status === 'quarantined' ? 'quarantine/'.Str::ulid() : null, 'original_filename' => 'a.pdf', 'size_bytes' => 10,
             'title' => $title, 'captured_at' => now(), 'uploaded_by' => ($uploader ?? $this->analyst)->id, 'classification' => $classification,
+            'retention_until' => now('UTC')->addDays(30)->toDateString(),
             // An available asset always has its blob (evidence_assets_blob_check, P1-32b).
             'evidence_blob_id' => $status === 'available' ? $this->blob() : null,
         ])->save();
