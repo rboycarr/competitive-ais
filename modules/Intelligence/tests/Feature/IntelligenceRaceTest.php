@@ -292,6 +292,39 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(['assign', 'reassign'], VerificationReview::query()->orderBy('id')->pluck('decision')->all());
     }
 
+    /**
+     * TASK-0089: an approval waiting for the supporting evidence's row while it is withdrawn sees the withdrawal once
+     * it gets the share lock, and is refused.
+     */
+    public function test_an_approval_waiting_on_evidence_being_withdrawn_is_refused(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p143w-'.bin2hex(random_bytes(6));
+        $reviewer = $this->reviewer('reviewer@example.test');
+        $item = $this->submitted();
+        $workflow = app(IntelligenceWorkflowService::class);
+        $workflow->assign($this->director, $item, ['reviewer' => $reviewer->ulid]);
+        $workflow->startReview($reviewer, $item);
+        $asset = (int) DB::table('claim_evidence_links')->value('evidence_asset_id');
+        $version = $item->refresh()->version;
+
+        $results = $this->race(
+            function () use ($asset, $signal): void {
+                DB::transaction(function () use ($asset, $signal): void {
+                    DB::table('evidence_assets')->where('id', $asset)->lockForUpdate()->first();
+                    DB::table('evidence_assets')->where('id', $asset)->update(['status' => 'withdrawn', 'evidence_blob_id' => null]);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceWorkflowService::class)->decide($reviewer, $item, ['decision' => 'approve', 'version' => $version]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame('in_review', $item->refresh()->status);
+        $this->assertSame(['assign'], VerificationReview::query()->pluck('decision')->all());
+    }
+
     public function test_the_migrations_refuse_to_roll_back_while_intelligence_exists(): void
     {
         $tables = fn (): array => [Schema::hasTable('claim_evidence_links'), Schema::hasTable('intelligence_items')];

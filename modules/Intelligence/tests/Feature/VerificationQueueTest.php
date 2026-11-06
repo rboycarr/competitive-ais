@@ -19,6 +19,7 @@ use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Intelligence\Models\VerificationReview;
 use Modules\Intelligence\Support\IntelligenceContent;
+use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
 use Tests\Support\AuthorizationMatrix;
 use Tests\Support\CreatesUsers;
@@ -398,6 +399,133 @@ class VerificationQueueTest extends TestCase
         $this->assertNotSame($hash, $cited);
         $this->claims()->withdraw($this->analyst, $item, $claim->ulid, ['version' => $item->version]);
         $this->assertNotSame($cited, IntelligenceContent::hash($item->refresh()), 'a withdrawn claim is still content');
+    }
+
+    /** TASK-0089: losing the permission or the sight of the item between assignment and decision ends the review. */
+    public function test_a_reviewer_who_loses_the_permission_or_the_item_cannot_decide(): void
+    {
+        $item = $this->inReview();
+        $decision = ['decision' => 'approve', 'version' => $item->version];
+
+        $this->reviewer->syncRoles(['exec_reader']);
+        $this->actingAs($this->reviewer->refresh())->post("/intelligence/{$item->ulid}/decision", $decision)->assertForbidden();
+        $this->reviewer->syncRoles(['ci_analyst']);
+
+        DB::table('access_grants')->where('user_id', $this->reviewer->id)->update(['revoked_at' => now(), 'revoked_by' => $this->director->id]);
+        app(AccessScope::class)->forget(); // grants are cached per request; the tests' requests share one application
+        $this->actingAs($this->reviewer->refresh())->post("/intelligence/{$item->ulid}/decision", $decision)->assertNotFound();
+        $this->assertSame('in_review', $item->refresh()->status);
+        $this->assertSame(0, VerificationReview::query()->where('decision', 'approve')->count());
+    }
+
+    /** TASK-0089: an owner who is not the author is kept from reviewing just the same. */
+    public function test_the_owner_never_reviews_the_item(): void
+    {
+        $owner = $this->createUser('owner@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        $this->grantAll($owner);
+        $item = $this->submitted();
+        DB::table('intelligence_items')->where('id', $item->id)->update(['owner_id' => $owner->id]);
+
+        $this->expectValidation(fn () => $this->workflow()->assign($this->director, $item->refresh(), ['reviewer' => $owner->ulid]), 'reviewer', 'The author or owner of an item cannot review it.');
+        $this->actingAs($this->director)->get("/intelligence/{$item->ulid}")->assertInertia(fn ($page) => $page
+            ->where('review.reviewers', fn ($list): bool => ! in_array($owner->ulid, array_column(is_array($list) ? $list : $list->all(), 'ulid'), true)));
+
+        // Assigned outside the service: still refused.
+        DB::table('intelligence_items')->where('id', $item->id)->update(['assigned_reviewer_id' => $owner->id]);
+        $this->actingAs($owner)->post("/intelligence/{$item->ulid}/review")->assertForbidden();
+        DB::table('intelligence_items')->where('id', $item->id)->update(['status' => 'in_review']);
+        $this->actingAs($owner)->post("/intelligence/{$item->ulid}/decision", ['decision' => 'approve', 'version' => $item->version])->assertForbidden();
+        $this->actingAs($owner)->get("/intelligence/{$item->ulid}")->assertInertia(fn ($page) => $page->where('review.canDecide', false));
+        $this->assertSame(0, VerificationReview::query()->count());
+    }
+
+    /** TASK-0089: reassigning before the review starts keeps the item submitted, with a reason. */
+    public function test_a_submitted_item_is_reassigned_with_a_reason(): void
+    {
+        $item = $this->submitted();
+        $other = $this->createUser('other@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        $this->grantAll($other);
+        $this->workflow()->assign($this->director, $item, ['reviewer' => $this->reviewer->ulid]);
+        $this->expectValidation(fn () => $this->workflow()->assign($this->director, $item, ['reviewer' => $other->ulid]), 'rationale', 'Give the reason for reassigning the review.');
+
+        $this->workflow()->assign($this->director, $item, ['reviewer' => $other->ulid, 'rationale' => 'Better placed']);
+        $this->assertSame(['submitted', $other->id], [$item->refresh()->status, $item->assigned_reviewer_id]);
+        $this->assertSame([['assign', $this->reviewer->id, null], ['reassign', $other->id, 'Better placed']],
+            VerificationReview::query()->orderBy('id')->get()->map(fn (VerificationReview $r): array => [$r->decision, $r->assignee_id, $r->rationale])->all());
+    }
+
+    /** TASK-0089: every part of the content changes the hash; putting it back restores it. */
+    public function test_every_content_field_changes_the_hash(): void
+    {
+        $item = $this->draft();
+        $claim = $this->claims()->add($this->analyst, $item, $this->claimFields() + ['version' => $item->version]);
+        $this->cite($item->refresh(), $claim, $this->available());
+        $link = (int) DB::table('claim_evidence_links')->value('id');
+        $base = IntelligenceContent::hash($item->refresh());
+        $market = (int) DB::table('markets')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'code' => 'HASH-M', 'name' => 'Hash market', 'country' => 'PH', 'default_currency' => 'USD', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $product = (int) DB::table('products')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'owner_kind' => 'own', 'competitor_id' => null, 'name' => 'Hash product',
+            'status' => 'active', 'classification' => 'internal', 'created_by' => $this->analyst->id, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $other = $this->competitor('Hash competitor');
+        $asset = $this->available();
+
+        $row = fn (string $table, int $id, array $values): array => [$table, $id, $values];
+        $changes = [
+            'title' => $row('intelligence_items', $item->id, ['title' => 'Other']),
+            'summary' => $row('intelligence_items', $item->id, ['summary' => 'Other']),
+            'item_type' => $row('intelligence_items', $item->id, ['item_type' => 'strategy']),
+            'classification' => $row('intelligence_items', $item->id, ['classification' => 'confidential']),
+            'high_impact' => $row('intelligence_items', $item->id, ['high_impact' => true]),
+            'observed_at' => $row('intelligence_items', $item->id, ['observed_at' => '2026-10-01 00:00:00']),
+            'published_at' => $row('intelligence_items', $item->id, ['published_at' => '2026-10-01 00:00:00']),
+            'collected_at' => $row('intelligence_items', $item->id, ['collected_at' => '2026-10-01 00:00:00']),
+            'statement' => $row('intelligence_claims', $claim->id, ['statement' => 'Other']),
+            'claim_type' => $row('intelligence_claims', $claim->id, ['claim_type' => 'rumor']),
+            'source_reliability' => $row('intelligence_claims', $claim->id, ['source_reliability' => 'C']),
+            'info_credibility' => $row('intelligence_claims', $claim->id, ['info_credibility' => 3]),
+            'claim status' => $row('intelligence_claims', $claim->id, ['status' => 'disputed']),
+            'position' => $row('intelligence_claims', $claim->id, ['position' => 7]),
+            'relation' => $row('claim_evidence_links', $link, ['relation' => 'context']),
+            'locator' => $row('claim_evidence_links', $link, ['locator' => 'p. 2']),
+            'excerpt' => $row('claim_evidence_links', $link, ['excerpt' => 'Quoted']),
+            'asset' => $row('claim_evidence_links', $link, ['evidence_asset_id' => $asset->id]),
+        ];
+        foreach ($changes as $label => [$table, $id, $values]) {
+            $before = (array) DB::table($table)->where('id', $id)->first(array_keys($values));
+            DB::table($table)->where('id', $id)->update($values);
+            $this->assertNotSame($base, IntelligenceContent::hash($item->refresh()), "$label is content");
+            DB::table($table)->where('id', $id)->update($before);
+            $this->assertSame($base, IntelligenceContent::hash($item->refresh()), "$label restored");
+        }
+        foreach ([['competitor_intelligence_item', 'competitor_id', $other], ['intelligence_item_product', 'product_id', $product], ['intelligence_item_market', 'market_id', $market]] as [$table, $column, $id]) {
+            DB::table($table)->insert(['intelligence_item_id' => $item->id, $column => $id]);
+            $this->assertNotSame($base, IntelligenceContent::hash($item->refresh()), "$table is content");
+            DB::table($table)->where('intelligence_item_id', $item->id)->where($column, $id)->delete();
+            $this->assertSame($base, IntelligenceContent::hash($item->refresh()), "$table restored");
+        }
+        DB::table('intelligence_items')->where('id', $item->id)->update(['version' => 9, 'status' => 'submitted', 'submitted_at' => now()]);
+        $this->assertSame($base, IntelligenceContent::hash($item->refresh()), 'version, status and times are not content');
+    }
+
+    /** TASK-0089: the queue's next page continues oldest first. */
+    public function test_the_queue_pages_oldest_first(): void
+    {
+        $ulids = [];
+        foreach (range(1, 52) as $i) {
+            $ulid = $this->queued("Queued $i", 'internal', [], []);
+            DB::table('intelligence_items')->where('ulid', $ulid)->update(['submitted_at' => now('UTC')->subMinutes(100 - $i)]);
+            $ulids[] = $ulid;
+        }
+        $first = $this->actingAs($this->reviewer)->get('/verification');
+        $this->assertSame(array_slice($ulids, 0, 50), array_column($first->inertiaProps('items'), 'ulid'));
+        $next = (string) $first->inertiaProps('nextPage');
+        $this->assertNotSame('', $next);
+        $second = $this->actingAs($this->reviewer)->get($next);
+        $this->assertSame(array_slice($ulids, 50), array_column($second->inertiaProps('items'), 'ulid'));
+        $this->assertNull($second->inertiaProps('nextPage'));
     }
 
     /** @param  list<string>  $problems */
