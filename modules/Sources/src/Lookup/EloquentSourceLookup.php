@@ -8,6 +8,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Modules\Sources\Contracts\SourceLookup;
 use Modules\Sources\Contracts\SourcePolicySummary;
+use Modules\Sources\Contracts\SourceSummary;
 use Modules\Sources\Models\Source;
 use Modules\Sources\Models\SourcePolicy;
 
@@ -50,6 +51,17 @@ class EloquentSourceLookup implements SourceLookup
             : SourcePolicy::query()->where('source_id', $source->id)->where('decision', 'approved')->find($policyId);
 
         return $source === null || $policy === null ? null : $this->summary($source, $policy);
+    }
+
+    public function summaries(Authenticatable $viewer, array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        return $this->visible($viewer)->whereIn('id', $ids)->get()
+            ->mapWithKeys(fn (Source $s): array => [$s->id => new SourceSummary($s->id, $s->ulid, $s->name, $s->status, $s->default_reliability)])
+            ->all();
     }
 
     /** @return Builder<Source> */

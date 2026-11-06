@@ -9,9 +9,12 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Modules\Evidence\Contracts\EvidenceLinking;
+use Modules\Evidence\Contracts\EvidenceSummary;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Intelligence\Actions\IntelligenceItemService;
 use Modules\Intelligence\Http\Requests\SaveItemRequest;
+use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Platform\Access\AccessScope;
@@ -23,6 +26,8 @@ use Modules\Registry\Contracts\MarketLookup;
 use Modules\Registry\Contracts\MarketSummary;
 use Modules\Registry\Contracts\ProductLookup;
 use Modules\Registry\Contracts\ProductSummary;
+use Modules\Sources\Contracts\SourceLookup;
+use Modules\Sources\Contracts\SourceSummary;
 
 /**
  * Intelligence feed and item page (P1-40). Items are filtered by IntelligenceItem::seenBy (AccessScope and
@@ -33,6 +38,8 @@ class IntelligenceItemController
 {
     private const PAGE = 50;
 
+    private const EVIDENCE_OPTIONS = 25;
+
     public function __construct(
         private readonly AccessScope $access,
         private readonly Gate $gate,
@@ -40,6 +47,8 @@ class IntelligenceItemController
         private readonly CompetitorLookup $competitors,
         private readonly ProductLookup $products,
         private readonly MarketLookup $markets,
+        private readonly EvidenceLinking $evidence,
+        private readonly SourceLookup $sources,
     ) {}
 
     public function index(Request $request): Response
@@ -103,7 +112,12 @@ class IntelligenceItemController
         $canEdit = $item->isEditable() && $hidden === 0 && in_array($viewerId, [$item->author_id, $item->owner_id], true)
             && $this->gate->forUser($viewer)->allows('intelligence.create');
         $markets = $this->markets->summaries($marketIds);
-        $claims = $item->claims()->orderBy('position')->orderBy('id')->get();
+        $claims = $item->claims()->with('evidenceLinks')->orderBy('position')->orderBy('id')->get();
+        $assets = $this->evidence->summaries($viewer, array_values(array_unique($claims->flatMap(
+            fn (IntelligenceClaim $c) => $c->evidenceLinks->pluck('evidence_asset_id'))->all())));
+        $sources = $this->sources->summaries($viewer, array_values(array_unique(array_filter(array_map(
+            fn (EvidenceSummary $e): ?int => $e->sourceId, $assets)))));
+        $search = $request->validate(['evidence_search' => ['nullable', 'string', 'max:100']])['evidence_search'] ?? null;
         $names = $this->users->summaries(array_values(array_unique([$item->author_id, $item->owner_id])));
         $date = fn (string $field): ?string => $item->{$field}?->toIso8601ZuluString();
 
@@ -139,8 +153,14 @@ class IntelligenceItemController
                 'reliability' => $c->source_reliability,
                 'credibility' => $c->info_credibility,
                 'status' => $c->status,
-            ])->values()->all(),
+            ] + $this->citations($c, $assets, $sources))->values()->all(),
             'canEdit' => $canEdit,
+            'relations' => ClaimEvidenceLink::RELATIONS,
+            // P1-41: what the editor may cite; the search is a partial reload of this prop.
+            'evidenceOptions' => $canEdit ? array_map(fn (EvidenceSummary $e): array => [
+                'ulid' => $e->ulid, 'title' => $e->title, 'capturedAt' => $e->capturedAt->toIso8601ZuluString(),
+            ], $this->evidence->linkable($viewer, $search, self::EVIDENCE_OPTIONS)) : [],
+            'evidenceSearch' => $search,
             // The editor's starting values: only for those who may edit.
             'form' => $canEdit ? [
                 'title' => $item->title,
@@ -174,6 +194,47 @@ class IntelligenceItemController
         $items->update($this->viewer($request), $item, $request->validated());
 
         return redirect()->route('intelligence.show', $item)->with('status', 'Item saved.');
+    }
+
+    /**
+     * A claim's citations (P1-41) as the viewer may see them: the asset's title, status and source (with its default
+     * reliability, ADR-0010) only when the viewer can see the asset (and the source); the others are counted, never
+     * described, locator and excerpt included.
+     *
+     * @param  array<int, EvidenceSummary>  $assets
+     * @param  array<int, SourceSummary>  $sources
+     * @return array{evidence: list<array<string, mixed>>, hiddenEvidence: int}
+     */
+    private function citations(IntelligenceClaim $claim, array $assets, array $sources): array
+    {
+        $shown = [];
+        $hidden = 0;
+        foreach ($claim->evidenceLinks->sortBy('id') as $link) {
+            $asset = $assets[$link->evidence_asset_id] ?? null;
+            if ($asset === null) {
+                $hidden++;
+
+                continue;
+            }
+            $source = $asset->sourceId === null ? null : ($sources[$asset->sourceId] ?? false);
+            $shown[] = [
+                'ulid' => $asset->ulid,
+                'title' => $asset->title,
+                'status' => $asset->status,
+                'capturedAt' => $asset->capturedAt->toIso8601ZuluString(),
+                'relation' => $link->relation,
+                'locator' => $link->locator,
+                'excerpt' => $link->excerpt,
+                // null: no registered source (O12); visible false: one the viewer cannot see, never named.
+                'source' => match (true) {
+                    $source === null => null,
+                    $source === false => ['visible' => false],
+                    default => ['visible' => true, 'name' => $source->name, 'reliability' => $source->defaultReliability],
+                },
+            ];
+        }
+
+        return ['evidence' => $shown, 'hiddenEvidence' => $hidden];
     }
 
     /** @return array<string, mixed> */

@@ -4,11 +4,16 @@ namespace Modules\Intelligence\Http\Controllers;
 
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Modules\Intelligence\Actions\IntelligenceClaimService;
 use Modules\Intelligence\Http\Requests\SaveClaimRequest;
+use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceItem;
 
-/** Claims of an item (P1-40): add, edit, withdraw and move; IntelligenceClaimService applies the item's edit rules. */
+/**
+ * Claims of an item (P1-40): add, edit, withdraw and move; their evidence (P1-41): cite and stop citing.
+ * IntelligenceClaimService applies the item's edit rules.
+ */
 class IntelligenceClaimController
 {
     public function __construct(private readonly IntelligenceClaimService $claims) {}
@@ -42,6 +47,30 @@ class IntelligenceClaimController
         ]));
 
         return $this->back($item, 'Claim moved.');
+    }
+
+    public function link(Request $request, IntelligenceItem $item, string $claim): RedirectResponse
+    {
+        $this->claims->link($request->user() ?? abort(401), $item, $claim, $request->validate([
+            'evidence' => ['required', 'string', 'ulid'],
+            'relation' => ['required', Rule::in(ClaimEvidenceLink::RELATIONS)],
+            'locator' => ['nullable', 'string', 'max:'.IntelligenceClaimService::MAX_LOCATOR],
+            'excerpt' => ['nullable', 'string', 'max:'.IntelligenceClaimService::MAX_EXCERPT],
+            'version' => ['required', 'integer', 'min:1'],
+        ]));
+
+        return $this->back($item, 'Evidence cited.');
+    }
+
+    public function unlink(Request $request, IntelligenceItem $item, string $claim): RedirectResponse
+    {
+        $this->claims->unlink($request->user() ?? abort(401), $item, $claim, $request->validate([
+            'evidence' => ['required', 'string', 'ulid'],
+            'relation' => ['required', Rule::in(ClaimEvidenceLink::RELATIONS)],
+            'version' => ['required', 'integer', 'min:1'],
+        ]));
+
+        return $this->back($item, 'Evidence no longer cited.');
     }
 
     private function back(IntelligenceItem $item, string $status): RedirectResponse

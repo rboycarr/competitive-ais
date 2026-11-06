@@ -131,6 +131,7 @@ AI approval never replaces human approval.
 | TASK-0082 | Review of P1-38 (duplicate uploads and job retries cannot corrupt shared blobs) | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/evidence-dedup-retries` @ `58534a5` | **Reviewed: "no", one high (the quarantine sweep could delete the object of an upload stalled before its commit); fixed with a per-key upload lock the sweep honours.** | `handoffs/TASK-0082-review.md` |
 | TASK-0083 | Verification of the TASK-0082 fix | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/evidence-dedup-retries` @ `4ac15b1` | **Reviewed: the TASK-0082 finding resolved, no new findings; "yes".** | `handoffs/TASK-0083-review.md` |
 | TASK-0084 | Review of P1-40 (intelligence items with typed, rated claims) | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/intelligence-items` @ `d0d98ee` | **Reviewed: "yes", no findings; missing tests added, concurrency and rollback tests moved to P1-41.** | `handoffs/TASK-0084-review.md` |
+| TASK-0085 | Review of P1-41 (claims cite evidence with locator and excerpt) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/claim-evidence-links` from `ca25bc8` | Brief written 2026-11-06; awaiting review | `handoffs/TASK-0085.md` |
 
 ## 4. Decision and disagreement log
 

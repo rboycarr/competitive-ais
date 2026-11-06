@@ -5,6 +5,7 @@ namespace Modules\Intelligence\Models;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * A claim of an intelligence item (P1-40, docs/02 §3.6): a typed statement (observed fact … AI hypothesis, kept apart
@@ -43,6 +44,12 @@ class IntelligenceClaim extends Model
     public function item(): BelongsTo
     {
         return $this->belongsTo(IntelligenceItem::class, 'intelligence_item_id');
+    }
+
+    /** @return HasMany<ClaimEvidenceLink, $this> */
+    public function evidenceLinks(): HasMany
+    {
+        return $this->hasMany(ClaimEvidenceLink::class);
     }
 
     /** The compact Admiralty badge, e.g. "B2". */

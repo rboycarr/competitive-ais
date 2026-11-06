@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\RateLimiter;
 use Modules\Evidence\Console\DispatchPendingScans;
 use Modules\Evidence\Console\ReconcileBlobs;
 use Modules\Evidence\Console\SweepQuarantine;
+use Modules\Evidence\Contracts\EvidenceLinking;
+use Modules\Evidence\Lookup\EloquentEvidenceLinking;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
 
@@ -20,6 +22,14 @@ use Modules\Platform\Support\ModuleServiceProvider;
  */
 class EvidenceServiceProvider extends ModuleServiceProvider
 {
+    public function register(): void
+    {
+        parent::register();
+
+        // Intelligence cites evidence through this contract (P1-41).
+        $this->app->bind(EvidenceLinking::class, EloquentEvidenceLinking::class);
+    }
+
     public function boot(): void
     {
         parent::boot();
