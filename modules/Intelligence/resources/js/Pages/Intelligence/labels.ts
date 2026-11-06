@@ -20,6 +20,31 @@ const CREDIBILITY: Record<number, string> = {
 // P1-41: how a piece of evidence bears on a claim.
 const RELATIONS: Record<string, string> = { supports: 'Supports', contradicts: 'Contradicts', context: 'Context' };
 
+// P1-43: verification decisions, as a review history row reads.
+const DECISIONS: Record<string, string> = {
+    assign: 'Assigned', reassign: 'Reassigned', approve: 'Approved', request_changes: 'Changes requested', reject: 'Rejected',
+    publish: 'Published', flag_for_rereview: 'Flagged for re-review',
+};
+// The choices a reviewer makes.
+const DECISION_CHOICES: Record<string, string> = { approve: 'Approve', request_changes: 'Request changes', reject: 'Reject' };
+
+export const decisionLabel = (decision: string): string => DECISIONS[decision] ?? decision;
+export const decisionChoiceLabel = (decision: string): string => DECISION_CHOICES[decision] ?? decision;
+// How long an item has waited since it was submitted, in whole minutes, hours or days (the queue's age).
+export function ageLabel(iso: string | null, now: Date = new Date()): string {
+    if (iso === null) {
+        return '—';
+    }
+    const minutes = Math.max(0, Math.floor((now.getTime() - new Date(iso).getTime()) / 60000));
+    if (minutes < 60) {
+        return minutes === 1 ? '1 minute' : `${minutes} minutes`;
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) {
+        return hours === 1 ? '1 hour' : `${hours} hours`;
+    }
+    return `${Math.floor(hours / 24)} days`;
+}
 export const relationLabel = (relation: string): string => RELATIONS[relation] ?? relation;
 export const typeLabel =(type: string): string => TYPES[type] ?? type;
 export const statusLabel = (status: string): string => STATUSES[status] ?? status;

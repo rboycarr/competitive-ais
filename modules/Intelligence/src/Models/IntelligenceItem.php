@@ -35,6 +35,8 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * @property ?CarbonInterface $observed_at
  * @property ?CarbonInterface $published_at published by the source
  * @property ?CarbonInterface $collected_at
+ * @property ?CarbonInterface $submitted_at when the current submission was made (P1-43: the queue's age)
+ * @property ?CarbonInterface $verified_at when a reviewer approved it (P1-43)
  * @property ?CarbonInterface $released_at published here (P1-44)
  * @property int $version
  * @property ?CarbonInterface $created_at
@@ -53,6 +55,9 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
 
     /** Readable by anyone AccessScope allows; the others only per statusVisible. */
     public const RELEASED = ['published', 'retracted', 'superseded'];
+
+    /** In the verification queue (P1-43): waiting for a reviewer, or being reviewed. */
+    public const IN_QUEUE = ['submitted', 'in_review'];
 
     /** Not yet decided: a competitor they are about cannot be archived (docs/03 Registry). */
     public const OPEN = ['draft', 'submitted', 'in_review', 'changes_requested', 'approved'];
@@ -168,6 +173,12 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
         return $this->hasMany(IntelligenceClaim::class);
     }
 
+    /** @return HasMany<VerificationReview, $this> */
+    public function reviews(): HasMany
+    {
+        return $this->hasMany(VerificationReview::class);
+    }
+
     /**
      * @return array<string, string>
      */
@@ -183,6 +194,8 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
             'observed_at' => 'datetime',
             'published_at' => 'datetime',
             'collected_at' => 'datetime',
+            'submitted_at' => 'datetime',
+            'verified_at' => 'datetime',
             'released_at' => 'datetime',
         ];
     }

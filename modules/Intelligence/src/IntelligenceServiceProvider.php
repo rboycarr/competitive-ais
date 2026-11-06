@@ -9,7 +9,8 @@ use Modules\Platform\Support\ModuleServiceProvider;
 
 /**
  * Intelligence (M10, docs/03): items, their subjects and their typed, rated claims (P1-40), and the evidence the claims
- * cite (P1-41). Submission (P1-42), the verification queue (P1-43), publication (P1-44) and the provenance view (P1-45) follow.
+ * cite (P1-41), submission (P1-42) and the verification queue (P1-43). Publication (P1-44) and the provenance view
+ * (P1-45) follow.
  * Items are classified records scoped by their competitor and market subjects (all-of); unreleased items are seen only
  * per statusVisible (docs/07 §3).
  */
@@ -42,6 +43,10 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
         $audit->define('intelligence.evidence_unlinked', $link);
         // P1-42: the workflow.
         $audit->define('intelligence.submitted', ['version' => 'int', 'claims' => 'int']);
+        // P1-43: never the rationale (it is on the review row).
+        $audit->define('intelligence.reviewer_assigned', ['decision' => 'code', 'reviewer_ulid' => 'ulid', 'review_ulid' => 'ulid', 'version' => 'int']);
+        $audit->define('intelligence.review_started', ['version' => 'int']);
+        $audit->define('intelligence.reviewed', ['decision' => 'code', 'review_ulid' => 'ulid', 'version' => 'int']);
         // Domain events (docs/03: IntelligenceSubmitted, …) are defined with their first consumer.
     }
 }

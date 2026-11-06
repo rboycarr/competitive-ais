@@ -60,6 +60,17 @@ interface EvidenceLinking
     public function available(array $ids, bool $lock = false): array;
 
     /**
+     * Those of these assets that are `available` and that the viewer sees as their scopes are now (P1-43: what an
+     * approver must be able to check); only IDs. Their rows are locked in share mode in ID order and the scopes read
+     * with locking reads, so neither changes until the caller's transaction ends: call it inside that transaction,
+     * after locking the citing item.
+     *
+     * @param  list<int>  $ids
+     * @return list<int>
+     */
+    public function availableSeen(Authenticatable $viewer, array $ids): array;
+
+    /**
      * The assets with these IDs that the viewer can see, keyed by ID, in any status the viewer may see.
      *
      * @param  list<int>  $ids

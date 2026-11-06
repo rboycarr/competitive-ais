@@ -168,6 +168,9 @@ class IdentityServiceProvider extends ModuleServiceProvider
                     'sourceView' => $user->checkPermissionTo('source.view'),
                     'evidenceView' => $user->checkPermissionTo('evidence.view'),
                     'intelligenceView' => $user->checkPermissionTo('intelligence.view'),
+                    // P1-43: the verification queue, for reviewers and directors.
+                    'verificationQueue' => $user->checkPermissionTo('intelligence.view')
+                        && ($user->checkPermissionTo('intelligence.review') || $user->checkPermissionTo('intelligence.publish')),
                 ] : [],
             ];
         });

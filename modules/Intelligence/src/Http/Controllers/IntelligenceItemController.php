@@ -12,12 +12,14 @@ use Inertia\Response;
 use Modules\Evidence\Contracts\EvidenceLinking;
 use Modules\Evidence\Contracts\EvidenceSummary;
 use Modules\Identity\Contracts\UserDirectory;
+use Modules\Identity\Contracts\UserSummary;
 use Modules\Intelligence\Actions\IntelligenceItemService;
 use Modules\Intelligence\Actions\IntelligenceWorkflowService;
 use Modules\Intelligence\Http\Requests\SaveItemRequest;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Intelligence\Models\VerificationReview;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
 use Modules\Platform\Support\SafeMarkdown;
@@ -161,6 +163,7 @@ class IntelligenceItemController
             ] + $this->citations($c, $assets, $sources))->values()->all(),
             'canEdit' => $canEdit,
             'submission' => $canSubmit ? ['problems' => $this->workflow->problems($item)] : null,
+            'review' => $this->review($viewer, $item),
             'relations' => ClaimEvidenceLink::RELATIONS,
             // P1-41: what the editor may cite; the search is a partial reload of this prop.
             'evidenceOptions' => $canEdit ? array_map(fn (EvidenceSummary $e): array => [
@@ -205,7 +208,8 @@ class IntelligenceItemController
     /** P1-42: draft or changes requested to submitted, when every claim is evidence-backed. */
     public function submit(Request $request, IntelligenceItem $item): RedirectResponse
     {
-        $this->workflow->submit($this->viewer($request), $item, $request->validate(['version' => ['required', 'integer', 'min:1']]));
+        // Validated by the service after the visibility check, so a hidden item is 404 whatever the input (TASK-0087 #1).
+        $this->workflow->submit($this->viewer($request), $item, $request->only('version'));
 
         return redirect()->route('intelligence.show', $item)->with('status', 'Submitted for review. The item is frozen until a reviewer decides.');
     }
@@ -249,6 +253,53 @@ class IntelligenceItemController
         }
 
         return ['evidence' => $shown, 'hiddenEvidence' => $hidden];
+    }
+
+    /**
+     * The item's verification (P1-43), for anyone who sees the item: its reviewer, the current submission's time and
+     * the review history (rationales included: they are part of the item's record). What the viewer may do, as
+     * IntelligenceWorkflowService checks it: a director assigns (to reviewers who may review it); the assigned reviewer
+     * starts the review, then decides, seeing what still blocks an approval.
+     *
+     * @return array<string, mixed>
+     */
+    private function review(Authenticatable $viewer, IntelligenceItem $item): array
+    {
+        $viewerId = (int) $viewer->getAuthIdentifier();
+        $gate = $this->gate->forUser($viewer);
+        $inQueue = in_array($item->status, IntelligenceItem::IN_QUEUE, true);
+        $assigned = $item->assigned_reviewer_id === $viewerId && ! in_array($viewerId, [$item->author_id, $item->owner_id], true)
+            && $gate->allows('intelligence.review');
+        $canAssign = $inQueue && $gate->allows('intelligence.publish');
+        $canDecide = $assigned && $item->status === 'in_review';
+        $reviews = $item->reviews()->orderBy('decided_at')->orderBy('id')->get();
+        $names = $this->users->summaries(array_values(array_unique(array_filter(array_merge(
+            [$item->assigned_reviewer_id], $reviews->pluck('reviewer_id')->all(), $reviews->pluck('assignee_id')->all())))));
+        $name = fn (?int $id): ?string => $id === null ? null : ($names[$id]->name ?? null);
+
+        return [
+            'reviewer' => $name($item->assigned_reviewer_id),
+            'submittedAt' => $item->submitted_at?->toIso8601ZuluString(),
+            'verifiedAt' => $item->verified_at?->toIso8601ZuluString(),
+            'history' => $reviews->map(fn (VerificationReview $r): array => [
+                'ulid' => $r->ulid,
+                'decision' => $r->decision,
+                'by' => $name($r->reviewer_id),
+                'assignee' => $name($r->assignee_id),
+                'rationale' => $r->rationale,
+                'version' => $r->item_version,
+                'decidedAt' => $r->decided_at->toIso8601ZuluString(),
+            ])->values()->all(),
+            'canAssign' => $canAssign,
+            // Who may be assigned: active reviewers, not the author or owner, who can see the item.
+            'reviewers' => $canAssign ? array_values(array_map(fn (UserSummary $u): array => ['ulid' => $u->ulid, 'name' => $u->name],
+                array_filter($this->users->activeHolders('intelligence.review'), fn (UserSummary $u): bool => ! in_array($u->id, [$item->author_id, $item->owner_id], true)
+                    && $u->id !== $item->assigned_reviewer_id && $this->users->maySee($u->id, $item)))) : [],
+            'canStart' => $assigned && $item->status === 'submitted',
+            'canDecide' => $canDecide,
+            'decisions' => VerificationReview::DECISIONS,
+            'approvalProblems' => $canDecide ? $this->workflow->problems($item, reviewer: $viewer) : [],
+        ];
     }
 
     /** @return array<string, mixed> */
