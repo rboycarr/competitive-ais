@@ -23,9 +23,11 @@ use Modules\Platform\Classification;
  * - a claim is a statement (plain text, at most MAX_STATEMENT characters) with its type, kept apart from its two
  *   human-assigned Admiralty ratings: source reliability A–F and information credibility 1–6. Both are chosen by the
  *   writer, never defaulted; the default reliability of a cited source is shown beside them (P1-41), never copied;
- * - a claim cites evidence (P1-41): an available asset the writer can see (checked under a share lock on the asset,
- *   so it cannot be withdrawn or rejected meanwhile), as supporting, contradicting or giving context, with an optional
- *   locator and excerpt; at most MAX_LINKS per claim, each asset and relation once. A link is removed, not edited, and
+ * - a claim cites evidence (P1-41): an available asset the writer can see (checked under the asset's row lock, from
+ *   its current scopes, so it cannot be withdrawn, rejected or rescoped meanwhile), as supporting, contradicting or
+ *   giving context, with an optional locator and excerpt; at most MAX_LINKS per claim, each asset and relation once.
+ *   The asset inherits the item's competitors and markets as scopes, never removed, and the writer must still see it
+ *   afterwards (P1-36b). A link is removed, not edited, and
  *   only by someone who can see its asset. Each change is also a `linked` / `unlinked` event in the asset's custody
  *   trail. Lock order: the item, then the asset;
  * - claims change under the item's rules (IntelligenceItemService::assertMayEdit): editable item, author or owner,
@@ -151,6 +153,11 @@ class IntelligenceClaimService
                 ?? throw ValidationException::withMessages(['evidence' => 'Choose available evidence you can see.']);
             if ($claim->evidenceLinks()->where('evidence_asset_id', $asset->id)->where('relation', $relation)->exists()) {
                 throw ValidationException::withMessages(['evidence' => 'The claim already cites this evidence that way.']);
+            }
+            // P1-36b: the evidence takes the item's competitors and markets as scopes; nobody cites their way out of seeing it.
+            $this->evidence->inherit($actor, $asset->id, $locked->ulid, $locked->competitorIds(), $locked->marketIds());
+            if ($this->evidence->lockSeen($actor, [$asset->id]) === []) {
+                throw ValidationException::withMessages(['evidence' => 'Citing this evidence would restrict it to the item\'s competitors and markets, and you could no longer see it.']);
             }
             $userId = (int) $actor->getAuthIdentifier();
             $link = new ClaimEvidenceLink;

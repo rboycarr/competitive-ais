@@ -53,6 +53,8 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         $actions->define('evidence.downloaded', ['sha256' => 'sha256']);
         $actions->define('evidence.hold_set', ['blob_hold' => 'code']);
         $actions->define('evidence.hold_released', ['blob_hold' => 'code']);
+        // P1-36b: scopes taken from the item a claim cites the evidence in (counts; the IDs are in the custody trail).
+        $actions->define('evidence.scope_inherited', ['item_ulid' => 'ulid', 'competitors' => 'int', 'markets' => 'int']);
         // P1-38: what reconciliation changed or found on a blob (each key optional; EvidenceBlobReconciler).
         $actions->define('evidence.blob_reconciled', ['record_hold' => 'code', 'retention' => 'code', 'object_hold' => 'code', 'object_retention' => 'code']);
 

@@ -10,6 +10,8 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Modules\Evidence\Contracts\EvidenceLinking;
+use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Intelligence\Models\IntelligenceItemCompetitor;
 use Modules\Intelligence\Models\IntelligenceItemMarket;
@@ -34,7 +36,8 @@ use Throwable;
  * - subjects are competitors the writer can see, products the writer can see (a competitor's product brings its
  *   competitor in, so an item about a product is scoped like one about its maker) and markets; at least one, at most
  *   MAX_SUBJECTS of each. A competitor is named only while it is not archived, checked under a share lock on its row
- *   (CompetitorLookup::lockUnarchived), which archiving waits for;
+ *   (CompetitorLookup::lockUnarchived), which archiving waits for. A new competitor or market becomes a scope of every
+ *   piece of evidence the item's claims cite (P1-36b); removing a subject leaves those scopes;
  * - nobody writes an item they could not read back (classification and every subject, all-of), and lowering a
  *   classification needs intelligence.publish (docs/07 §3);
  * - the summary is Markdown source (at most MAX_SUMMARY characters), shown only through SafeMarkdown;
@@ -60,6 +63,7 @@ class IntelligenceItemService
         private readonly CompetitorLookup $competitors,
         private readonly ProductLookup $products,
         private readonly MarketLookup $markets,
+        private readonly EvidenceLinking $evidence,
     ) {}
 
     /**
@@ -145,6 +149,9 @@ class IntelligenceItemService
                     'markets' => array_values(array_diff($subjects['markets'], $previous['markets'])),
                 ]);
                 $changed[] = 'subjects';
+                if (array_diff($subjects['competitors'], $previous['competitors']) !== [] || array_diff($subjects['markets'], $previous['markets']) !== []) {
+                    $this->inheritToCitedEvidence($actor, $locked, $subjects);
+                }
             }
             // The higher of the two classifications: whoever could read the item before or after may see the event.
             $this->audit->record('intelligence.updated', $locked, ['fields' => $changed, 'version' => $locked->version],
@@ -170,6 +177,29 @@ class IntelligenceItemService
         }
         if (! is_numeric($version) || (int) $version !== $locked->version) {
             throw ValidationException::withMessages(['version' => 'Someone changed this item since you opened it. Reload it and make your change again.']);
+        }
+    }
+
+    /**
+     * P1-36b: evidence the item's claims cite (withdrawn claims included: their citations stay on record) inherits a
+     * new competitor or market as a scope, under the asset rows' locks (after the item's, in ID order). Evidence the
+     * editor saw must stay visible to them, or the change is refused (as when citing it).
+     *
+     * @param  array{competitors: list<int>, products: list<int>, markets: list<int>}  $subjects
+     */
+    private function inheritToCitedEvidence(Authenticatable $actor, IntelligenceItem $locked, array $subjects): void
+    {
+        $assetIds = array_values(array_map('intval', ClaimEvidenceLink::query()
+            ->whereIn('intelligence_claim_id', $locked->claims()->select('id'))->distinct()->orderBy('evidence_asset_id')->pluck('evidence_asset_id')->all()));
+        if ($assetIds === []) {
+            return;
+        }
+        $seen = $this->evidence->lockSeen($actor, $assetIds);
+        foreach ($assetIds as $id) {
+            $this->evidence->inherit($actor, $id, $locked->ulid, $subjects['competitors'], $subjects['markets']);
+        }
+        if (array_diff($seen, $this->evidence->lockSeen($actor, $assetIds)) !== []) {
+            throw ValidationException::withMessages(['subjects' => 'Evidence this item cites would take these subjects as scopes, and you could no longer see it.']);
         }
     }
 

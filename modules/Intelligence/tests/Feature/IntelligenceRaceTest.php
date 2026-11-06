@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Evidence\Actions\EvidenceScanService;
+use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Models\User;
 use Modules\Intelligence\Actions\IntelligenceClaimService;
 use Modules\Intelligence\Actions\IntelligenceItemService;
@@ -70,6 +71,7 @@ class IntelligenceRaceTest extends TestCase
             $migrator->table('evidence_custody_events')->delete();
             $migrator->table('evidence_assets')->delete();
             $migrator->table('evidence_blobs')->delete();
+            $migrator->table('access_grants')->where('scope_type', 'competitor')->delete(); // the grant migration refuses to roll back over them
             DB::disconnect('migrator');
         }
 
@@ -96,10 +98,11 @@ class IntelligenceRaceTest extends TestCase
 
             $asset = $this->available();
             $version = $item->version;
-            $results = Concurrently::run(array_map(fn (string $relation) => fn () => app(IntelligenceClaimService::class)
-                ->link($this->analyst, $item, $claims[0]->ulid, ['evidence' => $asset, 'relation' => $relation, 'version' => $version]), ['supports', 'contradicts', 'context', 'supports']));
+            // Different claims of the item, and different relations, citing one asset (TASK-0086).
+            $results = Concurrently::run(array_map(fn (array $c) => fn () => app(IntelligenceClaimService::class)
+                ->link($this->analyst, $item, $claims[$c[0]]->ulid, ['evidence' => $asset, 'relation' => $c[1], 'version' => $version]), [[0, 'supports'], [1, 'contradicts'], [2, 'context'], [0, 'context']]));
             $this->assertOneWinner($results, "links, round $round");
-            $this->assertSame(1, ClaimEvidenceLink::query()->where('intelligence_claim_id', $claims[0]->id)->count());
+            $this->assertSame(1, ClaimEvidenceLink::query()->whereIn('intelligence_claim_id', array_map(fn (IntelligenceClaim $c): int => $c->id, $claims))->count());
             $this->assertSame(1, DB::table('evidence_custody_events')->where('event', 'linked')->whereJsonContains('details->item', $item->ulid)->count());
             $this->assertSame($version + 1, $item->refresh()->version);
         }
@@ -144,6 +147,79 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
         $this->assertSame('archived', $second->refresh()->lifecycle);
         $this->assertSame(0, IntelligenceItem::query()->whereHas('competitorSubjects', fn ($q) => $q->where('competitor_id', $second->id))->count());
+    }
+
+    /**
+     * TASK-0086: two edits of one item from the same version, each adding a different subject to an item whose claim
+     * cites evidence: one wins, and the evidence inherits exactly the winner's subject, recorded once.
+     */
+    public function test_concurrent_subject_edits_from_one_version_inherit_once(): void
+    {
+        [$a, $b] = [$this->competitor('Acme'), $this->competitor('Globex')];
+        $market = DB::table('markets')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'code' => 'PH-NCR', 'name' => 'Metro Manila', 'country' => 'PH', 'default_currency' => 'USD', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $marketUlid = (string) DB::table('markets')->where('id', $market)->value('ulid');
+        $item = $this->item($a);
+        $claim = app(IntelligenceClaimService::class)->add($this->analyst, $item, ['statement' => 'A', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+        $asset = $this->available();
+        app(IntelligenceClaimService::class)->link($this->analyst, $item, $claim->ulid, ['evidence' => $asset, 'relation' => 'supports', 'version' => 2]);
+        $edit = fn (array $subjects) => fn () => app(IntelligenceItemService::class)->update($this->analyst, $item, [
+            'title' => 'Widget launch', 'summary' => '', 'item_type' => 'news', 'classification' => 'internal', 'version' => 3,
+        ] + $subjects + ['competitors' => [$a->ulid], 'markets' => []]);
+
+        $results = Concurrently::run([$edit(['competitors' => [$a->ulid, $b->ulid]]), $edit(['markets' => [$marketUlid]]), $edit(['competitors' => [$a->ulid, $b->ulid]])]);
+        $this->assertOneWinner($results, 'subject edits');
+
+        $item->refresh();
+        $assetId = (int) DB::table('evidence_assets')->where('ulid', $asset)->value('id');
+        $scopes = [
+            DB::table('evidence_asset_competitor')->where('evidence_asset_id', $assetId)->orderBy('competitor_id')->pluck('competitor_id')->map(fn ($id) => (int) $id)->all(),
+            DB::table('evidence_asset_market')->where('evidence_asset_id', $assetId)->pluck('market_id')->map(fn ($id) => (int) $id)->all(),
+        ];
+        $this->assertSame(4, $item->version);
+        $this->assertSame($item->marketIds() === [] ? [[$a->id, $b->id], []] : [[$a->id], [(int) $market]], $scopes, 'exactly the winner\'s subject');
+        $this->assertSame(2, DB::table('evidence_custody_events')->where('evidence_asset_id', $assetId)->where('event', 'scope_inherited')->count(), 'on citing, then once for the winner');
+    }
+
+    /**
+     * P1-36b: a link waiting for the asset's row lock judges visibility from the scopes committed while it waited, not
+     * from its transaction's earlier snapshot: a writer who cannot see competitor B never cites evidence that has just
+     * inherited B.
+     */
+    public function test_a_waiting_link_sees_scopes_inherited_while_it_waited(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p136b-'.bin2hex(random_bytes(6));
+        [$a, $b] = [$this->competitor('Acme'), $this->competitor('Globex')];
+        $narrow = $this->createUser('narrow@example.test', 'ci_analyst', clearance: Classification::Confidential);
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $narrow->id, 'scope_type' => 'competitor', 'competitor_id' => $a->id, 'max_classification' => 'confidential',
+            'granted_by' => $this->director->id, 'reason' => 'Synthetic test grant', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $asset = $this->available(); // internal, unscoped: both writers see it now
+        $aboutB = $this->item($b);
+        $claimB = app(IntelligenceClaimService::class)->add($this->analyst, $aboutB, ['statement' => 'B', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+        $aboutA = app(IntelligenceItemService::class)->create($narrow, ['title' => 'About A', 'summary' => '', 'item_type' => 'news', 'classification' => 'internal', 'competitors' => [$a->ulid]]);
+        $claimA = app(IntelligenceClaimService::class)->add($narrow, $aboutA, ['statement' => 'A', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+
+        $results = $this->race(
+            function () use ($aboutB, $claimB, $asset, $signal): void {
+                EvidenceCustodyEvent::creating(function (EvidenceCustodyEvent $event) use ($signal): void {
+                    if ($event->event === 'scope_inherited') {
+                        touch($signal); // B is inherited, uncommitted, and the asset row is locked
+                        usleep(1_500_000);
+                    }
+                });
+                app(IntelligenceClaimService::class)->link($this->analyst, $aboutB, $claimB->ulid, ['evidence' => $asset, 'relation' => 'supports', 'version' => 2]);
+            },
+            fn () => app(IntelligenceClaimService::class)->link($narrow, $aboutA, $claimA->ulid, ['evidence' => $asset, 'relation' => 'supports', 'version' => 2]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame([$claimB->id], ClaimEvidenceLink::query()->pluck('intelligence_claim_id')->all());
+        $this->assertSame([$b->id], DB::table('evidence_asset_competitor')->join('evidence_assets', 'evidence_assets.id', '=', 'evidence_asset_id')
+            ->where('evidence_assets.ulid', $asset)->pluck('competitor_id')->map(fn ($id) => (int) $id)->all());
     }
 
     public function test_the_migrations_refuse_to_roll_back_while_intelligence_exists(): void
