@@ -14,11 +14,14 @@ use Modules\Identity\Contracts\UserDirectory;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Intelligence\Models\Retraction;
 use Modules\Intelligence\Models\VerificationReview;
 use Modules\Intelligence\Support\IntelligenceContent;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Classification;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
  * The intelligence workflow (docs/03 Intelligence, state machine), one method per transition. Every transition: an item
@@ -37,10 +40,22 @@ use Modules\Platform\Audit\AuditLogger;
  * - decide (P1-43): in_review to approved, changes_requested or rejected, by the assigned reviewer only (never the
  *   author or owner), from the version read; a reason for requesting changes or rejecting. Approval also needs every
  *   claim supported by available evidence the reviewer can see, share-locked after the item; it sets verified_at.
+ * - publish (P1-44): approved to published, by intelligence.publish, never the author, owner or approving reviewer
+ *   (author, approver and publisher pairwise distinct), from the version read; the approval must be for the current
+ *   version and its content hash must match the content recomputed under the lock (docs/02 §3.6); confidential or
+ *   restricted or high-impact items only by an active holder of the Director role (read under a share lock on their
+ *   row); every claim still supported by available evidence. Sets released_at and writes a `publish` review row. An item
+ *   drafted as a replacement supersedes the item it replaces in the same transaction (that item must still be
+ *   published), both rows locked in ID order.
+ * - retract (P1-44): published to retracted, by intelligence.retract, with a reason, optionally naming another
+ *   published item the actor can see as the replacement (both rows locked in ID order); an append-only retraction row.
  */
 class IntelligenceWorkflowService
 {
     public const MAX_RATIONALE = 5000;
+
+    /** The role the Director rule names (docs/03): seeded by Identity, editable only in its permissions. */
+    public const DIRECTOR_ROLE = 'ci_director';
 
     public function __construct(
         private readonly DatabaseManager $db,
@@ -176,6 +191,142 @@ class IntelligenceWorkflowService
         });
     }
 
+    /** @param  array<string, mixed>  $data  version */
+    public function publish(Authenticatable $actor, IntelligenceItem $item, array $data): void
+    {
+        $item->ensureSeenBy($actor, $this->gate, $this->access);
+        if (! $this->gate->forUser($actor)->allows('intelligence.publish')) {
+            throw new AuthorizationException('Only a director publishes intelligence.');
+        }
+
+        $this->db->transaction(function () use ($actor, $item, $data): void {
+            // The replaced item (set at creation, never changed) is locked with this one, in ID order (as retract does).
+            $rows = IntelligenceItem::query()->whereIn('id', array_filter([$item->id, $item->supersedes_id]))->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $locked = $rows[$item->id] ?? throw new NotFoundHttpException;
+            $locked->ensureSeenBy($actor, $this->gate, $this->access);
+            $actorId = (int) $actor->getAuthIdentifier();
+            if ($locked->status !== 'approved') {
+                throw ValidationException::withMessages(['item' => 'Only an approved item can be published.']);
+            }
+            $version = $data['version'] ?? null;
+            if (! is_numeric($version) || (int) $version !== $locked->version) {
+                throw ValidationException::withMessages(['version' => 'This item changed since you opened it. Reload it and check it again.']);
+            }
+            if (in_array($actorId, [$locked->author_id, $locked->owner_id], true)) {
+                throw new AuthorizationException('The author or owner of an item cannot publish it.');
+            }
+            $approval = $locked->reviews()->where('decision', 'approve')->where('item_version', $locked->version)->orderByDesc('id')->first()
+                ?? throw ValidationException::withMessages(['item' => 'This item has no approval for its current version.']);
+            if ($approval->reviewer_id === $actorId) {
+                throw new AuthorizationException('The reviewer who approved an item cannot publish it.');
+            }
+            if (! hash_equals($approval->content_hash, IntelligenceContent::hash($locked))) {
+                throw ValidationException::withMessages(['item' => 'This item changed after it was approved. It must be reviewed again.']);
+            }
+            if (self::needsDirector($locked) && ! $this->users->lockedHoldsRole($actorId, self::DIRECTOR_ROLE)) {
+                throw new AuthorizationException('Confidential, restricted or high-impact intelligence is published by a director.');
+            }
+            $problems = $this->problems($locked, lock: true);
+            if ($problems !== []) {
+                throw ValidationException::withMessages(['claims' => $problems]);
+            }
+            $replaced = $locked->supersedes_id === null ? null : ($rows[$locked->supersedes_id] ?? null);
+            if ($locked->supersedes_id !== null && ($replaced === null || $replaced->status !== 'published' || ! $replaced->canBeSeenBy($actor, $this->gate, $this->access))) {
+                throw ValidationException::withMessages(['item' => 'The item this one replaces is no longer published, or you cannot see it.']);
+            }
+
+            $now = CarbonImmutable::now('UTC');
+            $locked->forceFill(['status' => 'published', 'released_at' => $now])->save();
+            $review = $this->record($actor, $locked, 'publish', null);
+            $by = Actor::user($actorId);
+            $this->audit->record('intelligence.published', $locked, ['approval_ulid' => $approval->ulid, 'review_ulid' => $review->ulid, 'version' => $locked->version], $by);
+            if ($replaced !== null) {
+                $replaced->forceFill(['status' => 'superseded'])->save();
+                $this->audit->record('intelligence.superseded', $replaced, ['replacement_ulid' => $locked->ulid, 'version' => $replaced->version], $by);
+            }
+            $item->setRawAttributes($locked->getAttributes(), true);
+        });
+    }
+
+    /** @param  array<string, mixed>  $data  reason, replacement (a published item's ULID, optional) */
+    public function retract(Authenticatable $actor, IntelligenceItem $item, array $data): void
+    {
+        $item->ensureSeenBy($actor, $this->gate, $this->access);
+        if (! $this->gate->forUser($actor)->allows('intelligence.retract')) {
+            throw new AuthorizationException('Only a director retracts intelligence.');
+        }
+        $reason = self::rationale($data['reason'] ?? null, 'reason')
+            ?? throw ValidationException::withMessages(['reason' => 'Give the reason for retracting it.']);
+        $ulid = $data['replacement'] ?? null;
+        if ($ulid !== null && $ulid !== '' && (! is_string($ulid) || ! Str::isUlid(trim($ulid)))) {
+            throw ValidationException::withMessages(['replacement' => 'The replacement must be another published item you can see.']);
+        }
+        $replacementId = is_string($ulid) && trim($ulid) !== '' ? IntelligenceItem::query()->where('ulid', strtoupper(trim($ulid)))->value('id') : null;
+        if (is_string($ulid) && trim($ulid) !== '' && $replacementId === null) {
+            throw ValidationException::withMessages(['replacement' => 'The replacement must be another published item you can see.']);
+        }
+
+        $this->db->transaction(function () use ($actor, $item, $reason, $replacementId): void {
+            $rows = IntelligenceItem::query()->whereIn('id', array_filter([$item->id, $replacementId]))->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $locked = $rows[$item->id] ?? throw new NotFoundHttpException;
+            $locked->ensureSeenBy($actor, $this->gate, $this->access);
+            if ($locked->status !== 'published') {
+                throw ValidationException::withMessages(['item' => 'Only a published item can be retracted.']);
+            }
+            $replacement = $replacementId === null ? null : ($rows[$replacementId] ?? null);
+            if ($replacementId !== null && ($replacement === null || $replacement->id === $locked->id || $replacement->status !== 'published'
+                || ! $replacement->canBeSeenBy($actor, $this->gate, $this->access))) {
+                throw ValidationException::withMessages(['replacement' => 'The replacement must be another published item you can see.']);
+            }
+
+            $retraction = new Retraction;
+            $retraction->forceFill([
+                'intelligence_item_id' => $locked->id,
+                'reason' => $reason,
+                'retracted_by' => (int) $actor->getAuthIdentifier(),
+                'retracted_at' => CarbonImmutable::now('UTC'),
+                'replacement_item_id' => $replacement?->id,
+            ])->save();
+            $locked->forceFill(['status' => 'retracted'])->save();
+            $this->audit->record('intelligence.retracted', $locked, ['replacement' => $replacement !== null, 'version' => $locked->version], Actor::user((int) $actor->getAuthIdentifier()));
+            $item->setRawAttributes($locked->getAttributes(), true);
+        });
+    }
+
+    /**
+     * What keeps the actor from publishing the approved item, in words, for the page (publish() checks everything again
+     * under the lock).
+     *
+     * @return list<string>
+     */
+    public function publicationProblems(IntelligenceItem $item, Authenticatable $actor): array
+    {
+        $actorId = (int) $actor->getAuthIdentifier();
+        $problems = [];
+        $approval = $item->reviews()->where('decision', 'approve')->where('item_version', $item->version)->orderByDesc('id')->first();
+        if ($approval === null) {
+            $problems[] = 'It has no approval for its current version.';
+        } elseif (! hash_equals($approval->content_hash, IntelligenceContent::hash($item))) {
+            $problems[] = 'It changed after it was approved. It must be reviewed again.';
+        } elseif ($approval->reviewer_id === $actorId) {
+            $problems[] = 'You approved it, so someone else must publish it.';
+        }
+        if (self::needsDirector($item) && ! $this->users->lockedHoldsRole($actorId, self::DIRECTOR_ROLE)) {
+            $problems[] = 'Confidential, restricted or high-impact intelligence is published by a director.';
+        }
+        if ($item->supersedes_id !== null && IntelligenceItem::query()->whereKey($item->supersedes_id)->value('status') !== 'published') {
+            $problems[] = 'The item it replaces is no longer published.';
+        }
+
+        return array_merge($problems, $this->problems($item));
+    }
+
+    /** The Director rule (docs/03 state machine): confidential or restricted, or high impact. */
+    public static function needsDirector(IntelligenceItem $item): bool
+    {
+        return $item->high_impact || $item->classification->rank() >= Classification::Confidential->rank();
+    }
+
     /**
      * What keeps the item from being submitted, in words (empty: nothing). With $reviewer, what keeps that reviewer
      * from approving it: the supporting evidence must also be evidence they can see. With $lock, the cited assets are
@@ -228,14 +379,14 @@ class IntelligenceWorkflowService
     }
 
     /** Trimmed plain text, null when empty; at most MAX_RATIONALE characters. */
-    private static function rationale(mixed $value): ?string
+    private static function rationale(mixed $value, string $field = 'rationale'): ?string
     {
-        if ($value !== null && ! is_string($value)) {
-            throw ValidationException::withMessages(['rationale' => 'The reason must be text.']);
+        if ($value !== null && (! is_string($value) || ! mb_check_encoding($value, 'UTF-8'))) {
+            throw ValidationException::withMessages([$field => 'The reason must be text.']);
         }
         $value = trim((string) $value);
         if (mb_strlen($value) > self::MAX_RATIONALE) {
-            throw ValidationException::withMessages(['rationale' => 'The reason may be at most '.self::MAX_RATIONALE.' characters.']);
+            throw ValidationException::withMessages([$field => 'The reason may be at most '.self::MAX_RATIONALE.' characters.']);
         }
 
         return $value === '' ? null : $value;

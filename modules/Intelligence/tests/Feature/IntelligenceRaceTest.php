@@ -51,6 +51,8 @@ class IntelligenceRaceTest extends TestCase
 
     private const REVIEWS = 'modules/Intelligence/database/migrations/2026_11_26_000100_create_verification_reviews_table.php';
 
+    private const RETRACTIONS = 'modules/Intelligence/database/migrations/2026_11_27_000100_create_retractions_table.php';
+
     private User $analyst;
 
     private User $director;
@@ -73,8 +75,11 @@ class IntelligenceRaceTest extends TestCase
     {
         if (Schema::hasTable('intelligence_items')) {
             $migrator = DB::connection('migrator');
-            if (Schema::hasTable('verification_reviews')) {
-                $migrator->table('verification_reviews')->delete(); // RESTRICT: before the items
+            $migrator->table('intelligence_items')->update(['supersedes_id' => null]); // RESTRICT on the replacement's link
+            foreach (['retractions', 'verification_reviews'] as $table) {
+                if (Schema::hasTable($table)) {
+                    $migrator->table($table)->delete(); // RESTRICT: before the items
+                }
             }
             $migrator->table('intelligence_items')->delete(); // cascades to subjects, claims and their links
             $migrator->table('evidence_custody_events')->delete();
@@ -325,9 +330,47 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(['assign'], VerificationReview::query()->pluck('decision')->all());
     }
 
+    /**
+     * P1-44: two replacements of one published item, published at once: the original's row (locked with each, in ID
+     * order) lets one supersede it; the other then finds it no longer published and is refused.
+     */
+    public function test_two_replacements_published_at_once_supersede_the_original_once(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p144-'.bin2hex(random_bytes(6));
+        $reviewer = $this->reviewer('reviewer@example.test');
+        $original = $this->submitted();
+        DB::table('intelligence_items')->where('id', $original->id)->update(['status' => 'published', 'released_at' => now()]);
+        [$first, $second] = [$this->approvedReplacement($original->refresh(), $reviewer), $this->approvedReplacement($original, $reviewer)];
+
+        $results = $this->race(
+            function () use ($first, $signal): void {
+                DB::transaction(function () use ($first, $signal): void {
+                    app(IntelligenceWorkflowService::class)->publish($this->director, $first, ['version' => $first->version]);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceWorkflowService::class)->publish($this->director, $second, ['version' => $second->version]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame(['superseded', 'published', 'approved'], [$original->refresh()->status, $first->refresh()->status, $second->refresh()->status]);
+        $this->assertSame(1, DB::table('audit_events')->where('action', 'intelligence.superseded')->count());
+    }
+
     public function test_the_migrations_refuse_to_roll_back_while_intelligence_exists(): void
     {
         $tables = fn (): array => [Schema::hasTable('claim_evidence_links'), Schema::hasTable('intelligence_items')];
+        // P1-44: retractions first (they refer to items).
+        $retracted = $this->item($this->competitor('Hooli'));
+        DB::table('intelligence_items')->where('id', $retracted->id)->update(['status' => 'retracted']);
+        DB::table('retractions')->insert(['intelligence_item_id' => $retracted->id, 'reason' => 'Synthetic', 'retracted_by' => $this->director->id, 'retracted_at' => now()]);
+        $this->assertThrows(fn () => Artisan::call('migrate:rollback', ['--path' => self::RETRACTIONS, '--force' => true]), RuntimeException::class, 'Retractions exist');
+        DB::connection('migrator')->table('retractions')->delete();
+        $this->assertSame(0, Artisan::call('migrate:rollback', ['--path' => self::RETRACTIONS, '--force' => true]));
+        $this->assertFalse(Schema::hasTable('retractions'));
+
         $reviewer = $this->reviewer('reviewer@example.test');
         $reviewed = $this->submitted();
         app(IntelligenceWorkflowService::class)->assign($this->director, $reviewed, ['reviewer' => $reviewer->ulid]);
@@ -378,6 +421,8 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(0, Artisan::call('migrate', ['--path' => self::REVIEWS, '--force' => true]));
         $this->assertSame('2026-11-01 08:00:00', $waiting->refresh()->submitted_at?->format('Y-m-d H:i:s'));
         $this->assertNull($draft->refresh()->submitted_at);
+        $this->assertSame(0, Artisan::call('migrate', ['--path' => self::RETRACTIONS, '--force' => true]));
+        $this->assertTrue(Schema::hasTable('retractions'));
     }
 
     private function reviewer(string $email): User
@@ -389,6 +434,21 @@ class IntelligenceRaceTest extends TestCase
         ]);
 
         return $user;
+    }
+
+    /** A replacement of $original with one supported claim, submitted, assigned to $reviewer and approved. */
+    private function approvedReplacement(IntelligenceItem $original, User $reviewer): IntelligenceItem
+    {
+        $item = app(IntelligenceItemService::class)->draftReplacement($this->analyst, $original);
+        $claim = app(IntelligenceClaimService::class)->add($this->analyst, $item, ['statement' => 'A', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+        app(IntelligenceClaimService::class)->link($this->analyst, $item, $claim->ulid, ['evidence' => $this->available(), 'relation' => 'supports', 'version' => 2]);
+        $workflow = app(IntelligenceWorkflowService::class);
+        $workflow->submit($this->analyst, $item, ['version' => 3]);
+        $workflow->assign($this->director, $item, ['reviewer' => $reviewer->ulid]);
+        $workflow->startReview($reviewer, $item);
+        $workflow->decide($reviewer, $item, ['decision' => 'approve', 'version' => 3]);
+
+        return $item->refresh();
     }
 
     /** An item with one claim supported by available evidence, submitted. */

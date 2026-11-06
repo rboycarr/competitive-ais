@@ -8,6 +8,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Access\Classifiable;
 use Modules\Platform\Access\Scoped;
@@ -39,6 +40,7 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * @property ?CarbonInterface $verified_at when a reviewer approved it (P1-43)
  * @property ?CarbonInterface $released_at published here (P1-44)
  * @property int $version
+ * @property ?int $supersedes_id the published item this one replaces once published (P1-44)
  * @property ?CarbonInterface $created_at
  * @property ?CarbonInterface $updated_at
  */
@@ -173,6 +175,12 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
         return $this->hasMany(IntelligenceClaim::class);
     }
 
+    /** @return HasOne<Retraction, $this> */
+    public function retraction(): HasOne
+    {
+        return $this->hasOne(Retraction::class);
+    }
+
     /** @return HasMany<VerificationReview, $this> */
     public function reviews(): HasMany
     {
@@ -191,6 +199,7 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
             'owner_id' => 'integer',
             'assigned_reviewer_id' => 'integer',
             'version' => 'integer',
+            'supersedes_id' => 'integer',
             'observed_at' => 'datetime',
             'published_at' => 'datetime',
             'collected_at' => 'datetime',

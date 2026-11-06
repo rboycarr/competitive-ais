@@ -276,6 +276,7 @@ return [
             'evidence_asset_market',
             'evidence_custody_events',
             'outbox_receipts',
+            'retractions', // P1-44: a retraction is never changed or removed
             'source_policies',
             'source_status_changes', // P1-31b: suspensions, reinstatements, retirements
             'verification_reviews',

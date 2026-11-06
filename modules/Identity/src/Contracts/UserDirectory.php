@@ -39,4 +39,11 @@ interface UserDirectory
      * (TASK-0050 #3).
      */
     public function maySee(int $id, Classifiable&Scoped $record): bool;
+
+    /**
+     * Whether the user with this ID is active and holds the role (e.g. the Director rule for publishing confidential or
+     * high-impact intelligence, P1-44); read under a shared lock on their row, so call it inside the write transaction
+     * that relies on it (role changes lock the same row). False for an unknown ID.
+     */
+    public function lockedHoldsRole(int $id, string $role): bool;
 }

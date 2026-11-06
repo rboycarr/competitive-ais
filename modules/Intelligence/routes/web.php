@@ -34,5 +34,9 @@ Route::middleware('auth')->group(function () {
         Route::post('/intelligence/{item}/assign', [VerificationQueueController::class, 'assign'])->name('intelligence.assign');
         Route::post('/intelligence/{item}/review', [VerificationQueueController::class, 'start'])->name('intelligence.review.start');
         Route::post('/intelligence/{item}/decision', [VerificationQueueController::class, 'decide'])->name('intelligence.decide');
+        // P1-44: publication, retraction, and a replacement draft (the service checks intelligence.create).
+        Route::post('/intelligence/{item}/publish', [IntelligenceItemController::class, 'publish'])->name('intelligence.publish');
+        Route::post('/intelligence/{item}/retract', [IntelligenceItemController::class, 'retract'])->name('intelligence.retract');
+        Route::post('/intelligence/{item}/replacement', [IntelligenceItemController::class, 'replacement'])->name('intelligence.replacement');
     });
 });
