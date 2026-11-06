@@ -27,6 +27,7 @@ const props = defineProps<{
     canEdit: boolean;
     form: ItemFields | null;
     claimTypes: string[]; reliabilities: string[]; credibilities: number[];
+    submission: { problems: string[] } | null;
     relations: string[]; evidenceOptions: { ulid: string; title: string; capturedAt: string }[]; evidenceSearch: string | null;
     types?: string[]; classifications?: string[]; competitorOptions?: Option[]; productOptions?: Option[]; marketOptions?: Option[];
 }>();
@@ -85,6 +86,17 @@ function searchEvidence(): void {
 function saveCite(): void {
     cite.transform((data) => ({ ...data, version: props.item.version }))
         .post(`${base.value}/claims/${citing.value}/evidence`, { preserveScroll: true, onSuccess: () => cancelCite() });
+}
+// P1-42: submitting freezes the item until a reviewer decides; the server checks the guard again.
+const submitting = ref(false);
+const submitErrors = ref<string[]>([]);
+function submit(): void {
+    router.post(`${base.value}/submit`, { version: props.item.version }, {
+        preserveScroll: true,
+        onStart: () => { submitting.value = true; submitErrors.value = []; },
+        onError: (errors) => { submitErrors.value = Object.values(errors).flat(); },
+        onFinish: () => { submitting.value = false; },
+    });
 }
 function uncite(c: Claim, e: Citation): void {
     router.post(`${base.value}/claims/${c.ulid}/evidence/remove`, { evidence: e.ulid, relation: e.relation, version: props.item.version }, { preserveScroll: true });
@@ -212,6 +224,23 @@ function uncite(c: Claim, e: Citation): void {
                     <li v-for="c in withdrawn" :key="c.ulid" class="whitespace-pre-line text-slate-700">{{ c.reliability }}{{ c.credibility }} · {{ claimTypeLabel(c.type) }}: {{ c.statement }}</li>
                 </ul>
             </details>
+        </section>
+
+        <section v-if="props.submission" aria-labelledby="submit-heading" class="mb-6 max-w-3xl rounded border border-slate-300 p-3">
+            <h2 id="submit-heading" class="mb-1 text-lg font-semibold">Submit for review</h2>
+            <template v-if="props.submission.problems.length > 0">
+                <p class="text-sm text-slate-700">Every claim needs at least one piece of available evidence that supports it. Still missing:</p>
+                <ul class="list-disc pl-5 text-sm">
+                    <li v-for="problem in props.submission.problems" :key="problem">{{ problem }}</li>
+                </ul>
+            </template>
+            <template v-else>
+                <p class="mb-2 text-sm text-slate-700">Every claim is evidence-backed. Once submitted, the item cannot be changed until a reviewer requests changes.</p>
+                <button type="button" :disabled="submitting" class="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50" @click="submit">Submit for review</button>
+            </template>
+            <ul v-if="submitErrors.length > 0" class="mt-2 text-sm text-red-700" role="alert">
+                <li v-for="message in submitErrors" :key="message">{{ message }}</li>
+            </ul>
         </section>
 
         <section v-if="props.canEdit" aria-labelledby="claim-form-heading" class="mb-8 max-w-3xl">

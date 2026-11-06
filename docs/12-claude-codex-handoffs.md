@@ -133,6 +133,7 @@ AI approval never replaces human approval.
 | TASK-0084 | Review of P1-40 (intelligence items with typed, rated claims) | Claude Code | Reviewer (gpt-5.6-luna, read-only; PO-approved working model) | `feature/intelligence-items` @ `d0d98ee` | **Reviewed: "yes", no findings; missing tests added, concurrency and rollback tests moved to P1-41.** | `handoffs/TASK-0084-review.md` |
 | TASK-0085 | Review of P1-41 (claims cite evidence with locator and excerpt) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/claim-evidence-links` @ `c976bfc` | **Reviewed: "yes", no findings; follow-up tests added or dispositioned.** | `handoffs/TASK-0085-review.md` |
 | TASK-0086 | Review of P1-36b (evidence inherits the scopes of the claims it supports) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/evidence-inherited-scopes` @ `a0f023b` | **Reviewed: "yes after fixes" (missing tests, no findings); tests added.** | `handoffs/TASK-0086-review.md` |
+| TASK-0087 | Review of P1-42 (submit for review only when evidence-backed) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/intelligence-submission` from `1b06fe2` | Brief written 2026-11-06; awaiting review | `handoffs/TASK-0087.md` |
 
 ## 4. Decision and disagreement log
 

@@ -50,6 +50,16 @@ interface EvidenceLinking
     public function inherit(Authenticatable $actor, int $assetId, string $itemUlid, array $competitorIds, array $marketIds): bool;
 
     /**
+     * Those of these assets that are `available` (P1-42: what a claim's support must be), whoever can see them; only
+     * IDs, no details. With $lock, their rows are locked in share mode in ID order, so none is withdrawn or rejected
+     * until the caller's transaction ends: call it inside that transaction, after locking the citing item.
+     *
+     * @param  list<int>  $ids
+     * @return list<int>
+     */
+    public function available(array $ids, bool $lock = false): array;
+
+    /**
      * The assets with these IDs that the viewer can see, keyed by ID, in any status the viewer may see.
      *
      * @param  list<int>  $ids

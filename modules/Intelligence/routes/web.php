@@ -23,4 +23,6 @@ Route::middleware('auth')->group(function () {
         Route::post('/intelligence/{item}/claims/{claim}/evidence', [IntelligenceClaimController::class, 'link'])->name('intelligence.claims.link');
         Route::post('/intelligence/{item}/claims/{claim}/evidence/remove', [IntelligenceClaimController::class, 'unlink'])->name('intelligence.claims.unlink');
     });
+    // P1-42: the workflow; IntelligenceWorkflowService checks the actor, the item's state and its guard.
+    Route::post('/intelligence/{item}/submit', [IntelligenceItemController::class, 'submit'])->middleware('can:intelligence.submit')->name('intelligence.submit');
 });

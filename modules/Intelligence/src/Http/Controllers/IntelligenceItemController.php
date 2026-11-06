@@ -13,6 +13,7 @@ use Modules\Evidence\Contracts\EvidenceLinking;
 use Modules\Evidence\Contracts\EvidenceSummary;
 use Modules\Identity\Contracts\UserDirectory;
 use Modules\Intelligence\Actions\IntelligenceItemService;
+use Modules\Intelligence\Actions\IntelligenceWorkflowService;
 use Modules\Intelligence\Http\Requests\SaveItemRequest;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
@@ -49,6 +50,7 @@ class IntelligenceItemController
         private readonly MarketLookup $markets,
         private readonly EvidenceLinking $evidence,
         private readonly SourceLookup $sources,
+        private readonly IntelligenceWorkflowService $workflow,
     ) {}
 
     public function index(Request $request): Response
@@ -111,6 +113,9 @@ class IntelligenceItemController
         $viewerId = (int) $viewer->getAuthIdentifier();
         $canEdit = $item->isEditable() && $hidden === 0 && in_array($viewerId, [$item->author_id, $item->owner_id], true)
             && $this->gate->forUser($viewer)->allows('intelligence.create');
+        // P1-42: the author or owner of an editable item, with intelligence.submit, sees what still blocks submission.
+        $canSubmit = $item->isEditable() && in_array($viewerId, [$item->author_id, $item->owner_id], true)
+            && $this->gate->forUser($viewer)->allows('intelligence.submit');
         $markets = $this->markets->summaries($marketIds);
         $claims = $item->claims()->with('evidenceLinks')->orderBy('position')->orderBy('id')->get();
         $assets = $this->evidence->summaries($viewer, array_values(array_unique($claims->flatMap(
@@ -155,6 +160,7 @@ class IntelligenceItemController
                 'status' => $c->status,
             ] + $this->citations($c, $assets, $sources))->values()->all(),
             'canEdit' => $canEdit,
+            'submission' => $canSubmit ? ['problems' => $this->workflow->problems($item)] : null,
             'relations' => ClaimEvidenceLink::RELATIONS,
             // P1-41: what the editor may cite; the search is a partial reload of this prop.
             'evidenceOptions' => $canEdit ? array_map(fn (EvidenceSummary $e): array => [
@@ -194,6 +200,14 @@ class IntelligenceItemController
         $items->update($this->viewer($request), $item, $request->validated());
 
         return redirect()->route('intelligence.show', $item)->with('status', 'Item saved.');
+    }
+
+    /** P1-42: draft or changes requested to submitted, when every claim is evidence-backed. */
+    public function submit(Request $request, IntelligenceItem $item): RedirectResponse
+    {
+        $this->workflow->submit($this->viewer($request), $item, $request->validate(['version' => ['required', 'integer', 'min:1']]));
+
+        return redirect()->route('intelligence.show', $item)->with('status', 'Submitted for review. The item is frozen until a reviewer decides.');
     }
 
     /**
