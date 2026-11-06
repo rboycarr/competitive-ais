@@ -77,7 +77,8 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
     protected static function booted(): void
     {
         static::updating(function (self $item): void {
-            if ($item->isDirty('supersedes_id') && ($item->getOriginal('supersedes_id') !== null || $item->getOriginal('status') !== 'draft')) {
+            // A draft before and after the save: never set together with a status change (TASK-0091).
+            if ($item->isDirty('supersedes_id') && ($item->getOriginal('supersedes_id') !== null || $item->getOriginal('status') !== 'draft' || $item->status !== 'draft')) {
                 throw new LogicException('An item never changes the item it replaces.');
             }
         });

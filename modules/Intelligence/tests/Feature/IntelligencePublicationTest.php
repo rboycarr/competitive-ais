@@ -267,9 +267,12 @@ class IntelligencePublicationTest extends TestCase
         foreach ([$other->id, null] as $value) {
             $this->assertThrows(fn () => $replacement->refresh()->forceFill(['supersedes_id' => $value])->save(), \LogicException::class, 'never changes the item it replaces');
         }
-        // Nor is it set on anything but a draft.
+        // Nor is it set on anything but a draft, nor together with leaving the draft (TASK-0091).
         $this->assertThrows(fn () => $other->refresh()->forceFill(['supersedes_id' => $original->id])->save(), \LogicException::class);
+        $draft = $this->draft();
+        $this->assertThrows(fn () => $draft->forceFill(['status' => 'published', 'supersedes_id' => $original->id])->save(), \LogicException::class);
         $this->assertSame([$original->id, null], [$replacement->refresh()->supersedes_id, $other->refresh()->supersedes_id]);
+        $this->assertSame(['draft', null], [$draft->refresh()->status, $draft->supersedes_id]);
     }
 
     public function test_every_publication_route_is_404_for_a_hidden_item_whatever_the_input(): void
