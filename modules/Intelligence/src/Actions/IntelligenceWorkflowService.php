@@ -17,7 +17,8 @@ use Modules\Platform\Audit\AuditLogger;
 
 /**
  * The intelligence workflow (docs/03 Intelligence, state machine), one method per transition. P1-42: submit.
- * - submit: draft or changes_requested to submitted; intelligence.submit; the author or owner, who can see the item;
+ * - submit: draft or changes_requested to submitted; an item the actor cannot see is 404 before anything else; then
+ *   intelligence.submit; the author or owner;
  *   from the version read; at least one claim, and every claim not withdrawn has at least one `supports` link to an
  *   `available` asset (whoever can see it). Checked under the item's row lock, the cited assets share-locked after it
  *   (so none is withdrawn or rejected meanwhile). Content does not change, so the version stays; it is frozen from
@@ -36,10 +37,11 @@ class IntelligenceWorkflowService
     /** @param  array<string, mixed>  $data  version */
     public function submit(Authenticatable $actor, IntelligenceItem $item, array $data): void
     {
+        // Visibility first: a hidden item is 404 whatever the actor's permissions (TASK-0087 #1).
+        $item->ensureSeenBy($actor, $this->gate, $this->access);
         if (! $this->gate->forUser($actor)->allows('intelligence.submit')) {
             throw new AuthorizationException('You are not allowed to submit intelligence for review.');
         }
-        $item->ensureSeenBy($actor, $this->gate, $this->access);
 
         $this->db->transaction(function () use ($actor, $item, $data): void {
             $locked = IntelligenceItem::query()->whereKey($item->id)->lockForUpdate()->firstOrFail();

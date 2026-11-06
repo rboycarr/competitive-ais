@@ -94,6 +94,12 @@ class IntelligenceSubmissionTest extends TestCase
         $this->expectProblems($item, ['Claim 2 cites no available evidence that supports it.']);
         $this->claims()->withdraw($this->analyst, $item, $second->ulid, ['version' => $item->version]);
         $this->assertSame([], $this->workflow()->problems($item));
+
+        // TASK-0087: one withdrawn support among several does not matter while another is available.
+        $gone = $this->available();
+        $this->cite($item, $first, $gone, 'supports');
+        DB::table('evidence_assets')->where('id', $gone->id)->update(['status' => 'withdrawn', 'evidence_blob_id' => null, 'legal_hold' => false]);
+        $this->assertSame([], $this->workflow()->problems($item->refresh()));
         $this->workflow()->submit($this->analyst, $item, ['version' => $item->version]);
         $this->assertSame('submitted', $item->refresh()->status);
     }
@@ -115,6 +121,7 @@ class IntelligenceSubmissionTest extends TestCase
         $this->grantAll($collector);
         DB::table('intelligence_items')->where('id', $item->id)->update(['owner_id' => $collector->id]);
         $this->actingAs($collector)->post("/intelligence/{$item->ulid}/submit", ['version' => $version])->assertForbidden();
+        $this->actingAs($collector)->get("/intelligence/{$item->ulid}")->assertOk()->assertInertia(fn ($page) => $page->where('submission', null));
 
         $this->actingAs($this->analyst)->post("/intelligence/{$item->ulid}/submit", [])->assertSessionHasErrors('version');
         $this->expectValidation(fn () => $this->workflow()->submit($this->analyst, $item, ['version' => $version - 1]), 'version');
@@ -128,6 +135,23 @@ class IntelligenceSubmissionTest extends TestCase
         $this->actingAs($this->analyst)->post("/intelligence/{$item->ulid}/submit", ['version' => $version])->assertSessionHasNoErrors();
         $this->assertSame('submitted', $item->refresh()->status);
         $this->assertSame(1, DB::table('audit_events')->where('action', 'intelligence.submitted')->count());
+    }
+
+    /** TASK-0087 #1: an item the user cannot see is not found, with or without intelligence.submit. */
+    public function test_a_hidden_item_is_not_found_whatever_the_permissions(): void
+    {
+        $item = app(IntelligenceItemService::class)->create($this->analyst, [
+            'title' => 'Confidential launch', 'summary' => '', 'item_type' => 'news', 'classification' => 'confidential', 'competitors' => [$this->acme],
+        ]);
+        $this->cite($item, $this->claim($item), $this->available(), 'supports');
+        DB::table('intelligence_items')->where('id', $item->id)->update(['status' => 'published']); // released: hidden only by its classification
+        foreach (['sales_field' => 'without', 'ci_analyst' => 'with'] as $role => $label) {
+            $user = $this->createUser("$role@example.test", $role); // internal clearance
+            $this->grantAll($user);
+            $this->actingAs($user)->post("/intelligence/{$item->ulid}/submit", ['version' => $item->version])->assertNotFound();
+            $this->actingAs($user)->get("/intelligence/{$item->ulid}")->assertNotFound();
+        }
+        $this->assertSame(0, DB::table('audit_events')->where('action', 'intelligence.submitted')->count());
     }
 
     /** @param  list<string>  $problems */
