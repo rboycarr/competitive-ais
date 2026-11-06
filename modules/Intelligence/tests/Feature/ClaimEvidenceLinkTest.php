@@ -2,13 +2,16 @@
 
 namespace Modules\Intelligence\Tests\Feature;
 
+use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Mockery;
 use Modules\Evidence\Actions\EvidenceScanService;
 use Modules\Evidence\Contracts\EvidenceLinking;
+use Modules\Evidence\Lookup\EloquentEvidenceLinking;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Models\User;
@@ -21,6 +24,7 @@ use Modules\Platform\Classification;
 use Modules\Sources\Actions\SourcePolicyService;
 use Modules\Sources\Actions\SourceService;
 use Modules\Sources\Models\Source;
+use RuntimeException;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
@@ -145,6 +149,48 @@ class ClaimEvidenceLinkTest extends TestCase
         }
         $this->expectValidation(fn () => $this->claims()->link($this->analyst, $item, $claim->ulid, ['evidence' => $this->available()->ulid, 'relation' => 'supports', 'version' => $item->version]), 'evidence');
         $this->assertSame(IntelligenceClaimService::MAX_LINKS, ClaimEvidenceLink::query()->count());
+    }
+
+    /** TASK-0085: the link, its audit event, its custody event and the version commit together or not at all. */
+    public function test_a_failed_custody_record_leaves_no_link_audit_or_version_change(): void
+    {
+        [$item, $claim] = $this->draftWithClaim();
+        $asset = $this->available();
+        $linking = Mockery::mock(EloquentEvidenceLinking::class, [app(Gate::class), app('db')])->makePartial();
+        $linking->shouldReceive('recordLink')->andThrow(new RuntimeException('custody store unavailable'));
+        $this->app->instance(EvidenceLinking::class, $linking);
+
+        $this->assertThrows(fn () => $this->claims()->link($this->analyst, $item, $claim->ulid, ['evidence' => $asset->ulid, 'relation' => 'supports', 'version' => 2]),
+            RuntimeException::class, 'custody store unavailable');
+
+        $this->assertSame(0, ClaimEvidenceLink::query()->count());
+        $this->assertSame(0, DB::table('audit_events')->where('action', 'intelligence.evidence_linked')->count());
+        $this->assertSame(2, $item->fresh()?->version);
+    }
+
+    /** TASK-0085: limits count characters, not bytes; IDs in any case are accepted, malformed ones refused as fields. */
+    public function test_limits_count_characters_and_identifiers_are_checked(): void
+    {
+        [$item, $claim] = $this->draftWithClaim();
+        $asset = $this->available();
+        $post = fn (array $data, string $suffix = '') => $this->actingAs($this->analyst)->post($this->path($item, $claim).$suffix, $data + ['version' => $item->refresh()->version]);
+
+        $post(['evidence' => $asset->ulid, 'relation' => 'supports', 'locator' => str_repeat('😀', 256)])->assertSessionHasErrors('locator');
+        $post(['evidence' => $asset->ulid, 'relation' => 'supports', 'excerpt' => str_repeat('é', IntelligenceClaimService::MAX_EXCERPT + 1)])->assertSessionHasErrors('excerpt');
+        $post(['evidence' => $asset->ulid, 'relation' => 'supports', 'locator' => str_repeat('😀', 255), 'excerpt' => str_repeat('é', IntelligenceClaimService::MAX_EXCERPT)])->assertSessionHasNoErrors();
+        $link = ClaimEvidenceLink::query()->sole();
+        $this->assertSame([255, IntelligenceClaimService::MAX_EXCERPT], [mb_strlen((string) $link->locator), mb_strlen((string) $link->excerpt)]);
+
+        foreach (['not-a-ulid', '', str_repeat('Z', 26)] as $malformed) {
+            $post(['evidence' => $malformed, 'relation' => 'context'])->assertSessionHasErrors('evidence');
+            $post(['evidence' => $malformed, 'relation' => 'supports'], '/remove')->assertSessionHasErrors('evidence');
+        }
+        $this->actingAs($this->analyst)->post("/intelligence/{$item->ulid}/claims/not-a-claim/evidence", ['evidence' => $asset->ulid, 'relation' => 'context', 'version' => $item->version])
+            ->assertSessionHasErrors('claim');
+        // Lower-case IDs name the same claim and asset.
+        $this->actingAs($this->analyst)->post('/intelligence/'.$item->ulid.'/claims/'.strtolower($claim->ulid).'/evidence/remove', ['evidence' => strtolower($asset->ulid), 'relation' => 'supports', 'version' => $item->version])
+            ->assertSessionHasNoErrors();
+        $this->assertSame(0, ClaimEvidenceLink::query()->count());
     }
 
     public function test_citations_are_described_only_to_those_who_can_see_the_evidence(): void
