@@ -14,6 +14,7 @@ use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Models\User;
 use Modules\Intelligence\Actions\IntelligenceClaimService;
 use Modules\Intelligence\Actions\IntelligenceItemService;
+use Modules\Intelligence\Actions\IntelligenceWorkflowService;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
@@ -180,6 +181,35 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(4, $item->version);
         $this->assertSame($item->marketIds() === [] ? [[$a->id, $b->id], []] : [[$a->id], [(int) $market]], $scopes, 'exactly the winner\'s subject');
         $this->assertSame(2, DB::table('evidence_custody_events')->where('evidence_asset_id', $assetId)->where('event', 'scope_inherited')->count(), 'on citing, then once for the winner');
+    }
+
+    /**
+     * TASK-0087: evidence withdrawn while a submission waits for its share lock: the submission sees it and is refused,
+     * so no item reaches review supported by evidence that is gone.
+     */
+    public function test_a_submission_waiting_on_evidence_being_withdrawn_is_refused(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p142-'.bin2hex(random_bytes(6));
+        $item = $this->item($this->competitor('Acme'));
+        $claim = app(IntelligenceClaimService::class)->add($this->analyst, $item, ['statement' => 'A', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+        $asset = $this->available();
+        app(IntelligenceClaimService::class)->link($this->analyst, $item, $claim->ulid, ['evidence' => $asset, 'relation' => 'supports', 'version' => 2]);
+
+        $results = $this->race(
+            function () use ($asset, $signal): void {
+                DB::transaction(function () use ($asset, $signal): void {
+                    DB::table('evidence_assets')->where('ulid', $asset)->lockForUpdate()->first();
+                    DB::table('evidence_assets')->where('ulid', $asset)->update(['status' => 'withdrawn', 'evidence_blob_id' => null]);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceWorkflowService::class)->submit($this->analyst, $item, ['version' => 3]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame('draft', $item->refresh()->status);
     }
 
     /**

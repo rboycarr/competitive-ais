@@ -60,6 +60,20 @@ class EloquentEvidenceLinking implements EvidenceLinking
             ->filter(fn (EvidenceAsset $a): bool => $this->seesNow($viewer, $a))->pluck('id')->all());
     }
 
+    public function available(array $ids, bool $lock = false): array
+    {
+        if ($lock) {
+            $this->inTransaction('Lock evidence inside the transaction that relies on it.');
+        }
+        if ($ids === []) {
+            return [];
+        }
+        $query = EvidenceAsset::query()->whereIn('id', $ids)->orderBy('id');
+        $assets = ($lock ? $query->sharedLock() : $query)->get(['id', 'status']);
+
+        return array_values($assets->where('status', 'available')->pluck('id')->map(fn ($id): int => (int) $id)->all());
+    }
+
     public function inherit(Authenticatable $actor, int $assetId, string $itemUlid, array $competitorIds, array $marketIds): bool
     {
         $this->inTransaction('Inherit scopes inside the transaction that links the evidence.');

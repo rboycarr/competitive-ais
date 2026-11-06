@@ -60,6 +60,7 @@ const claims = [
 const showProps = {
     item, claims, subjects: { competitors: [{ ulid: '01JCOMP0000000000000000000', name: 'Acme' }], products: [], markets: [], hidden: 1 },
     claimTypes: ['observed_fact', 'rumor'], reliabilities: ['A', 'B', 'F'], credibilities: [1, 2, 6],
+    submission: null as { problems: string[] } | null,
     relations: ['supports', 'contradicts', 'context'], evidenceOptions: [{ ulid: '01JEVID0000000000000000003', title: 'Annual report', capturedAt: '2026-10-01T00:00:00Z' }], evidenceSearch: null,
 };
 
@@ -144,5 +145,18 @@ describe('Intelligence/Show', () => {
         await relation.setValue('supports');
         await editor.get(`#cite-relation-${claims[0]?.ulid}`).element.closest('form')?.dispatchEvent(new Event('submit'));
         expect(post).toHaveBeenCalledWith(`/intelligence/${item.ulid}/claims/${claims[0]?.ulid}/evidence`, expect.any(Object));
+    });
+
+    it('lists what blocks submission, and submits at the current version once nothing does', async () => {
+        const blocked = mount(Show, { props: { ...showProps, canEdit: true, form: null, submission: { problems: ['Claim 1 cites no available evidence that supports it.'] } } });
+        expect(blocked.text()).toContain('Claim 1 cites no available evidence that supports it.');
+        expect(blocked.findAll('button').some((b) => b.text() === 'Submit for review')).toBe(false);
+
+        const ready = mount(Show, { props: { ...showProps, canEdit: true, form: null, submission: { problems: [] } } });
+        await ready.findAll('button').find((b) => b.text() === 'Submit for review')?.trigger('click');
+        expect(routerPost).toHaveBeenCalledWith(`/intelligence/${item.ulid}/submit`, { version: 3 }, expect.any(Object));
+
+        const reader = mount(Show, { props: { ...showProps, canEdit: false, form: null } });
+        expect(reader.find('#submit-heading').exists()).toBe(false);
     });
 });

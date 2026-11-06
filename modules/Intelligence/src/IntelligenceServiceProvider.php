@@ -40,6 +40,8 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
         $link = ['claim_ulid' => 'ulid', 'evidence_ulid' => 'ulid', 'relation' => 'code', 'version' => 'int'];
         $audit->define('intelligence.evidence_linked', $link);
         $audit->define('intelligence.evidence_unlinked', $link);
+        // P1-42: the workflow.
+        $audit->define('intelligence.submitted', ['version' => 'int', 'claims' => 'int']);
         // Domain events (docs/03: IntelligenceSubmitted, …) are defined with their first consumer.
     }
 }
