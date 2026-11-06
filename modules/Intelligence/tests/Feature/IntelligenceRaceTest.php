@@ -2,6 +2,7 @@
 
 namespace Modules\Intelligence\Tests\Feature;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\Artisan;
@@ -18,6 +19,7 @@ use Modules\Intelligence\Actions\IntelligenceWorkflowService;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Intelligence\Models\VerificationReview;
 use Modules\Platform\Classification;
 use Modules\Registry\Actions\CompetitorService;
 use Modules\Registry\Models\Competitor;
@@ -32,8 +34,9 @@ use Tests\TestCase;
  *   exactly one through, and positions stay a permutation;
  * - creating an item about a competitor and archiving that competitor are ordered by the competitor's row (share lock
  *   versus FOR UPDATE), whichever comes first: never an open item about an archived competitor;
- * - the Intelligence migrations refuse to roll back while items or links exist, cited evidence cannot be removed, and
- *   both roll back and re-apply once empty.
+ * - a decision waiting on the item's lock while a director reassigns the review is refused (P1-43);
+ * - the Intelligence migrations refuse to roll back while items, links or reviews exist, cited evidence cannot be
+ *   removed, and all roll back and re-apply once empty (the reviews migration ages items already waiting).
  * DatabaseMigrations, so tearDown removes the rows (the app account cannot, and the migrations refuse while they exist).
  */
 class IntelligenceRaceTest extends TestCase
@@ -45,6 +48,8 @@ class IntelligenceRaceTest extends TestCase
     private const ITEMS = 'modules/Intelligence/database/migrations/2026_11_24_000100_create_intelligence_tables.php';
 
     private const LINKS = 'modules/Intelligence/database/migrations/2026_11_25_000100_create_claim_evidence_links_table.php';
+
+    private const REVIEWS = 'modules/Intelligence/database/migrations/2026_11_26_000100_create_verification_reviews_table.php';
 
     private User $analyst;
 
@@ -68,6 +73,9 @@ class IntelligenceRaceTest extends TestCase
     {
         if (Schema::hasTable('intelligence_items')) {
             $migrator = DB::connection('migrator');
+            if (Schema::hasTable('verification_reviews')) {
+                $migrator->table('verification_reviews')->delete(); // RESTRICT: before the items
+            }
             $migrator->table('intelligence_items')->delete(); // cascades to subjects, claims and their links
             $migrator->table('evidence_custody_events')->delete();
             $migrator->table('evidence_assets')->delete();
@@ -252,9 +260,90 @@ class IntelligenceRaceTest extends TestCase
             ->where('evidence_assets.ulid', $asset)->pluck('competitor_id')->map(fn ($id) => (int) $id)->all());
     }
 
+    /**
+     * P1-43: a reviewer's decision waiting for the item's row lock while a director reassigns the review sees the new
+     * assignment once it gets the lock, and is refused: only the assigned reviewer decides.
+     */
+    public function test_a_decision_waiting_on_a_reassignment_is_refused(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p143-'.bin2hex(random_bytes(6));
+        [$reviewer, $other] = [$this->reviewer('reviewer@example.test'), $this->reviewer('other@example.test')];
+        $item = $this->submitted();
+        $workflow = app(IntelligenceWorkflowService::class);
+        $workflow->assign($this->director, $item, ['reviewer' => $reviewer->ulid]);
+        $workflow->startReview($reviewer, $item);
+        $version = $item->refresh()->version;
+
+        $results = $this->race(
+            function () use ($item, $other, $signal): void {
+                DB::transaction(function () use ($item, $other, $signal): void {
+                    app(IntelligenceWorkflowService::class)->assign($this->director, $item, ['reviewer' => $other->ulid, 'rationale' => 'Rebalancing the queue']);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceWorkflowService::class)->decide($reviewer, $item, ['decision' => 'approve', 'version' => $version]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', AuthorizationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $item->refresh();
+        $this->assertSame(['submitted', $other->id], [$item->status, $item->assigned_reviewer_id]);
+        $this->assertSame(['assign', 'reassign'], VerificationReview::query()->orderBy('id')->pluck('decision')->all());
+    }
+
+    /**
+     * TASK-0089: an approval waiting for the supporting evidence's row while it is withdrawn sees the withdrawal once
+     * it gets the share lock, and is refused.
+     */
+    public function test_an_approval_waiting_on_evidence_being_withdrawn_is_refused(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p143w-'.bin2hex(random_bytes(6));
+        $reviewer = $this->reviewer('reviewer@example.test');
+        $item = $this->submitted();
+        $workflow = app(IntelligenceWorkflowService::class);
+        $workflow->assign($this->director, $item, ['reviewer' => $reviewer->ulid]);
+        $workflow->startReview($reviewer, $item);
+        $asset = (int) DB::table('claim_evidence_links')->value('evidence_asset_id');
+        $version = $item->refresh()->version;
+
+        $results = $this->race(
+            function () use ($asset, $signal): void {
+                DB::transaction(function () use ($asset, $signal): void {
+                    DB::table('evidence_assets')->where('id', $asset)->lockForUpdate()->first();
+                    DB::table('evidence_assets')->where('id', $asset)->update(['status' => 'withdrawn', 'evidence_blob_id' => null]);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceWorkflowService::class)->decide($reviewer, $item, ['decision' => 'approve', 'version' => $version]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame('in_review', $item->refresh()->status);
+        $this->assertSame(['assign'], VerificationReview::query()->pluck('decision')->all());
+    }
+
     public function test_the_migrations_refuse_to_roll_back_while_intelligence_exists(): void
     {
         $tables = fn (): array => [Schema::hasTable('claim_evidence_links'), Schema::hasTable('intelligence_items')];
+        $reviewer = $this->reviewer('reviewer@example.test');
+        $reviewed = $this->submitted();
+        app(IntelligenceWorkflowService::class)->assign($this->director, $reviewed, ['reviewer' => $reviewer->ulid]);
+        $this->assertThrows(fn () => Artisan::call('migrate:rollback', ['--path' => self::REVIEWS, '--force' => true]), RuntimeException::class, 'Verification reviews exist');
+        $this->assertTrue(Schema::hasTable('verification_reviews'));
+        try {
+            DB::connection('migrator')->table('intelligence_items')->where('id', $reviewed->id)->delete();
+            $this->fail('A reviewed item was deleted.');
+        } catch (QueryException $e) {
+            $this->assertStringContainsString('verification_reviews', $e->getMessage());
+        }
+        DB::connection('migrator')->table('verification_reviews')->delete();
+        DB::connection('migrator')->table('intelligence_items')->delete();
+        $this->assertSame(0, Artisan::call('migrate:rollback', ['--path' => self::REVIEWS, '--force' => true]));
+        $this->assertFalse(Schema::hasColumn('intelligence_items', 'submitted_at'));
+
         $item = $this->item($this->competitor('Acme'));
         $claim = app(IntelligenceClaimService::class)->add($this->analyst, $item, [
             'statement' => 'Claim', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1,
@@ -281,6 +370,36 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(0, Artisan::call('migrate', ['--path' => self::ITEMS, '--force' => true]));
         $this->assertSame(0, Artisan::call('migrate', ['--path' => self::LINKS, '--force' => true]));
         $this->assertSame([true, true], $tables());
+
+        // Re-applied, the reviews migration ages an item already waiting from its last change; a draft has no age.
+        $waiting = $this->item($this->competitor('Initech'));
+        $draft = $this->item($this->competitor('Umbrella'));
+        DB::table('intelligence_items')->where('id', $waiting->id)->update(['status' => 'submitted', 'updated_at' => '2026-11-01 08:00:00.000000']);
+        $this->assertSame(0, Artisan::call('migrate', ['--path' => self::REVIEWS, '--force' => true]));
+        $this->assertSame('2026-11-01 08:00:00', $waiting->refresh()->submitted_at?->format('Y-m-d H:i:s'));
+        $this->assertNull($draft->refresh()->submitted_at);
+    }
+
+    private function reviewer(string $email): User
+    {
+        $user = $this->createUser($email, 'ci_analyst', clearance: Classification::Confidential);
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $user->id, 'scope_type' => 'all', 'max_classification' => 'confidential',
+            'granted_by' => $this->director->id, 'reason' => 'Synthetic test grant', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        return $user;
+    }
+
+    /** An item with one claim supported by available evidence, submitted. */
+    private function submitted(): IntelligenceItem
+    {
+        $item = $this->item($this->competitor('Acme'));
+        $claim = app(IntelligenceClaimService::class)->add($this->analyst, $item, ['statement' => 'A', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+        app(IntelligenceClaimService::class)->link($this->analyst, $item, $claim->ulid, ['evidence' => $this->available(), 'relation' => 'supports', 'version' => 2]);
+        app(IntelligenceWorkflowService::class)->submit($this->analyst, $item, ['version' => 3]);
+
+        return $item->refresh();
     }
 
     /**

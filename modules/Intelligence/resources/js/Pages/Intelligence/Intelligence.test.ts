@@ -29,6 +29,8 @@ vi.mock('@inertiajs/vue3', async () => {
 
 const { default: Index } = await import('./Index.vue');
 const { default: Show } = await import('./Show.vue');
+const { default: Queue } = await import('./Queue.vue');
+const { ageLabel } = await import('./labels');
 
 const options = {
     types: ['news', 'product_change'], classifications: ['public', 'internal'],
@@ -61,6 +63,12 @@ const showProps = {
     item, claims, subjects: { competitors: [{ ulid: '01JCOMP0000000000000000000', name: 'Acme' }], products: [], markets: [], hidden: 1 },
     claimTypes: ['observed_fact', 'rumor'], reliabilities: ['A', 'B', 'F'], credibilities: [1, 2, 6],
     submission: null as { problems: string[] } | null,
+    review: {
+        reviewer: null as string | null, submittedAt: null as string | null, verifiedAt: null as string | null,
+        history: [] as { ulid: string; decision: string; by: string | null; assignee: string | null; rationale: string | null; version: number; decidedAt: string }[],
+        canAssign: false, reviewers: [] as { ulid: string; name: string }[], canStart: false, canDecide: false,
+        decisions: ['approve', 'request_changes', 'reject'], approvalProblems: [] as string[],
+    },
     relations: ['supports', 'contradicts', 'context'], evidenceOptions: [{ ulid: '01JEVID0000000000000000003', title: 'Annual report', capturedAt: '2026-10-01T00:00:00Z' }], evidenceSearch: null,
 };
 
@@ -158,5 +166,72 @@ describe('Intelligence/Show', () => {
 
         const reader = mount(Show, { props: { ...showProps, canEdit: false, form: null } });
         expect(reader.find('#submit-heading').exists()).toBe(false);
+    });
+});
+
+describe('Intelligence verification (P1-43)', () => {
+    it('lets a director assign, and asks for a reason to reassign', async () => {
+        const unassigned = mount(Show, { props: { ...showProps, canEdit: false, form: null, review: { ...showProps.review, canAssign: true, reviewers: [{ ulid: '01JUSER0000000000000000001', name: 'Rui' }] } } });
+        expect(unassigned.get('label[for="assign-reviewer"]').text()).toBe('Assign a reviewer');
+        expect(unassigned.find('#assign-rationale').exists()).toBe(false);
+        await unassigned.get('#assign-reviewer').setValue('01JUSER0000000000000000001');
+        await unassigned.get('#assign-reviewer').element.closest('form')?.dispatchEvent(new Event('submit'));
+        expect(post).toHaveBeenCalledWith(`/intelligence/${item.ulid}/assign`, expect.any(Object));
+
+        const assigned = mount(Show, { props: { ...showProps, canEdit: false, form: null, review: { ...showProps.review, reviewer: 'Rui', canAssign: true } } });
+        expect(assigned.get('label[for="assign-reviewer"]').text()).toBe('Reassign the review');
+        expect(assigned.get('#assign-rationale').attributes('required')).toBeDefined();
+        expect(assigned.text()).toContain('Nobody else who reviews intelligence can see this item.');
+    });
+
+    it('lets the assigned reviewer start, then decide with no decision preselected', async () => {
+        const waiting = mount(Show, { props: { ...showProps, canEdit: false, form: null, review: { ...showProps.review, reviewer: 'Rui', canStart: true } } });
+        await waiting.findAll('button').find((b) => b.text() === 'Start review')?.trigger('click');
+        expect(routerPost).toHaveBeenCalledWith(`/intelligence/${item.ulid}/review`, {}, expect.any(Object));
+
+        const reviewing = mount(Show, { props: { ...showProps, canEdit: false, form: null, review: { ...showProps.review, reviewer: 'Rui', canDecide: true } } });
+        const radios = reviewing.findAll('input[type="radio"]');
+        expect(radios.map((r) => (r.element as HTMLInputElement).checked)).toEqual([false, false, false]);
+        const record = reviewing.findAll('button').find((b) => b.text() === 'Record decision');
+        expect(record?.attributes('disabled')).toBeDefined();
+        await radios[2]?.setValue(true);
+        expect(reviewing.get('#decision-rationale').attributes('required')).toBeDefined();
+        await reviewing.get('#decision-rationale').element.closest('form')?.dispatchEvent(new Event('submit'));
+        expect(post).toHaveBeenCalledWith(`/intelligence/${item.ulid}/decision`, expect.any(Object));
+
+        const blocked = mount(Show, { props: { ...showProps, canEdit: false, form: null, review: { ...showProps.review, canDecide: true, approvalProblems: ['Claim 1 cites no available evidence that you can see and that supports it.'] } } });
+        expect(blocked.text()).toContain('Claim 1 cites no available evidence that you can see and that supports it.');
+        expect(blocked.findAll('input[type="radio"]')[0]?.attributes('disabled')).toBeDefined();
+    });
+
+    it('shows the review history as text', () => {
+        const wrapper = mount(Show, { props: { ...showProps, canEdit: false, form: null, review: { ...showProps.review, reviewer: 'Rui', history: [
+            { ulid: '01JREV00000000000000000001', decision: 'reassign', by: 'Dee', assignee: 'Rui', rationale: '<b>On leave</b>', version: 3, decidedAt: '2026-11-01T10:00:00Z' },
+        ] } } });
+        expect(wrapper.text()).toContain('Reassigned to Rui by Dee · version 3');
+        expect(wrapper.find('#review-heading ~ ol b').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<b>On leave</b>');
+        expect(mount(Show, { props: { ...showProps, canEdit: false, form: null } }).find('#review-heading').exists()).toBe(false);
+    });
+
+    it('lists the queue with its age and filters it', async () => {
+        const row = { ulid: item.ulid, title: '<i>Launch</i>', status: 'submitted', classification: 'internal', highImpact: false, competitors: ['Acme'], reviewer: null, mine: false, submittedAt: '2026-11-01T10:00:00Z' };
+        const wrapper = mount(Queue, { props: { items: [row, { ...row, ulid: '01JITEM0000000000000000002', reviewer: 'Rui', mine: true }], nextPage: null, filters: {}, statuses: ['submitted', 'in_review'], filterCompetitors: [] } });
+        expect(wrapper.find('td i').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<i>Launch</i>');
+        expect(wrapper.text()).toContain('Not assigned');
+        expect(wrapper.text()).toContain('You');
+        await wrapper.get('#filter-assigned').setValue('mine');
+        await wrapper.get('form').trigger('submit');
+        expect(get).toHaveBeenCalledWith('/verification', { assigned: 'mine' }, expect.any(Object));
+    });
+
+    it('labels an age in minutes, hours or days', () => {
+        const now = new Date('2026-11-06T12:00:00Z');
+        expect(ageLabel(null, now)).toBe('—');
+        expect(ageLabel('2026-11-06T11:59:00Z', now)).toBe('1 minute');
+        expect(ageLabel('2026-11-06T09:00:00Z', now)).toBe('3 hours');
+        expect(ageLabel('2026-11-04T11:00:00Z', now)).toBe('2 days');
+        expect(ageLabel('2026-11-07T00:00:00Z', now)).toBe('0 minutes');
     });
 });

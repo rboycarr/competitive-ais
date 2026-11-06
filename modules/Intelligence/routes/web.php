@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Intelligence\Http\Controllers\IntelligenceClaimController;
 use Modules\Intelligence\Http\Controllers\IntelligenceItemController;
+use Modules\Intelligence\Http\Controllers\VerificationQueueController;
 
 // Intelligence (P1-40). Reading needs intelligence.view (and the item's visibility: hidden items are 404), writing
 // intelligence.create; the services check again, including author/owner, editable status and the version read.
@@ -26,4 +27,12 @@ Route::middleware('auth')->group(function () {
     // P1-42: the workflow. Only intelligence.view here: IntelligenceWorkflowService checks visibility first (a hidden
     // item is 404 for everyone, TASK-0087 #1), then intelligence.submit, the actor, the item's state and its guard.
     Route::post('/intelligence/{item}/submit', [IntelligenceItemController::class, 'submit'])->middleware('can:intelligence.view')->name('intelligence.submit');
+    // P1-43: the verification queue and its transitions, the same way: the service checks visibility first, then
+    // intelligence.publish (assigning) or intelligence.review and the assignment (reviewing).
+    Route::middleware('can:intelligence.view')->group(function () {
+        Route::get('/verification', [VerificationQueueController::class, 'index'])->name('verification.index');
+        Route::post('/intelligence/{item}/assign', [VerificationQueueController::class, 'assign'])->name('intelligence.assign');
+        Route::post('/intelligence/{item}/review', [VerificationQueueController::class, 'start'])->name('intelligence.review.start');
+        Route::post('/intelligence/{item}/decision', [VerificationQueueController::class, 'decide'])->name('intelligence.decide');
+    });
 });

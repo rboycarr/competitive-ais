@@ -135,6 +135,7 @@ AI approval never replaces human approval.
 | TASK-0086 | Review of P1-36b (evidence inherits the scopes of the claims it supports) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/evidence-inherited-scopes` @ `a0f023b` | **Reviewed: "yes after fixes" (missing tests, no findings); tests added.** | `handoffs/TASK-0086-review.md` |
 | TASK-0087 | Review of P1-42 (submit for review only when evidence-backed) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/intelligence-submission` @ `0623c11` | **Reviewed: "yes after fixes" (1 medium: hidden item 403 before 404 on submit); fixed, tests added.** | `handoffs/TASK-0087-review.md` |
 | TASK-0088 | Verification of the TASK-0087 fix (P1-42) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/intelligence-submission` @ `9f39bf7` | **Verified: TASK-0087 #1 resolved for users with view permission; the app-wide remainder accepted (O40), P1-55.** | `handoffs/TASK-0088-review.md` |
+| TASK-0089 | Review of P1-43 (verification queue) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/verification-queue` @ `4e868b3` | **Reviewed: "yes", no findings; suggested tests added where missing.** | `handoffs/TASK-0089-review.md` |
 
 ## 4. Decision and disagreement log
 

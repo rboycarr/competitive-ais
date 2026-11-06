@@ -5,7 +5,7 @@ import { Head, Link, usePage } from '@inertiajs/vue3';
 defineProps<{ title: string }>();
 
 type Shared = {
-    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean; productView?: boolean; taxonomyManage?: boolean; sourceView?: boolean; evidenceView?: boolean; intelligenceView?: boolean } };
+    auth?: { user: { name: string } | null; can?: { userView?: boolean; roleManage?: boolean; teamManage?: boolean; grantManage?: boolean; auditView?: boolean; competitorView?: boolean; productView?: boolean; taxonomyManage?: boolean; sourceView?: boolean; evidenceView?: boolean; intelligenceView?: boolean; verificationQueue?: boolean } };
     flash?: { status?: string | null };
 };
 
@@ -20,6 +20,7 @@ const mainLinks = computed(() => [
     can.value.sourceView ? { href: '/sources', label: 'Sources' } : null,
     can.value.evidenceView ? { href: '/evidence', label: 'Evidence' } : null,
     can.value.intelligenceView ? { href: '/intelligence', label: 'Intelligence' } : null,
+    can.value.verificationQueue ? { href: '/verification', label: 'Verification' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
 const adminLinks = computed(() => [
     can.value.userView ? { href: '/admin/users', label: 'Users' } : null,

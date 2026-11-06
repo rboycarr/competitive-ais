@@ -4,7 +4,7 @@ import { Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import MarkdownView, { type MarkdownNode } from '@/Components/MarkdownView';
 import ItemForm, { type ItemFields } from '../../Components/ItemForm.vue';
-import { claimTypeLabel, credibilityLabel, ratingTitle, relationLabel, reliabilityLabel, statusLabel, typeLabel } from './labels';
+import { claimTypeLabel, credibilityLabel, decisionChoiceLabel, decisionLabel, ratingTitle, relationLabel, reliabilityLabel, statusLabel, typeLabel } from './labels';
 
 type Option = { ulid: string; name: string };
 type Citation = {
@@ -14,6 +14,12 @@ type Citation = {
 type Claim = {
     ulid: string; statement: string; type: string; reliability: string; credibility: number; status: string;
     evidence: Citation[]; hiddenEvidence: number;
+};
+type Review = {
+    reviewer: string | null; submittedAt: string | null; verifiedAt: string | null;
+    history: { ulid: string; decision: string; by: string | null; assignee: string | null; rationale: string | null; version: number; decidedAt: string }[];
+    canAssign: boolean; reviewers: { ulid: string; name: string }[];
+    canStart: boolean; canDecide: boolean; decisions: string[]; approvalProblems: string[];
 };
 
 const props = defineProps<{
@@ -28,6 +34,7 @@ const props = defineProps<{
     form: ItemFields | null;
     claimTypes: string[]; reliabilities: string[]; credibilities: number[];
     submission: { problems: string[] } | null;
+    review: Review;
     relations: string[]; evidenceOptions: { ulid: string; title: string; capturedAt: string }[]; evidenceSearch: string | null;
     types?: string[]; classifications?: string[]; competitorOptions?: Option[]; productOptions?: Option[]; marketOptions?: Option[];
 }>();
@@ -97,6 +104,21 @@ function submit(): void {
         onError: (errors) => { submitErrors.value = Object.values(errors).flat(); },
         onFinish: () => { submitting.value = false; },
     });
+}
+// P1-43: a director assigns the reviewer (a reason to reassign); the assigned reviewer starts the review, then decides.
+// The decision is chosen, never defaulted; the server checks everything again.
+const assignment = useForm({ reviewer: '', rationale: '' });
+function assign(): void {
+    assignment.post(`${base.value}/assign`, { preserveScroll: true, onSuccess: () => assignment.reset() });
+}
+const starting = ref(false);
+function startReview(): void {
+    router.post(`${base.value}/review`, {}, { preserveScroll: true, onStart: () => { starting.value = true; }, onFinish: () => { starting.value = false; } });
+}
+const verdict = useForm({ decision: '', rationale: '' });
+const rationaleRequired = computed(() => verdict.decision === 'request_changes' || verdict.decision === 'reject');
+function decide(): void {
+    verdict.transform((data) => ({ ...data, version: props.item.version })).post(`${base.value}/decision`, { preserveScroll: true, onSuccess: () => verdict.reset() });
 }
 function uncite(c: Claim, e: Citation): void {
     router.post(`${base.value}/claims/${c.ulid}/evidence/remove`, { evidence: e.ulid, relation: e.relation, version: props.item.version }, { preserveScroll: true });
@@ -241,6 +263,74 @@ function uncite(c: Claim, e: Citation): void {
             <ul v-if="submitErrors.length > 0" class="mt-2 text-sm text-red-700" role="alert">
                 <li v-for="message in submitErrors" :key="message">{{ message }}</li>
             </ul>
+        </section>
+
+        <section v-if="props.review.history.length > 0 || props.review.reviewer !== null || props.review.canAssign || props.review.canStart || props.review.canDecide" aria-labelledby="review-heading" class="mb-6 max-w-3xl rounded border border-slate-300 p-3">
+            <h2 id="review-heading" class="mb-1 text-lg font-semibold">Verification</h2>
+            <p class="mb-2 text-sm text-slate-700">
+                Reviewer: {{ props.review.reviewer ?? 'not assigned' }}
+                <template v-if="props.review.submittedAt"> · Submitted {{ when(props.review.submittedAt) }}</template>
+                <template v-if="props.review.verifiedAt"> · Approved {{ when(props.review.verifiedAt) }}</template>
+            </p>
+
+            <form v-if="props.review.canAssign" class="mb-3 space-y-2" novalidate @submit.prevent="assign">
+                <div>
+                    <label for="assign-reviewer" class="block font-medium">{{ props.review.reviewer === null ? 'Assign a reviewer' : 'Reassign the review' }}</label>
+                    <select id="assign-reviewer" v-model="assignment.reviewer" required :aria-invalid="assignment.errors.reviewer ? 'true' : undefined" aria-describedby="assign-errors" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                        <option value="" disabled>Choose</option>
+                        <option v-for="r in props.review.reviewers" :key="r.ulid" :value="r.ulid">{{ r.name }}</option>
+                    </select>
+                    <p v-if="props.review.reviewers.length === 0" class="mt-1 text-sm text-slate-700">Nobody else who reviews intelligence can see this item.</p>
+                </div>
+                <div v-if="props.review.reviewer !== null">
+                    <label for="assign-rationale" class="block font-medium">Reason for reassigning</label>
+                    <textarea id="assign-rationale" v-model="assignment.rationale" required maxlength="5000" rows="2" :aria-invalid="assignment.errors.rationale ? 'true' : undefined" aria-describedby="assign-errors" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+                </div>
+                <ul id="assign-errors" class="text-sm text-red-700" role="alert">
+                    <li v-for="message in Object.values(assignment.errors)" :key="message">{{ message }}</li>
+                </ul>
+                <button type="submit" :disabled="assignment.processing" class="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50">{{ props.review.reviewer === null ? 'Assign' : 'Reassign' }}</button>
+            </form>
+
+            <div v-if="props.review.canStart" class="mb-3">
+                <p class="mb-2 text-sm text-slate-700">You are this item's reviewer. Start the review to record a decision.</p>
+                <button type="button" :disabled="starting" class="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50" @click="startReview">Start review</button>
+            </div>
+
+            <form v-if="props.review.canDecide" class="mb-3 space-y-2" novalidate @submit.prevent="decide">
+                <template v-if="props.review.approvalProblems.length > 0">
+                    <p class="text-sm text-slate-700">You cannot approve it yet: every claim needs available supporting evidence that you can see.</p>
+                    <ul class="list-disc pl-5 text-sm">
+                        <li v-for="problem in props.review.approvalProblems" :key="problem">{{ problem }}</li>
+                    </ul>
+                </template>
+                <fieldset>
+                    <legend class="font-medium">Decision</legend>
+                    <label v-for="d in props.review.decisions" :key="d" class="mr-4 inline-flex items-center gap-1">
+                        <input v-model="verdict.decision" type="radio" name="decision" :value="d" :disabled="d === 'approve' && props.review.approvalProblems.length > 0">
+                        {{ decisionChoiceLabel(d) }}
+                    </label>
+                </fieldset>
+                <div>
+                    <label for="decision-rationale" class="block font-medium">Rationale{{ rationaleRequired ? '' : ' (optional)' }}</label>
+                    <textarea id="decision-rationale" v-model="verdict.rationale" :required="rationaleRequired" maxlength="5000" rows="3" :aria-invalid="verdict.errors.rationale ? 'true' : undefined" aria-describedby="decision-errors" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+                </div>
+                <ul id="decision-errors" class="text-sm text-red-700" role="alert">
+                    <li v-for="message in Object.values(verdict.errors)" :key="message">{{ message }}</li>
+                </ul>
+                <button type="submit" :disabled="verdict.processing || verdict.decision === ''" class="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50">Record decision</button>
+            </form>
+
+            <template v-if="props.review.history.length > 0">
+                <h3 class="mt-2 font-medium">History</h3>
+                <ol class="text-sm">
+                    <li v-for="r in props.review.history" :key="r.ulid" class="border-b border-slate-100 py-1">
+                        {{ decisionLabel(r.decision) }}<template v-if="r.assignee"> to {{ r.assignee }}</template>
+                        by {{ r.by ?? '—' }} · version {{ r.version }} · {{ when(r.decidedAt) }}
+                        <p v-if="r.rationale" class="whitespace-pre-line text-slate-700">{{ r.rationale }}</p>
+                    </li>
+                </ol>
+            </template>
         </section>
 
         <section v-if="props.canEdit" aria-labelledby="claim-form-heading" class="mb-8 max-w-3xl">
