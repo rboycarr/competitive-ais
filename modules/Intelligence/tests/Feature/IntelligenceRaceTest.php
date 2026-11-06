@@ -359,6 +359,68 @@ class IntelligenceRaceTest extends TestCase
         $this->assertSame(1, DB::table('audit_events')->where('action', 'intelligence.superseded')->count());
     }
 
+    /**
+     * TASK-0090 #2: a replacement drafted while the original is being retracted waits for the original's row (share
+     * lock versus FOR UPDATE), sees the retraction, and is refused: no draft replaces a retracted item.
+     */
+    public function test_a_replacement_drafted_during_a_retraction_is_refused(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p144r-'.bin2hex(random_bytes(6));
+        $original = $this->submitted();
+        DB::table('intelligence_items')->where('id', $original->id)->update(['status' => 'published', 'released_at' => now()]);
+        $original->refresh();
+
+        $results = $this->race(
+            function () use ($original, $signal): void {
+                DB::transaction(function () use ($original, $signal): void {
+                    app(IntelligenceWorkflowService::class)->retract($this->director, $original, ['reason' => 'Synthetic retraction']);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceItemService::class)->draftReplacement($this->analyst, $original),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame('retracted', $original->refresh()->status);
+        $this->assertSame(0, IntelligenceItem::query()->whereNotNull('supersedes_id')->count());
+    }
+
+    /** TASK-0090: two directors publishing one item at once: one publication, one review row; the other is refused. */
+    public function test_two_directors_publishing_one_item_publish_it_once(): void
+    {
+        $signal = sys_get_temp_dir().'/cais-p144p-'.bin2hex(random_bytes(6));
+        $reviewer = $this->reviewer('reviewer@example.test');
+        $deputy = $this->enableTwoFactor($this->createUser('deputy@example.test', 'ci_director', clearance: Classification::Confidential));
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $deputy->id, 'scope_type' => 'all', 'max_classification' => 'confidential',
+            'granted_by' => $this->director->id, 'reason' => 'Synthetic test grant', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $item = $this->submitted();
+        $workflow = app(IntelligenceWorkflowService::class);
+        $workflow->assign($this->director, $item, ['reviewer' => $reviewer->ulid]);
+        $workflow->startReview($reviewer, $item);
+        $workflow->decide($reviewer, $item, ['decision' => 'approve', 'version' => 3]);
+
+        $results = $this->race(
+            function () use ($item, $signal): void {
+                DB::transaction(function () use ($item, $signal): void {
+                    app(IntelligenceWorkflowService::class)->publish($this->director, $item, ['version' => 3]);
+                    touch($signal);
+                    usleep(1_500_000);
+                });
+            },
+            fn () => app(IntelligenceWorkflowService::class)->publish($deputy, $item, ['version' => 3]),
+            $signal,
+        );
+
+        $this->assertSame(['ok', ValidationException::class], array_column($results, 'outcome'), json_encode($results) ?: '');
+        $this->assertSame('published', $item->refresh()->status);
+        $this->assertSame([$this->director->id], VerificationReview::query()->where('decision', 'publish')->pluck('reviewer_id')->map(fn ($id) => (int) $id)->all());
+        $this->assertSame(1, DB::table('audit_events')->where('action', 'intelligence.published')->count());
+    }
+
     public function test_the_migrations_refuse_to_roll_back_while_intelligence_exists(): void
     {
         $tables = fn (): array => [Schema::hasTable('claim_evidence_links'), Schema::hasTable('intelligence_items')];

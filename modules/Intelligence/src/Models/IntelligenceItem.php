@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use LogicException;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Access\Classifiable;
 use Modules\Platform\Access\Scoped;
@@ -67,6 +68,20 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
     protected $guarded = ['*'];
 
     protected $dateFormat = 'Y-m-d H:i:s.u';
+
+    /**
+     * The item a replacement supersedes is set once, on its draft, and never changed or cleared (TASK-0090 #1): a
+     * publication must supersede exactly the item the replacement was drafted from. The database grant cannot express
+     * a column that is written once; a trigger comes with P1-52 (database-held immutability).
+     */
+    protected static function booted(): void
+    {
+        static::updating(function (self $item): void {
+            if ($item->isDirty('supersedes_id') && ($item->getOriginal('supersedes_id') !== null || $item->getOriginal('status') !== 'draft')) {
+                throw new LogicException('An item never changes the item it replaces.');
+            }
+        });
+    }
 
     public function getRouteKeyName(): string
     {

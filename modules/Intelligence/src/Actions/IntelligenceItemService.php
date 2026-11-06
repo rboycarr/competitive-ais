@@ -121,6 +121,12 @@ class IntelligenceItemService
         $date = fn (string $field): ?string => $replaced->{$field}?->copy()->utc()->format('Y-m-d\TH:i:s.u\Z'); // keeps the microseconds
 
         return $this->db->transaction(function () use ($actor, $replaced, $competitors, $products, $date): IntelligenceItem {
+            // Share-locked until the draft commits: a retraction (FOR UPDATE) waits, or has already happened and this
+            // locking read sees it (TASK-0090 #2).
+            $locked = IntelligenceItem::query()->whereKey($replaced->id)->sharedLock()->firstOrFail();
+            if ($locked->status !== 'published') {
+                throw ValidationException::withMessages(['item' => 'Only a published item can be replaced.']);
+            }
             $item = $this->create($actor, [
                 'title' => $replaced->title,
                 'summary' => $replaced->summary,

@@ -250,6 +250,28 @@ class IntelligencePublicationTest extends TestCase
         $this->expectValidation(fn () => $this->workflow()->retract($this->director, $original, ['reason' => 'x']), 'item');
     }
 
+    /** TASK-0090 #1: the item a replacement supersedes is set once, on its draft, and never changed or cleared. */
+    public function test_the_replaced_item_is_never_changed(): void
+    {
+        $original = $this->published();
+        $other = $this->published();
+        $replacement = $this->items()->draftReplacement($this->analyst, $original);
+
+        // Editing the draft keeps it.
+        $this->items()->update($this->analyst, $replacement, [
+            'title' => 'Widget relaunch', 'summary' => '', 'item_type' => 'news', 'classification' => 'internal', 'competitors' => [$this->acme],
+            'version' => $replacement->version, 'supersedes_id' => $other->id,
+        ]);
+        $this->assertSame($original->id, $replacement->refresh()->supersedes_id);
+
+        foreach ([$other->id, null] as $value) {
+            $this->assertThrows(fn () => $replacement->refresh()->forceFill(['supersedes_id' => $value])->save(), \LogicException::class, 'never changes the item it replaces');
+        }
+        // Nor is it set on anything but a draft.
+        $this->assertThrows(fn () => $other->refresh()->forceFill(['supersedes_id' => $original->id])->save(), \LogicException::class);
+        $this->assertSame([$original->id, null], [$replacement->refresh()->supersedes_id, $other->refresh()->supersedes_id]);
+    }
+
     public function test_every_publication_route_is_404_for_a_hidden_item_whatever_the_input(): void
     {
         $approved = $this->approved();

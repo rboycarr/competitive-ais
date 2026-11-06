@@ -261,7 +261,10 @@ class IntelligenceWorkflowService
         if ($ulid !== null && $ulid !== '' && (! is_string($ulid) || ! Str::isUlid(trim($ulid)))) {
             throw ValidationException::withMessages(['replacement' => 'The replacement must be another published item you can see.']);
         }
-        $replacementId = is_string($ulid) && trim($ulid) !== '' ? IntelligenceItem::query()->where('ulid', strtoupper(trim($ulid)))->value('id') : null;
+        // Only among items the actor sees (TASK-0090 #3): a hidden replacement is found exactly as a missing one is not.
+        $replacementId = is_string($ulid) && trim($ulid) !== ''
+            ? IntelligenceItem::seenBy(IntelligenceItem::query(), $actor, $this->gate)->where('ulid', strtoupper(trim($ulid)))->value('id')
+            : null;
         if (is_string($ulid) && trim($ulid) !== '' && $replacementId === null) {
             throw ValidationException::withMessages(['replacement' => 'The replacement must be another published item you can see.']);
         }
