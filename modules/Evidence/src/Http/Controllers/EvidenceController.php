@@ -18,6 +18,7 @@ use Modules\Evidence\Http\Requests\UploadEvidenceRequest;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Contracts\UserDirectory;
+use Modules\Intelligence\Contracts\IntelligenceCitations;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
 use Modules\Registry\Contracts\CompetitorLookup;
@@ -43,6 +44,7 @@ class EvidenceController
         private readonly CompetitorLookup $competitors,
         private readonly MarketLookup $markets,
         private readonly SourceLookup $sources,
+        private readonly IntelligenceCitations $citations,
     ) {}
 
     public function index(Request $request): Response
@@ -113,7 +115,11 @@ class EvidenceController
                 'competitors' => array_values(array_map(fn (CompetitorSummary $c): string => $c->name, $this->competitors->summaries($viewer, $asset->competitorIds()))),
                 'markets' => array_values(array_map(fn (MarketSummary $m): string => "{$m->name} ({$m->code})", $this->markets->summaries($asset->marketIds()))),
                 'source' => $this->captureSource($viewer, $asset),
+                // P1-45: the stored content's SHA-256 (none while quarantined, or after withdrawal).
+                'sha256' => $asset->blob?->sha256,
             ],
+            // P1-45: the intelligence citing it, for viewers of intelligence: items they see are named, others counted.
+            'citations' => $this->gate->forUser($viewer)->allows('intelligence.view') ? $this->citations->forEvidence($viewer, $asset->id) : null,
             // Offered only where it would succeed; EvidenceDownloadService and EvidenceHoldService check again.
             'canDownload' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.download'),
             'canHold' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.hold'),

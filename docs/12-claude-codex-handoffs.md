@@ -138,6 +138,7 @@ AI approval never replaces human approval.
 | TASK-0089 | Review of P1-43 (verification queue) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/verification-queue` @ `4e868b3` | **Reviewed: "yes", no findings; suggested tests added where missing.** | `handoffs/TASK-0089-review.md` |
 | TASK-0090 | Review of P1-44 (publish, retract, supersede) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/intelligence-publication` @ `8e3ed41` | **Reviewed: "yes after fixes" (high: `supersedes_id` mutable; medium: drafting vs retraction; low: replacement lookup); fixed, tests added; trigger for `supersedes_id` in P1-52.** | `handoffs/TASK-0090-review.md` |
 | TASK-0091 | Verification of the TASK-0090 fixes (P1-44) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/intelligence-publication` @ `eedb12b` | **Verified: #2, #3 resolved; #1 partly (status and `supersedes_id` in one save): fixed; direct SQL in P1-52.** | `handoffs/TASK-0091-review.md` |
+| TASK-0092 | Review of P1-45 (provenance view) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/provenance-view` | Brief written 2026-11-07; awaiting review | `handoffs/TASK-0092.md` |
 
 ## 4. Decision and disagreement log
 

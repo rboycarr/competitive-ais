@@ -10,7 +10,9 @@ use Modules\Evidence\Console\DispatchPendingScans;
 use Modules\Evidence\Console\ReconcileBlobs;
 use Modules\Evidence\Console\SweepQuarantine;
 use Modules\Evidence\Contracts\EvidenceLinking;
+use Modules\Evidence\Contracts\EvidenceProvenance;
 use Modules\Evidence\Lookup\EloquentEvidenceLinking;
+use Modules\Evidence\Lookup\EloquentEvidenceProvenance;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
 
@@ -28,6 +30,8 @@ class EvidenceServiceProvider extends ModuleServiceProvider
 
         // Intelligence cites evidence through this contract (P1-41).
         $this->app->bind(EvidenceLinking::class, EloquentEvidenceLinking::class);
+        // P1-45: the provenance view.
+        $this->app->bind(EvidenceProvenance::class, EloquentEvidenceProvenance::class);
     }
 
     public function boot(): void

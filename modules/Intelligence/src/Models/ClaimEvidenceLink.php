@@ -4,6 +4,7 @@ namespace Modules\Intelligence\Models;
 
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * A claim citing an evidence asset (P1-41, docs/02 §3.6): it supports, contradicts or gives context to the claim, at
@@ -28,6 +29,12 @@ class ClaimEvidenceLink extends Model
     protected $guarded = ['*'];
 
     protected $dateFormat = 'Y-m-d H:i:s.u';
+
+    /** @return BelongsTo<IntelligenceClaim, $this> */
+    public function claim(): BelongsTo
+    {
+        return $this->belongsTo(IntelligenceClaim::class, 'intelligence_claim_id');
+    }
 
     /**
      * @return array<string, string>

@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Intelligence\Http\Controllers\IntelligenceClaimController;
 use Modules\Intelligence\Http\Controllers\IntelligenceItemController;
+use Modules\Intelligence\Http\Controllers\ProvenanceController;
 use Modules\Intelligence\Http\Controllers\VerificationQueueController;
 
 // Intelligence (P1-40). Reading needs intelligence.view (and the item's visibility: hidden items are 404), writing
@@ -12,6 +13,8 @@ Route::middleware('auth')->group(function () {
     Route::middleware('can:intelligence.view')->group(function () {
         Route::get('/intelligence', [IntelligenceItemController::class, 'index'])->name('intelligence.index');
         Route::get('/intelligence/{item}', [IntelligenceItemController::class, 'show'])->name('intelligence.show');
+        // P1-45: the item traced to its origins.
+        Route::get('/intelligence/{item}/provenance', [ProvenanceController::class, 'show'])->name('intelligence.provenance');
     });
     Route::middleware('can:intelligence.create')->group(function () {
         Route::post('/intelligence', [IntelligenceItemController::class, 'store'])->name('intelligence.store');
