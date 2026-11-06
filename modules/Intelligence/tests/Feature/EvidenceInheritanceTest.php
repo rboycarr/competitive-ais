@@ -2,11 +2,13 @@
 
 namespace Modules\Intelligence\Tests\Feature;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Evidence\Actions\EvidenceScanService;
+use Modules\Evidence\Contracts\EvidenceLinking;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Identity\Models\User;
@@ -16,6 +18,7 @@ use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Platform\Classification;
+use RuntimeException;
 use Tests\Support\AuthorizationMatrix;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
@@ -85,6 +88,64 @@ class EvidenceInheritanceTest extends TestCase
         $this->assertSame(0, ClaimEvidenceLink::query()->count());
         $this->assertSame([[$a, $b], [$m]], [$asset->competitorIds(), $asset->marketIds()]);
         $this->assertSame(2, EvidenceCustodyEvent::query()->where('event', 'scope_inherited')->count());
+    }
+
+    /** TASK-0086: a product subject passes on its competitor; a withdrawn claim's citations still inherit new subjects. */
+    public function test_product_subjects_and_withdrawn_claims_pass_their_scopes_on(): void
+    {
+        AuthorizationMatrix::users();
+        [$a, $b, $m] = [AuthorizationMatrix::competitorId('A'), AuthorizationMatrix::competitorId('B'), AuthorizationMatrix::marketId('M')];
+        $writer = $this->writer();
+        $product = (int) DB::table('products')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'owner_kind' => 'competitor', 'competitor_id' => $b, 'name' => 'Matrix widget', 'status' => 'active',
+            'classification' => 'internal', 'created_by' => $writer->id, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $item = $this->items()->create($writer, ['products' => [DB::table('products')->where('id', $product)->value('ulid')]] + $this->itemFields([], []));
+        $claim = $this->claims()->add($writer, $item, ['statement' => 'Synthetic claim', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => 1]);
+        $asset = $this->available($writer, Classification::Internal);
+        $this->claims()->link($writer, $item, $claim->ulid, ['evidence' => $asset->ulid, 'relation' => 'supports', 'version' => 2]);
+        $this->assertSame([[$b], []], [$asset->competitorIds(), $asset->marketIds()], 'the product brings its competitor');
+
+        $this->claims()->withdraw($writer, $item, $claim->ulid, ['version' => 3]);
+        $this->items()->update($writer, $item, ['products' => [DB::table('products')->where('id', $product)->value('ulid')]] + $this->itemFields([$a], [$m]) + ['version' => 4]);
+        $this->assertSame([[$a, $b], [$m]], [$asset->competitorIds(), $asset->marketIds()], 'cited by a withdrawn claim, still inherits');
+    }
+
+    /** TASK-0086: repeated IDs are written once; an unknown one fails the whole change, scopes and records together. */
+    public function test_inherit_writes_repeats_once_and_an_unknown_id_changes_nothing(): void
+    {
+        AuthorizationMatrix::users();
+        [$a, $m] = [AuthorizationMatrix::competitorId('A'), AuthorizationMatrix::marketId('M')];
+        $writer = $this->writer();
+        $asset = $this->available($writer, Classification::Internal);
+        $linking = app(EvidenceLinking::class);
+        $ulid = (string) Str::ulid();
+
+        $this->assertTrue(DB::transaction(fn () => $linking->inherit($writer, $asset->id, $ulid, [$a, $a], [$m, $m])));
+        $this->assertFalse(DB::transaction(fn () => $linking->inherit($writer, $asset->id, $ulid, [$a], [$m])), 'nothing new: no records');
+        $this->assertSame([[$a], [$m], 1], [$asset->competitorIds(), $asset->marketIds(), EvidenceCustodyEvent::query()->where('event', 'scope_inherited')->count()]);
+
+        $this->assertThrows(fn () => DB::transaction(fn () => $linking->inherit($writer, $asset->id, $ulid, [$a, PHP_INT_MAX], [])), QueryException::class);
+        $this->assertSame([[$a], 1, 1], [$asset->competitorIds(), EvidenceCustodyEvent::query()->where('event', 'scope_inherited')->count(),
+            DB::table('audit_events')->where('action', 'evidence.scope_inherited')->count()]);
+    }
+
+    /** TASK-0086: if any write of a citation fails, its inherited scopes, records, link and version go with it. */
+    public function test_a_failed_write_leaves_no_inherited_scope(): void
+    {
+        AuthorizationMatrix::users();
+        $writer = $this->writer();
+        $asset = $this->available($writer, Classification::Internal);
+        [$item, $claim] = $this->itemWithClaim($writer, [AuthorizationMatrix::competitorId('A')], []);
+        EvidenceCustodyEvent::creating(function (EvidenceCustodyEvent $event): void {
+            if ($event->event === 'linked') {
+                throw new RuntimeException('custody store unavailable');
+            }
+        });
+
+        $this->assertThrows(fn () => $this->claims()->link($writer, $item, $claim->ulid, ['evidence' => $asset->ulid, 'relation' => 'supports', 'version' => 2]), RuntimeException::class);
+        $this->assertSame([[], 0, 0, 0, 2], [$asset->competitorIds(), ClaimEvidenceLink::query()->count(), EvidenceCustodyEvent::query()->count(),
+            DB::table('audit_events')->whereIn('action', ['evidence.scope_inherited', 'intelligence.evidence_linked'])->count(), $item->fresh()?->version]);
     }
 
     public function test_nobody_cites_or_edits_their_way_out_of_seeing_evidence(): void
