@@ -20,6 +20,8 @@ use Modules\Intelligence\Actions\IntelligenceItemService;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Platform\Access\AccessScope;
+use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Sources\Actions\SourcePolicyService;
 use Modules\Sources\Actions\SourceService;
@@ -156,7 +158,7 @@ class ClaimEvidenceLinkTest extends TestCase
     {
         [$item, $claim] = $this->draftWithClaim();
         $asset = $this->available();
-        $linking = Mockery::mock(EloquentEvidenceLinking::class, [app(Gate::class), app('db')])->makePartial();
+        $linking = Mockery::mock(EloquentEvidenceLinking::class, [app(Gate::class), app('db'), app(AccessScope::class), app(AuditLogger::class)])->makePartial();
         $linking->shouldReceive('recordLink')->andThrow(new RuntimeException('custody store unavailable'));
         $this->app->instance(EvidenceLinking::class, $linking);
 

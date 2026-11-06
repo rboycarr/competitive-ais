@@ -21,11 +21,33 @@ interface EvidenceLinking
     public function linkable(Authenticatable $viewer, ?string $search, int $limit): array;
 
     /**
-     * The asset with this ULID if the viewer can see it and it is available, its row locked in share mode so its
-     * status cannot change until the caller's transaction ends (withdrawal and rejection lock it for update): call
-     * it inside that transaction.
+     * The asset with this ULID if the viewer can see it and it is available, its row locked for update so neither its
+     * status nor its scopes change until the caller's transaction ends, and downloads and holds (which re-check
+     * visibility under the asset's lock) wait for the scopes it inherits (P1-36b, TASK-0075 #1): call it inside that
+     * transaction.
      */
     public function lockLinkable(Authenticatable $viewer, string $ulid): ?EvidenceSummary;
+
+    /**
+     * Locks these assets' rows for update, in ID order (so two callers never deadlock), and returns those the viewer
+     * sees as their scopes are now (locking reads: the latest committed rows, not the caller's snapshot). Call it inside
+     * the caller's transaction, after locking the item that cites them; again after inherit() to check the result.
+     *
+     * @param  list<int>  $ids
+     * @return list<int>
+     */
+    public function lockSeen(Authenticatable $viewer, array $ids): array;
+
+    /**
+     * Adds the competitors and markets the asset does not have yet as `inherited` scopes (P1-36b, docs/07 §3: evidence
+     * supporting an item is at least as restricted as the item's subjects), with a `scope_inherited` custody event and
+     * an `evidence.scope_inherited` audit event when any is added. Scopes are never removed here. The caller holds the
+     * asset's row lock (lockLinkable or lockSeen), inside its transaction. Returns whether any scope was added.
+     *
+     * @param  list<int>  $competitorIds
+     * @param  list<int>  $marketIds
+     */
+    public function inherit(Authenticatable $actor, int $assetId, string $itemUlid, array $competitorIds, array $marketIds): bool;
 
     /**
      * The assets with these IDs that the viewer can see, keyed by ID, in any status the viewer may see.
