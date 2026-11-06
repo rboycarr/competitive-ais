@@ -14,6 +14,8 @@ use Modules\Intelligence\Actions\IntelligenceWorkflowService;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Intelligence\Support\IntelligenceContent;
+use Modules\Platform\Audit\Actor;
+use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Classification;
 use Modules\Sources\Actions\SourcePolicyService;
 use Modules\Sources\Actions\SourceService;
@@ -119,6 +121,59 @@ class ProvenanceTest extends TestCase
         DB::table('intelligence_claims')->where('id', $first->id)->update(['statement' => 'Changed']);
         $this->actingAs($auditor)->get("/intelligence/{$item->ulid}/provenance")->assertInertia(fn ($page) => $page
             ->where('content.matchesApproval', false)->where('content.approvedHash', $hash));
+    }
+
+    /** TASK-0092 #1: the audit trail never names evidence (or any other record) the viewer cannot see. */
+    public function test_audit_contexts_never_name_what_the_viewer_cannot_see(): void
+    {
+        $acme = (int) DB::table('competitors')->where('ulid', $this->acme)->value('id');
+        $globex = (int) DB::table('competitors')->insertGetId([
+            'ulid' => (string) Str::ulid(), 'name' => 'Globex', 'slug' => 'globex-'.Str::lower(Str::random(5)), 'lifecycle' => 'active',
+            'classification' => 'internal', 'created_by' => $this->analyst->id, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $seen = $this->available(Classification::Internal);
+        $hidden = $this->available(Classification::Internal);
+        // Also about Globex: an auditor covered only for Acme cannot see it.
+        DB::table('evidence_asset_competitor')->insert(['evidence_asset_id' => $hidden->id, 'competitor_id' => $globex, 'origin' => 'declared', 'added_by' => $this->analyst->id, 'created_at' => now()]);
+        $item = $this->draft();
+        $claim = $this->claim($item);
+        $this->cite($item, $claim, $seen, 'supports');
+        $this->cite($item, $claim, $hidden, 'context');
+
+        $auditor = $this->createUser('auditor@example.test', 'auditor', clearance: Classification::Confidential);
+        DB::table('access_grants')->insert([
+            'ulid' => (string) Str::ulid(), 'user_id' => $auditor->id, 'scope_type' => 'competitor', 'competitor_id' => $acme, 'max_classification' => 'confidential',
+            'granted_by' => $this->director->id, 'reason' => 'Synthetic test grant', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // A draft is seen by holders of intelligence.review only: publish it straight into the auditor's view.
+        DB::table('intelligence_items')->where('id', $item->id)->update(['status' => 'published', 'released_at' => now()]);
+
+        $response = $this->actingAs($auditor)->get("/intelligence/{$item->ulid}/provenance")->assertOk();
+        $events = $response->inertiaProps('audit.events');
+        $linked = array_values(array_filter($events, fn (array $e): bool => $e['action'] === 'intelligence.evidence_linked'));
+        $this->assertCount(2, $linked, 'both link events are visible audit rows');
+        $this->assertEqualsCanonicalizing([$seen->ulid, 'hidden'], array_map(fn (array $e): string => $e['context']['evidence_ulid'], $linked));
+        $this->assertSame([$claim->ulid, $claim->ulid], array_map(fn (array $e): string => $e['context']['claim_ulid'], $linked));
+        $this->assertStringNotContainsString($hidden->ulid, (string) json_encode($response->inertiaProps()));
+        $this->assertSame(1, $response->inertiaProps('claims.0.hiddenEvidence'));
+    }
+
+    /** TASK-0092 #4: the audit panel shows the item's first 200 events, then points to the audit log. */
+    public function test_the_audit_panel_is_a_bounded_snapshot(): void
+    {
+        $item = $this->draft();
+        $logger = app(AuditLogger::class);
+        // The draft's creation is the first event; 199 more make 200.
+        DB::transaction(function () use ($logger, $item): void {
+            foreach (range(1, 199) as $i) {
+                $logger->record('intelligence.review_started', $item, ['version' => 1], Actor::user($this->analyst->id));
+            }
+        });
+        $this->actingAs($this->director)->get("/intelligence/{$item->ulid}/provenance")->assertInertia(fn ($page) => $page
+            ->has('audit.events', 200)->where('audit.more', false));
+        // Viewing it was recorded: now 201.
+        $this->actingAs($this->director)->get("/intelligence/{$item->ulid}/provenance")->assertInertia(fn ($page) => $page
+            ->has('audit.events', 200)->where('audit.more', true)->where('audit.events.0.action', 'intelligence.created'));
     }
 
     public function test_a_hidden_item_has_no_provenance(): void

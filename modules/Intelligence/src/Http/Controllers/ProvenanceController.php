@@ -21,6 +21,7 @@ use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditEvent;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Sources\Contracts\SourceLookup;
+use Modules\Sources\Contracts\SourcePolicySummary;
 
 /**
  * The provenance view (P1-45, docs/03 Intelligence): an item traced to its origins, for anyone who sees the item:
@@ -32,8 +33,14 @@ use Modules\Sources\Contracts\SourceLookup;
  */
 class ProvenanceController
 {
-    /** The audit trail shown at most; the audit log has the rest. */
+    /**
+     * The audit trail shown at most: a bounded snapshot of the item's first events (TASK-0092 #4); beyond it, the page
+     * links to the audit log filtered by the item, which pages through all of them.
+     */
     public const AUDIT_LIMIT = 200;
+
+    /** @var array<string, ?SourcePolicySummary> source and policy summaries already looked up for this page */
+    private array $recorded = [];
 
     public function __construct(
         private readonly AccessScope $access,
@@ -67,16 +74,22 @@ class ProvenanceController
             $trail?->pluck('actor_id')->all() ?? [],
         )))));
         $name = fn (?int $id): ?string => $id === null ? null : ($names[$id]->name ?? null);
-        $link = function (?int $id) use ($viewer): ?array {
-            $linked = $id === null ? null : IntelligenceItem::seenBy(IntelligenceItem::query(), $viewer, $this->gate)->whereKey($id)->first();
-
-            return $linked === null ? null : ['ulid' => $linked->ulid, 'title' => $linked->title, 'status' => $linked->status];
-        };
         $currentHash = IntelligenceContent::hash($item);
         $approval = $reviews->where('decision', 'approve')->where('item_version', $item->version)->last();
         $supersededBy = $item->status === 'superseded'
             ? IntelligenceItem::query()->where('supersedes_id', $item->id)->whereIn('status', IntelligenceItem::RELEASED)->value('id')
             : null;
+        // The replaced, superseding and replacement items, in one query, as the viewer may see them (TASK-0092 #3).
+        $linkedIds = array_values(array_filter([$item->supersedes_id, $supersededBy === null ? null : (int) $supersededBy, $retraction?->replacement_item_id]));
+        $linked = $linkedIds === [] ? collect() : IntelligenceItem::seenBy(IntelligenceItem::query(), $viewer, $this->gate)->whereIn('id', $linkedIds)->get()->keyBy('id');
+        $link = function (?int $id) use ($linked): ?array {
+            $found = $id === null ? null : $linked->get($id);
+
+            return $found === null ? null : ['ulid' => $found->ulid, 'title' => $found->title, 'status' => $found->status];
+        };
+        // ULIDs an audit context may show: what this page shows the viewer (TASK-0092 #1).
+        $shown = array_flip(array_merge([$item->ulid], $claims->pluck('ulid')->all(), $reviews->pluck('ulid')->all(),
+            array_map(fn (EvidenceTrace $t): string => $t->ulid, array_values($traces)), $linked->pluck('ulid')->all()));
 
         if ($trail !== null) {
             $this->db->transaction(fn () => $this->audit->record('intelligence.provenance_viewed', $item,
@@ -138,11 +151,31 @@ class ProvenanceController
                     'action' => $e->action,
                     'actor' => $e->actor_id !== null ? ($name($e->actor_id) ?? 'Unknown user') : $e->actor_type,
                     'occurredAt' => $e->occurred_at->toIso8601ZuluString('microsecond'),
-                    'context' => $e->context ?? (object) [],
+                    'context' => self::redacted($e->context ?? [], $shown) ?: (object) [],
                 ])->values()->all(),
                 'more' => $trail->count() > self::AUDIT_LIMIT,
             ],
         ]);
+    }
+
+    /**
+     * An audit context with every ULID that names something the viewer does not see on this page replaced by `hidden`
+     * (TASK-0092 #1: e.g. the `evidence_ulid` of a link to hidden evidence). `reviewer_ulid` names a user, as the reviews
+     * do, and is kept. Context values are codes, counts, booleans and ULIDs (AuditActions), never user text.
+     *
+     * @param  array<string, mixed>  $context
+     * @param  array<string, int>  $shown
+     * @return array<string, mixed>
+     */
+    private static function redacted(array $context, array $shown): array
+    {
+        foreach ($context as $key => $value) {
+            if (str_ends_with($key, '_ulid') && $key !== 'reviewer_ulid' && ! (is_string($value) && isset($shown[$value]))) {
+                $context[$key] = 'hidden';
+            }
+        }
+
+        return $context;
     }
 
     /**
@@ -155,7 +188,12 @@ class ProvenanceController
     {
         $source = null;
         if ($trace->sourceId !== null) {
-            $recorded = $trace->sourcePolicyId === null ? null : $this->sources->recorded($viewer, $trace->sourceId, $trace->sourcePolicyId);
+            // Once per source and policy version on the page (TASK-0092 #2).
+            $key = $trace->sourceId.':'.($trace->sourcePolicyId ?? '');
+            if (! array_key_exists($key, $this->recorded)) {
+                $this->recorded[$key] = $trace->sourcePolicyId === null ? null : $this->sources->recorded($viewer, $trace->sourceId, $trace->sourcePolicyId);
+            }
+            $recorded = $this->recorded[$key];
             // A source the viewer cannot see is a placeholder, never named.
             $source = $recorded === null ? ['visible' => false] : [
                 'visible' => true, 'ulid' => $recorded->sourceUlid, 'name' => $recorded->sourceName,
