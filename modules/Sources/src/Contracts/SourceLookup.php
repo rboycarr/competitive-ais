@@ -31,4 +31,12 @@ interface SourceLookup
      * or the policy is not one of its approvals.
      */
     public function recorded(Authenticatable $viewer, int $sourceId, int $policyId): ?SourcePolicySummary;
+
+    /**
+     * The sources with these IDs that the viewer can see, keyed by ID (P1-41); the others are left out.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, SourceSummary>
+     */
+    public function summaries(Authenticatable $viewer, array $ids): array;
 }

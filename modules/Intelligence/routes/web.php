@@ -19,5 +19,8 @@ Route::middleware('auth')->group(function () {
         Route::put('/intelligence/{item}/claims/{claim}', [IntelligenceClaimController::class, 'update'])->name('intelligence.claims.update');
         Route::post('/intelligence/{item}/claims/{claim}/withdraw', [IntelligenceClaimController::class, 'withdraw'])->name('intelligence.claims.withdraw');
         Route::post('/intelligence/{item}/claims/{claim}/move', [IntelligenceClaimController::class, 'move'])->name('intelligence.claims.move');
+        // P1-41: a claim cites evidence, or stops citing it (while the item is editable).
+        Route::post('/intelligence/{item}/claims/{claim}/evidence', [IntelligenceClaimController::class, 'link'])->name('intelligence.claims.link');
+        Route::post('/intelligence/{item}/claims/{claim}/evidence/remove', [IntelligenceClaimController::class, 'unlink'])->name('intelligence.claims.unlink');
     });
 });

@@ -17,7 +17,11 @@ const CREDIBILITY: Record<number, string> = {
     1: 'Confirmed by other sources', 2: 'Probably true', 3: 'Possibly true', 4: 'Doubtful', 5: 'Improbable', 6: 'Truth cannot be judged',
 };
 
-export const typeLabel = (type: string): string => TYPES[type] ?? type;
+// P1-41: how a piece of evidence bears on a claim.
+const RELATIONS: Record<string, string> = { supports: 'Supports', contradicts: 'Contradicts', context: 'Context' };
+
+export const relationLabel = (relation: string): string => RELATIONS[relation] ?? relation;
+export const typeLabel =(type: string): string => TYPES[type] ?? type;
 export const statusLabel = (status: string): string => STATUSES[status] ?? status;
 export const claimTypeLabel = (type: string): string => CLAIM_TYPES[type] ?? type;
 export const reliabilityLabel = (grade: string): string => RELIABILITY[grade] ?? grade;

@@ -214,6 +214,7 @@ return [
             'cache',
             'cache_locks',
             'channels', // P1-23b: channels no retailer uses may be removed (audited)
+            'claim_evidence_links', // P1-41: an editable item's claims cite and stop citing evidence (audited, custody)
             'competitor_aliases', // P1-21: removing one is an audited correction
             'competitor_relationships', // P1-21: ended with valid_to; removing one is an audited correction
             'competitor_intelligence_item', // P1-40: an editable item's subjects change (audited)

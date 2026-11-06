@@ -8,17 +8,26 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Modules\Evidence\Contracts\EvidenceLinking;
+use Modules\Evidence\Contracts\EvidenceSummary;
+use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditLogger;
+use Modules\Platform\Classification;
 
 /**
  * The claims of an item (P1-40, docs/02 §3.6, ADR-0010):
  * - a claim is a statement (plain text, at most MAX_STATEMENT characters) with its type, kept apart from its two
  *   human-assigned Admiralty ratings: source reliability A–F and information credibility 1–6. Both are chosen by the
- *   writer, never defaulted (a source's default reliability pre-fills them once claims cite evidence, P1-41);
+ *   writer, never defaulted; the default reliability of a cited source is shown beside them (P1-41), never copied;
+ * - a claim cites evidence (P1-41): an available asset the writer can see (checked under a share lock on the asset,
+ *   so it cannot be withdrawn or rejected meanwhile), as supporting, contradicting or giving context, with an optional
+ *   locator and excerpt; at most MAX_LINKS per claim, each asset and relation once. A link is removed, not edited, and
+ *   only by someone who can see its asset. Each change is also a `linked` / `unlinked` event in the asset's custody
+ *   trail. Lock order: the item, then the asset;
  * - claims change under the item's rules (IntelligenceItemService::assertMayEdit): editable item, author or owner,
  *   from the version read, under the item's row lock; every change raises the item's version;
  * - a claim is withdrawn, never deleted, so what a reviewer saw stays on record; withdrawn claims do not move;
@@ -31,11 +40,18 @@ class IntelligenceClaimService
 
     public const MAX_CLAIMS = 50;
 
+    public const MAX_LINKS = 20;
+
+    public const MAX_LOCATOR = 255;
+
+    public const MAX_EXCERPT = 2000;
+
     public function __construct(
         private readonly DatabaseManager $db,
         private readonly AuditLogger $audit,
         private readonly AccessScope $access,
         private readonly Gate $gate,
+        private readonly EvidenceLinking $evidence,
     ) {}
 
     /** @param  array<string, mixed>  $data  statement, claim_type, source_reliability, info_credibility, version */
@@ -117,6 +133,62 @@ class IntelligenceClaimService
         }, fn (?IntelligenceClaim $claim): bool => $claim !== null);
     }
 
+    /** @param  array<string, mixed>  $data  evidence (asset ULID), relation, locator?, excerpt?, version */
+    public function link(Authenticatable $actor, IntelligenceItem $item, string $claimUlid, array $data): ClaimEvidenceLink
+    {
+        $evidence = is_string($data['evidence'] ?? null) ? $data['evidence'] : '';
+        $relation = $this->relation($data);
+        $locator = IntelligenceItemService::text($data, 'locator', self::MAX_LOCATOR);
+        $locator = $locator === null ? null : (string) preg_replace('/\s+/u', ' ', $locator);
+        $excerpt = IntelligenceItemService::text($data, 'excerpt', self::MAX_EXCERPT, multiline: true);
+
+        return $this->inItem($actor, $item, $data, function (IntelligenceItem $locked) use ($actor, $claimUlid, $evidence, $relation, $locator, $excerpt): ClaimEvidenceLink {
+            $claim = $this->activeClaim($locked, $claimUlid);
+            if ($claim->evidenceLinks()->count() >= self::MAX_LINKS) {
+                throw ValidationException::withMessages(['evidence' => 'A claim cites at most '.self::MAX_LINKS.' pieces of evidence.']);
+            }
+            $asset = $this->evidence->lockLinkable($actor, $evidence)
+                ?? throw ValidationException::withMessages(['evidence' => 'Choose available evidence you can see.']);
+            if ($claim->evidenceLinks()->where('evidence_asset_id', $asset->id)->where('relation', $relation)->exists()) {
+                throw ValidationException::withMessages(['evidence' => 'The claim already cites this evidence that way.']);
+            }
+            $userId = (int) $actor->getAuthIdentifier();
+            $link = new ClaimEvidenceLink;
+            $link->forceFill([
+                'intelligence_claim_id' => $claim->id,
+                'evidence_asset_id' => $asset->id,
+                'relation' => $relation,
+                'locator' => $locator,
+                'excerpt' => $excerpt,
+                'linked_by' => $userId,
+            ])->save();
+            $this->linkRecorded(true, $actor, $locked, $claim, $asset, $relation);
+
+            return $link;
+        });
+    }
+
+    /** @param  array<string, mixed>  $data  evidence (asset ULID), relation, version */
+    public function unlink(Authenticatable $actor, IntelligenceItem $item, string $claimUlid, array $data): void
+    {
+        $evidence = strtoupper(is_string($data['evidence'] ?? null) ? $data['evidence'] : '');
+        $relation = $this->relation($data);
+
+        $this->inItem($actor, $item, $data, function (IntelligenceItem $locked) use ($actor, $claimUlid, $evidence, $relation): void {
+            $claim = $this->activeClaim($locked, $claimUlid);
+            $links = $claim->evidenceLinks()->where('relation', $relation)->get();
+            // Only evidence the actor can see: a link to a hidden asset is not found, like one that does not exist.
+            $seen = $this->evidence->summaries($actor, array_values(array_unique($links->pluck('evidence_asset_id')->all())));
+            $asset = array_values(array_filter($seen, fn (EvidenceSummary $s): bool => $s->ulid === $evidence))[0] ?? null;
+            $link = $asset === null ? null : $links->firstWhere('evidence_asset_id', $asset->id);
+            if ($asset === null || $link === null) {
+                throw ValidationException::withMessages(['evidence' => 'The claim does not cite that evidence that way.']);
+            }
+            $link->delete();
+            $this->linkRecorded(false, $actor, $locked, $claim, $asset, $relation);
+        });
+    }
+
     /**
      * Runs $change under the item's row lock after the edit checks, then raises the item's version when $changed says
      * the change did something (by default: whenever it returned).
@@ -166,6 +238,34 @@ class IntelligenceClaimService
             'rating' => strtolower($claim->rating()),
             'version' => $locked->version + 1, // the version this change creates
         ] + $extra, Actor::user((int) $actor->getAuthIdentifier()));
+    }
+
+    /**
+     * Audits the change on the item, at the higher of the item's and the asset's classifications (whoever could read
+     * either may see that they are linked), and adds it to the asset's custody trail.
+     */
+    private function linkRecorded(bool $linked, Authenticatable $actor, IntelligenceItem $locked, IntelligenceClaim $claim, EvidenceSummary $asset, string $relation): void
+    {
+        $userId = (int) $actor->getAuthIdentifier();
+        $assetClassification = Classification::from($asset->classification);
+        $this->audit->record($linked ? 'intelligence.evidence_linked' : 'intelligence.evidence_unlinked', $locked, [
+            'claim_ulid' => $claim->ulid,
+            'evidence_ulid' => $asset->ulid,
+            'relation' => $relation,
+            'version' => $locked->version + 1,
+        ], Actor::user($userId), $assetClassification->rank() > $locked->classification->rank() ? $assetClassification : $locked->classification);
+        $this->evidence->recordLink($asset->id, $userId, $linked, $locked->ulid, $claim->ulid, $relation);
+    }
+
+    /** @param  array<string, mixed>  $data */
+    private function relation(array $data): string
+    {
+        $relation = $data['relation'] ?? null;
+        if (! in_array($relation, ClaimEvidenceLink::RELATIONS, true)) {
+            throw ValidationException::withMessages(['relation' => 'Choose whether the evidence supports, contradicts or gives context.']);
+        }
+
+        return $relation;
     }
 
     /**
