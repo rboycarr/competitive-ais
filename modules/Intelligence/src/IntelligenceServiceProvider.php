@@ -47,6 +47,11 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
         $audit->define('intelligence.reviewer_assigned', ['decision' => 'code', 'reviewer_ulid' => 'ulid', 'review_ulid' => 'ulid', 'version' => 'int']);
         $audit->define('intelligence.review_started', ['version' => 'int']);
         $audit->define('intelligence.reviewed', ['decision' => 'code', 'review_ulid' => 'ulid', 'version' => 'int']);
+        // P1-44: never the retraction reason (it is on the retraction row).
+        $audit->define('intelligence.published', ['approval_ulid' => 'ulid', 'review_ulid' => 'ulid', 'version' => 'int']);
+        $audit->define('intelligence.superseded', ['replacement_ulid' => 'ulid', 'version' => 'int']);
+        $audit->define('intelligence.retracted', ['replacement' => 'bool', 'version' => 'int']);
+        $audit->define('intelligence.replacement_drafted', ['replaces_ulid' => 'ulid']);
         // Domain events (docs/03: IntelligenceSubmitted, …) are defined with their first consumer.
     }
 }

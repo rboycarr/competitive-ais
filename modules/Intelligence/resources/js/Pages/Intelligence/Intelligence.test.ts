@@ -59,6 +59,7 @@ const claims = [
     },
     { ulid: '01JCLAIM000000000000000002', statement: 'Old guess', type: 'rumor', reliability: 'F', credibility: 6, status: 'withdrawn', hiddenEvidence: 0, evidence: [] },
 ];
+type Linked = { ulid: string; title: string; status: string } | null;
 const showProps = {
     item, claims, subjects: { competitors: [{ ulid: '01JCOMP0000000000000000000', name: 'Acme' }], products: [], markets: [], hidden: 1 },
     claimTypes: ['observed_fact', 'rumor'], reliabilities: ['A', 'B', 'F'], credibilities: [1, 2, 6],
@@ -68,6 +69,11 @@ const showProps = {
         history: [] as { ulid: string; decision: string; by: string | null; assignee: string | null; rationale: string | null; version: number; decidedAt: string }[],
         canAssign: false, reviewers: [] as { ulid: string; name: string }[], canStart: false, canDecide: false,
         decisions: ['approve', 'request_changes', 'reject'], approvalProblems: [] as string[],
+    },
+    publication: {
+        releasedAt: null as string | null, supersedes: null as Linked, supersededBy: null as Linked,
+        retraction: null as { reason: string; by: string | null; at: string; replacement: Linked } | null,
+        canPublish: false, publishProblems: [] as string[], canRetract: false, replacementOptions: [] as { ulid: string; title: string }[], canReplace: false,
     },
     relations: ['supports', 'contradicts', 'context'], evidenceOptions: [{ ulid: '01JEVID0000000000000000003', title: 'Annual report', capturedAt: '2026-10-01T00:00:00Z' }], evidenceSearch: null,
 };
@@ -233,5 +239,46 @@ describe('Intelligence verification (P1-43)', () => {
         expect(ageLabel('2026-11-06T09:00:00Z', now)).toBe('3 hours');
         expect(ageLabel('2026-11-04T11:00:00Z', now)).toBe('2 days');
         expect(ageLabel('2026-11-07T00:00:00Z', now)).toBe('0 minutes');
+    });
+});
+
+describe('Intelligence publication (P1-44)', () => {
+    const reader = (publication: Partial<typeof showProps.publication>, status = 'published') => mount(Show, {
+        props: { ...showProps, item: { ...item, status }, canEdit: false, form: null, publication: { ...showProps.publication, ...publication } },
+    });
+
+    it('publishes at the current version once nothing blocks it', async () => {
+        const blocked = reader({ canPublish: true, publishProblems: ['It changed after it was approved. It must be reviewed again.'] }, 'approved');
+        expect(blocked.text()).toContain('It changed after it was approved. It must be reviewed again.');
+        expect(blocked.findAll('button').some((b) => b.text() === 'Publish')).toBe(false);
+
+        const ready = reader({ canPublish: true }, 'approved');
+        await ready.findAll('button').find((b) => b.text() === 'Publish')?.trigger('click');
+        expect(routerPost).toHaveBeenCalledWith(`/intelligence/${item.ulid}/publish`, { version: 3 }, expect.any(Object));
+        expect(reader({}, 'approved').find('#publication-heading').exists()).toBe(false);
+    });
+
+    it('retracts with a reason and an optional replacement, and drafts a replacement', async () => {
+        const wrapper = reader({ canRetract: true, canReplace: true, replacementOptions: [{ ulid: '01JITEM0000000000000000009', title: '<b>Fixed</b>' }] });
+        expect(wrapper.get('#retract-reason').attributes('required')).toBeDefined();
+        expect((wrapper.get('#retract-replacement').element as HTMLSelectElement).value).toBe('');
+        expect(wrapper.find('#retract-replacement b').exists()).toBe(false);
+        await wrapper.get('#retract-reason').setValue('Wrong product');
+        await wrapper.get('#retract-reason').element.closest('form')?.dispatchEvent(new Event('submit'));
+        expect(post).toHaveBeenCalledWith(`/intelligence/${item.ulid}/retract`, expect.any(Object));
+        await wrapper.findAll('button').find((b) => b.text() === 'Draft a replacement')?.trigger('click');
+        expect(routerPost).toHaveBeenCalledWith(`/intelligence/${item.ulid}/replacement`);
+    });
+
+    it('marks retracted and superseded items, as text', () => {
+        const retracted = reader({ retraction: { reason: '<i>Wrong</i> product', by: 'Dee', at: '2026-11-01T10:00:00Z', replacement: { ulid: '01JITEM0000000000000000009', title: 'Fixed', status: 'published' } } }, 'retracted');
+        expect(retracted.text()).toContain('Retracted');
+        expect(retracted.text()).toContain('<i>Wrong</i> product');
+        expect(retracted.find('[role="note"] i').exists()).toBe(false);
+        expect(retracted.get('[role="note"] a').attributes('href')).toBe('/intelligence/01JITEM0000000000000000009');
+
+        expect(reader({ supersededBy: { ulid: '01JITEM0000000000000000009', title: 'Fixed', status: 'published' } }, 'superseded').text()).toContain('Superseded by Fixed.');
+        expect(reader({}, 'superseded').text()).toContain('Superseded by an item you cannot see.');
+        expect(reader({ supersedes: { ulid: '01JITEM0000000000000000008', title: 'Old', status: 'published' } }, 'draft').text()).toContain('Will replace, once published, Old.');
     });
 });

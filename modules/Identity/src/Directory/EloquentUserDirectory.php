@@ -48,6 +48,13 @@ class EloquentUserDirectory implements UserDirectory
         return $user !== null && $this->access->allows($user, $record);
     }
 
+    public function lockedHoldsRole(int $id, string $role): bool
+    {
+        $user = User::query()->whereKey($id)->sharedLock()->first();
+
+        return $user !== null && $user->status === 'active' && $user->hasRole($role);
+    }
+
     private function summary(User $user): UserSummary
     {
         return new UserSummary($user->id, $user->ulid, $user->name, $user->status === 'active');

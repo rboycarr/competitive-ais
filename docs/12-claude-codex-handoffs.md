@@ -136,6 +136,8 @@ AI approval never replaces human approval.
 | TASK-0087 | Review of P1-42 (submit for review only when evidence-backed) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/intelligence-submission` @ `0623c11` | **Reviewed: "yes after fixes" (1 medium: hidden item 403 before 404 on submit); fixed, tests added.** | `handoffs/TASK-0087-review.md` |
 | TASK-0088 | Verification of the TASK-0087 fix (P1-42) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/intelligence-submission` @ `9f39bf7` | **Verified: TASK-0087 #1 resolved for users with view permission; the app-wide remainder accepted (O40), P1-55.** | `handoffs/TASK-0088-review.md` |
 | TASK-0089 | Review of P1-43 (verification queue) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/verification-queue` @ `4e868b3` | **Reviewed: "yes", no findings; suggested tests added where missing.** | `handoffs/TASK-0089-review.md` |
+| TASK-0090 | Review of P1-44 (publish, retract, supersede) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/intelligence-publication` @ `8e3ed41` | **Reviewed: "yes after fixes" (high: `supersedes_id` mutable; medium: drafting vs retraction; low: replacement lookup); fixed, tests added; trigger for `supersedes_id` in P1-52.** | `handoffs/TASK-0090-review.md` |
+| TASK-0091 | Verification of the TASK-0090 fixes (P1-44) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/intelligence-publication` @ `eedb12b` | **Verified: #2, #3 resolved; #1 partly (status and `supersedes_id` in one save): fixed; direct SQL in P1-52.** | `handoffs/TASK-0091-review.md` |
 
 ## 4. Decision and disagreement log
 

@@ -101,6 +101,53 @@ class IntelligenceItemService
     }
 
     /**
+     * A draft that will replace a published item once it is published itself (P1-44, supersession): the item's title,
+     * summary, type, classification, impact, dates and subjects, with `supersedes_id` pointing at it; claims and their
+     * evidence are added afresh (each is cited and reviewed again). Under the same rules as create(): the writer must see
+     * the item and every one of its subjects.
+     */
+    public function draftReplacement(Authenticatable $actor, IntelligenceItem $replaced): IntelligenceItem
+    {
+        $replaced->ensureSeenBy($actor, $this->gate, $this->access);
+        $this->assertMayWrite($actor);
+        if ($replaced->status !== 'published') {
+            throw ValidationException::withMessages(['item' => 'Only a published item can be replaced.']);
+        }
+        $competitors = $this->competitors->summaries($actor, $replaced->competitorIds());
+        $products = $this->products->summaries($actor, $replaced->productIds());
+        if (count($competitors) !== count($replaced->competitorIds()) || count($products) !== count($replaced->productIds())) {
+            throw ValidationException::withMessages(['subjects' => 'This item is about a competitor or product you cannot see, so you cannot replace it.']);
+        }
+        $date = fn (string $field): ?string => $replaced->{$field}?->copy()->utc()->format('Y-m-d\TH:i:s.u\Z'); // keeps the microseconds
+
+        return $this->db->transaction(function () use ($actor, $replaced, $competitors, $products, $date): IntelligenceItem {
+            // Share-locked until the draft commits: a retraction (FOR UPDATE) waits, or has already happened and this
+            // locking read sees it (TASK-0090 #2).
+            $locked = IntelligenceItem::query()->whereKey($replaced->id)->sharedLock()->firstOrFail();
+            if ($locked->status !== 'published') {
+                throw ValidationException::withMessages(['item' => 'Only a published item can be replaced.']);
+            }
+            $item = $this->create($actor, [
+                'title' => $replaced->title,
+                'summary' => $replaced->summary,
+                'item_type' => $replaced->item_type,
+                'classification' => $replaced->classification->value,
+                'high_impact' => $replaced->high_impact,
+                'observed_at' => $date('observed_at'),
+                'published_at' => $date('published_at'),
+                'collected_at' => $date('collected_at'),
+                'competitors' => array_values(array_map(fn ($c): string => $c->ulid, $competitors)),
+                'products' => array_values(array_map(fn ($p): string => $p->ulid, $products)),
+                'markets' => array_values(array_map(fn ($m): string => $m->ulid, $this->markets->summaries($replaced->marketIds()))),
+            ]);
+            $item->forceFill(['supersedes_id' => $replaced->id])->save();
+            $this->audit->record('intelligence.replacement_drafted', $item, ['replaces_ulid' => $replaced->ulid], Actor::user((int) $actor->getAuthIdentifier()));
+
+            return $item;
+        });
+    }
+
+    /**
      * @param  array<string, mixed>  $data  as for create(), plus version (the one the form was read at)
      */
     public function update(Authenticatable $actor, IntelligenceItem $item, array $data): IntelligenceItem

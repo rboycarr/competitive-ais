@@ -21,6 +21,12 @@ type Review = {
     canAssign: boolean; reviewers: { ulid: string; name: string }[];
     canStart: boolean; canDecide: boolean; decisions: string[]; approvalProblems: string[];
 };
+type Linked = { ulid: string; title: string; status: string } | null;
+type Publication = {
+    releasedAt: string | null; supersedes: Linked; supersededBy: Linked;
+    retraction: { reason: string; by: string | null; at: string; replacement: Linked } | null;
+    canPublish: boolean; publishProblems: string[]; canRetract: boolean; replacementOptions: { ulid: string; title: string }[]; canReplace: boolean;
+};
 
 const props = defineProps<{
     item: {
@@ -35,6 +41,7 @@ const props = defineProps<{
     claimTypes: string[]; reliabilities: string[]; credibilities: number[];
     submission: { problems: string[] } | null;
     review: Review;
+    publication: Publication;
     relations: string[]; evidenceOptions: { ulid: string; title: string; capturedAt: string }[]; evidenceSearch: string | null;
     types?: string[]; classifications?: string[]; competitorOptions?: Option[]; productOptions?: Option[]; marketOptions?: Option[];
 }>();
@@ -120,6 +127,24 @@ const rationaleRequired = computed(() => verdict.decision === 'request_changes' 
 function decide(): void {
     verdict.transform((data) => ({ ...data, version: props.item.version })).post(`${base.value}/decision`, { preserveScroll: true, onSuccess: () => verdict.reset() });
 }
+// P1-44: publishing, retracting (a reason; a replacement is optional) and drafting a replacement. The server checks again.
+const publishing = ref(false);
+const publishErrors = ref<string[]>([]);
+function publish(): void {
+    router.post(`${base.value}/publish`, { version: props.item.version }, {
+        preserveScroll: true,
+        onStart: () => { publishing.value = true; publishErrors.value = []; },
+        onError: (errors) => { publishErrors.value = Object.values(errors).flat(); },
+        onFinish: () => { publishing.value = false; },
+    });
+}
+const retraction = useForm({ reason: '', replacement: '' });
+function retract(): void {
+    retraction.post(`${base.value}/retract`, { preserveScroll: true, onSuccess: () => retraction.reset() });
+}
+function draftReplacement(): void {
+    router.post(`${base.value}/replacement`);
+}
 function uncite(c: Claim, e: Citation): void {
     router.post(`${base.value}/claims/${c.ulid}/evidence/remove`, { evidence: e.ulid, relation: e.relation, version: props.item.version }, { preserveScroll: true });
 }
@@ -135,6 +160,21 @@ function uncite(c: Claim, e: Citation): void {
             <span class="rounded border border-slate-400 px-2">Version {{ props.item.version }}</span>
         </p>
         <p class="mb-4 text-sm text-slate-700">Author: {{ props.item.author ?? '—' }} · Owner: {{ props.item.owner ?? '—' }}</p>
+
+        <div v-if="props.publication.retraction" role="note" class="mb-4 max-w-3xl rounded border border-red-700 bg-red-50 p-3 text-sm">
+            <p class="font-semibold text-red-800">Retracted {{ when(props.publication.retraction.at) }}<template v-if="props.publication.retraction.by"> by {{ props.publication.retraction.by }}</template>. Do not rely on it.</p>
+            <p class="whitespace-pre-line">{{ props.publication.retraction.reason }}</p>
+            <p v-if="props.publication.retraction.replacement">Replaced by <Link :href="`/intelligence/${props.publication.retraction.replacement.ulid}`" class="underline">{{ props.publication.retraction.replacement.title }}</Link></p>
+        </div>
+        <p v-if="props.publication.supersededBy" role="note" class="mb-4 max-w-3xl rounded border border-amber-700 bg-amber-50 p-3 text-sm">
+            Superseded by <Link :href="`/intelligence/${props.publication.supersededBy.ulid}`" class="underline">{{ props.publication.supersededBy.title }}</Link>.
+        </p>
+        <p v-else-if="props.item.status === 'superseded'" role="note" class="mb-4 max-w-3xl rounded border border-amber-700 bg-amber-50 p-3 text-sm">Superseded by an item you cannot see.</p>
+        <p v-if="props.publication.supersedes" class="mb-4 text-sm">
+            {{ props.item.status === 'published' ? 'Replaces' : 'Will replace, once published,' }}
+            <Link :href="`/intelligence/${props.publication.supersedes.ulid}`" class="underline">{{ props.publication.supersedes.title }}</Link>.
+        </p>
+        <p v-if="props.publication.releasedAt" class="mb-4 text-sm text-slate-700">Published here {{ when(props.publication.releasedAt) }}</p>
 
         <section aria-labelledby="summary-heading" class="mb-6 max-w-3xl">
             <h2 id="summary-heading" class="mb-1 text-lg font-semibold">Summary</h2>
@@ -263,6 +303,48 @@ function uncite(c: Claim, e: Citation): void {
             <ul v-if="submitErrors.length > 0" class="mt-2 text-sm text-red-700" role="alert">
                 <li v-for="message in submitErrors" :key="message">{{ message }}</li>
             </ul>
+        </section>
+
+        <section v-if="props.publication.canPublish || props.publication.canRetract || props.publication.canReplace" aria-labelledby="publication-heading" class="mb-6 max-w-3xl rounded border border-slate-300 p-3">
+            <h2 id="publication-heading" class="mb-1 text-lg font-semibold">Publication</h2>
+            <template v-if="props.publication.canPublish">
+                <template v-if="props.publication.publishProblems.length > 0">
+                    <p class="text-sm text-slate-700">It cannot be published yet:</p>
+                    <ul class="list-disc pl-5 text-sm">
+                        <li v-for="problem in props.publication.publishProblems" :key="problem">{{ problem }}</li>
+                    </ul>
+                </template>
+                <template v-else>
+                    <p class="mb-2 text-sm text-slate-700">Approved for this version. Publishing makes it readable by everyone with access to its subjects.</p>
+                    <button type="button" :disabled="publishing" class="rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50" @click="publish">Publish</button>
+                </template>
+                <ul v-if="publishErrors.length > 0" class="mt-2 text-sm text-red-700" role="alert">
+                    <li v-for="message in publishErrors" :key="message">{{ message }}</li>
+                </ul>
+            </template>
+
+            <form v-if="props.publication.canRetract" class="mt-3 space-y-2" novalidate @submit.prevent="retract">
+                <div>
+                    <label for="retract-reason" class="block font-medium">Reason for retracting</label>
+                    <textarea id="retract-reason" v-model="retraction.reason" required maxlength="5000" rows="2" :aria-invalid="retraction.errors.reason ? 'true' : undefined" aria-describedby="retract-errors" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+                </div>
+                <div>
+                    <label for="retract-replacement" class="block font-medium">Replaced by (optional)</label>
+                    <select id="retract-replacement" v-model="retraction.replacement" class="mt-1 w-full rounded border border-slate-300 px-3 py-2">
+                        <option value="">None</option>
+                        <option v-for="option in props.publication.replacementOptions" :key="option.ulid" :value="option.ulid">{{ option.title }}</option>
+                    </select>
+                </div>
+                <ul id="retract-errors" class="text-sm text-red-700" role="alert">
+                    <li v-for="message in Object.values(retraction.errors)" :key="message">{{ message }}</li>
+                </ul>
+                <button type="submit" :disabled="retraction.processing" class="rounded border border-red-700 px-4 py-2 font-medium text-red-800 disabled:opacity-50">Retract</button>
+            </form>
+
+            <div v-if="props.publication.canReplace" class="mt-3">
+                <p class="mb-2 text-sm text-slate-700">A correction or update is a new item: it starts as a draft with this item's details, and supersedes this one when it is published.</p>
+                <button type="button" class="rounded border border-slate-400 px-4 py-2 font-medium" @click="draftReplacement">Draft a replacement</button>
+            </div>
         </section>
 
         <section v-if="props.review.history.length > 0 || props.review.reviewer !== null || props.review.canAssign || props.review.canStart || props.review.canDecide" aria-labelledby="review-heading" class="mb-6 max-w-3xl rounded border border-slate-300 p-3">

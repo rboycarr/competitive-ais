@@ -164,6 +164,7 @@ class IntelligenceItemController
             'canEdit' => $canEdit,
             'submission' => $canSubmit ? ['problems' => $this->workflow->problems($item)] : null,
             'review' => $this->review($viewer, $item),
+            'publication' => $this->publication($viewer, $item),
             'relations' => ClaimEvidenceLink::RELATIONS,
             // P1-41: what the editor may cite; the search is a partial reload of this prop.
             'evidenceOptions' => $canEdit ? array_map(fn (EvidenceSummary $e): array => [
@@ -212,6 +213,28 @@ class IntelligenceItemController
         $this->workflow->submit($this->viewer($request), $item, $request->only('version'));
 
         return redirect()->route('intelligence.show', $item)->with('status', 'Submitted for review. The item is frozen until a reviewer decides.');
+    }
+
+    // P1-44. As for submit, the input is validated by the service after the visibility check (TASK-0087 #1).
+    public function publish(Request $request, IntelligenceItem $item): RedirectResponse
+    {
+        $this->workflow->publish($this->viewer($request), $item, $request->only('version'));
+
+        return redirect()->route('intelligence.show', $item)->with('status', 'Published.');
+    }
+
+    public function retract(Request $request, IntelligenceItem $item): RedirectResponse
+    {
+        $this->workflow->retract($this->viewer($request), $item, $request->only(['reason', 'replacement']));
+
+        return redirect()->route('intelligence.show', $item)->with('status', 'Retracted. It stays readable, marked as retracted.');
+    }
+
+    public function replacement(Request $request, IntelligenceItem $item, IntelligenceItemService $items): RedirectResponse
+    {
+        $draft = $items->draftReplacement($this->viewer($request), $item);
+
+        return redirect()->route('intelligence.show', $draft)->with('status', 'Replacement drafted. Add its claims; once published, it supersedes the original.');
     }
 
     /**
@@ -299,6 +322,51 @@ class IntelligenceItemController
             'canDecide' => $canDecide,
             'decisions' => VerificationReview::DECISIONS,
             'approvalProblems' => $canDecide ? $this->workflow->problems($item, reviewer: $viewer) : [],
+        ];
+    }
+
+    /**
+     * The item's publication (P1-44): when it was released, the item it replaces and the one that replaced it, its
+     * retraction; linked items are named only when the viewer can see them. What the viewer may do, as
+     * IntelligenceWorkflowService checks it: publish an approved item they did not write, own or approve (with what still
+     * blocks it), retract a published one (naming a published replacement), or draft a replacement.
+     *
+     * @return array<string, mixed>
+     */
+    private function publication(Authenticatable $viewer, IntelligenceItem $item): array
+    {
+        $viewerId = (int) $viewer->getAuthIdentifier();
+        $gate = $this->gate->forUser($viewer);
+        $link = function (?int $id) use ($viewer): ?array {
+            $linked = $id === null ? null : IntelligenceItem::seenBy(IntelligenceItem::query(), $viewer, $this->gate)->whereKey($id)->first();
+
+            return $linked === null ? null : ['ulid' => $linked->ulid, 'title' => $linked->title, 'status' => $linked->status];
+        };
+        $retraction = $item->retraction()->first();
+        $supersededBy = $item->status === 'superseded'
+            ? IntelligenceItem::query()->where('supersedes_id', $item->id)->whereIn('status', IntelligenceItem::RELEASED)->value('id')
+            : null;
+        $canPublish = $item->status === 'approved' && $gate->allows('intelligence.publish') && ! in_array($viewerId, [$item->author_id, $item->owner_id], true);
+        $canRetract = $item->status === 'published' && $gate->allows('intelligence.retract');
+        $names = $retraction === null ? [] : $this->users->summaries([$retraction->retracted_by]);
+
+        return [
+            'releasedAt' => $item->released_at?->toIso8601ZuluString(),
+            'supersedes' => $link($item->supersedes_id),
+            'supersededBy' => $link($supersededBy === null ? null : (int) $supersededBy),
+            'retraction' => $retraction === null ? null : [
+                'reason' => $retraction->reason,
+                'by' => $names[$retraction->retracted_by]->name ?? null,
+                'at' => $retraction->retracted_at->toIso8601ZuluString(),
+                'replacement' => $link($retraction->replacement_item_id),
+            ],
+            'canPublish' => $canPublish,
+            'publishProblems' => $canPublish ? $this->workflow->publicationProblems($item, $viewer) : [],
+            'canRetract' => $canRetract,
+            'replacementOptions' => $canRetract ? IntelligenceItem::seenBy(IntelligenceItem::query(), $viewer, $this->gate)
+                ->where('status', 'published')->whereKeyNot($item->id)->orderByDesc('released_at')->limit(self::PAGE)->get(['id', 'ulid', 'title'])
+                ->map(fn (IntelligenceItem $i): array => ['ulid' => $i->ulid, 'title' => $i->title])->values()->all() : [],
+            'canReplace' => $item->status === 'published' && $gate->allows('intelligence.create'),
         ];
     }
 
