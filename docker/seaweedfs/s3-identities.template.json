@@ -23,6 +23,14 @@
         "Read:audit-anchor", "Write:audit-anchor", "List:audit-anchor",
         "GetObjectRetention:audit-anchor", "PutObjectRetention:audit-anchor"
       ]
+    },
+    {
+      "name": "backup",
+      "credentials": [{ "accessKey": "__S3_BACKUP_ACCESS_KEY__", "secretKey": "__S3_BACKUP_SECRET_KEY__" }],
+      "actions": [
+        "Read:evidence", "List:evidence", "GetObjectRetention:evidence", "GetObjectLegalHold:evidence",
+        "Read:audit-anchor", "List:audit-anchor", "GetObjectRetention:audit-anchor", "GetObjectLegalHold:audit-anchor"
+      ]
     }
   ]
 }

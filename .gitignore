@@ -7,7 +7,12 @@
 !.env.s3.example
 !.env.anchor.example
 !.env.signing.example
+!.env.backup.example
+!.env.readonly.example
+!.env.restore.example
 /.secrets/
+# Encrypted backups and the restore-drill log (P1-51)
+/backups/
 *.pem
 *.key
 auth.json

@@ -132,11 +132,26 @@ Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates 
 
 | Data | Method | Frequency | Retention |
 |---|---|---|---|
-| MySQL | `mysqldump --single-transaction` (Phase 1); binary-log shipping for point-in-time recovery when RPO tightens | daily + binlogs | 30 daily, 12 monthly (proposal) |
-| Object store evidence | versioned copy to offsite S3-compatible storage (method fixed in P1-51), encrypted | daily | per retention policy |
+| MySQL | `mysqldump --single-transaction` with the read-only account (P1-51); binary-log shipping for point-in-time recovery when RPO tightens | daily + binlogs | 30 daily, 12 monthly (proposal) |
+| Object store (`evidence`, `audit-anchor`) | every object version through the S3 API with the read-only backup key, plus a manifest of key, version ID, SHA-256, size, lock mode, retain-until and legal hold (P1-51, O48) | daily | per retention policy |
 | Config/secrets | secret store backup | on change | |
 
-Restore drills run monthly and before each release: restore into a scratch environment → run migrations status + smoke tests + evidence hash sample check → record results in the ops log.
+**Backup (P1-51):** `docker compose run --rm backup` writes `backups/<UTC time>/`: `mysql.sql.age`, `manifest.tsv.age`, `objects/<n>.age` and a plaintext `backup.info` (counts only). Every file is encrypted with age to `BACKUP_AGE_RECIPIENT`, a public key (O47): the backup service cannot decrypt what it writes. The matching identity (`BACKUP_AGE_IDENTITY`, `.secrets/restore.env`) is needed only to restore. In production, keep it offline, away from the backup host, and copy `backups/` to the offsite store once O3 fixes the target. `scripts/ops/backup-keys.sh` creates the key pair locally. `evidence-quarantine` and `exports` are not backed up, because they are transient. The test database is not backed up either. Grants are not in the dump; the restore recreates them from code (`10-accounts.sh`, `db:apply-grants`).
+
+**Restore drill (P1-51, O46, O49):** `bash scripts/ops/restore-drill.sh [<backup>] [--keep]` runs monthly and before each release; CI runs it on every push with synthetic data, together with damaged backups that must fail (`scripts/ci/restore-drill-test.sh`). It restores into the separate Compose project `cais-drill`, which has its own volumes and no published ports and is removed afterwards. Steps:
+1. Load the dump.
+2. Replay every object version in order. Each version's SHA-256 and size must match the manifest. Each restored version gets a 1-day GOVERNANCE lock.
+3. Point `evidence_blobs.object_version_id` at the new version IDs, because a restore creates new ones.
+4. Compare the backup's lock mode and retain-until for every version with the source store. The modes must be equal, and the retain-until may only have grown. A changed legal hold is noted.
+5. Run `10-accounts.sh` and `db:apply-grants`, then require the global and main-database grants to be identical to the source's.
+6. Confirm no migration is pending.
+7. Check that `/up` answers through nginx and that `feature:status` is valid.
+8. Re-hash an evidence sample through the restored version IDs (`evidence:verify-integrity`).
+9. Run `audit:checkpoint` and `audit:verify` against the restored signed manifests.
+
+Each run appends one line (time, backup, PASS/FAIL, failed step, seconds, commit) to `backups/restore-drills.log`.
+
+**Disaster recovery** uses the same restore with the original locks. Run it into an empty project with `docker compose -p <project> -f compose.yaml -f docker/backup/compose.drill.yaml run --rm -e RESTORE_CONFIRM=<project> restore <backup> --disaster-recovery`, then apply the same checks. Get explicit authorization first. The restore refuses a database that already has tables. Without `--disaster-recovery`, it refuses any project except `cais-drill`.
 
 ## 5. Monitoring and alerting
 

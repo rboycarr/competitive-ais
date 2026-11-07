@@ -1,0 +1,39 @@
+# Restore-drill project (P1-51, PO decision O46). Used only together with compose.yaml under the project name
+# cais-drill, by scripts/ops/restore-drill.sh:
+#   docker compose -p cais-drill -f compose.yaml -f docker/backup/compose.drill.yaml ...
+# Its MySQL, object store and other volumes are its own (cais-drill_*), so it never touches the development data.
+# No ports are published. The PHP dependencies are read from the development project's vendor volume.
+services:
+  nginx: { ports: !reset [] }
+  node: { ports: !reset [] }
+  mysql: { ports: !reset [] }
+  valkey: { ports: !reset [] }
+  seaweedfs: { ports: !reset [] }
+  mailpit: { ports: !reset [] }
+
+  # Decrypts a backup and restores it into this project (docker/backup/restore.sh). The only service anywhere with
+  # the backup decryption key; it exists only in this file, not in compose.yaml.
+  restore:
+    image: competitive-ais/backup:dev
+    user: "${DEV_UID:-1000}:${DEV_GID:-1000}"
+    env_file: [.secrets/restore.env, .secrets/services.env, .secrets/s3.env]
+    environment:
+      DB_DATABASE: ${DB_DATABASE}
+      RESTORE_PROJECT: ${COMPOSE_PROJECT_NAME}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-evidence}
+      HOME: /work
+    entrypoint: ["bash", "/opt/backup/restore.sh"]
+    volumes:
+      - ./docker/backup:/opt/backup:ro
+      - ./backups:/backups
+    tmpfs: ["/work:mode=0700,uid=${DEV_UID:-1000},gid=${DEV_GID:-1000}"]
+    networks: [data]
+    restart: "no"
+    depends_on:
+      mysql: { condition: service_healthy }
+      seaweedfs-init: { condition: service_completed_successfully }
+
+volumes:
+  vendor:
+    external: true
+    name: competitive-ais_vendor

@@ -4,7 +4,8 @@
 set -eu
 umask 077
 
-for v in S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_APP_ACCESS_KEY S3_APP_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY; do
+for v in S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_APP_ACCESS_KEY S3_APP_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY \
+         S3_BACKUP_ACCESS_KEY S3_BACKUP_SECRET_KEY; do
   eval "val=\${$v:-}"
   case "$val" in
     '' | *[!A-Za-z0-9]*) echo "start.sh: $v must be set and alphanumeric (run scripts/dev/setup.sh)" >&2; exit 1 ;;
@@ -17,6 +18,8 @@ sed -e "s/__S3_ADMIN_ACCESS_KEY__/$S3_ADMIN_ACCESS_KEY/" \
     -e "s/__S3_APP_SECRET_KEY__/$S3_APP_SECRET_KEY/" \
     -e "s/__S3_ANCHOR_ACCESS_KEY__/$S3_ANCHOR_ACCESS_KEY/" \
     -e "s/__S3_ANCHOR_SECRET_KEY__/$S3_ANCHOR_SECRET_KEY/" \
+    -e "s/__S3_BACKUP_ACCESS_KEY__/$S3_BACKUP_ACCESS_KEY/" \
+    -e "s/__S3_BACKUP_SECRET_KEY__/$S3_BACKUP_SECRET_KEY/" \
     /etc/seaweedfs/s3-identities.template.json > /run/s3config/s3.json
 
 # /run/s3config is a tmpfs with mode 700 (compose.yaml): the keys never touch disk (TASK-0003 #8).

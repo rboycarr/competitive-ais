@@ -3,7 +3,9 @@
 # Every published port is bound to 127.0.0.1 only. Secrets come from gitignored env files, each given only to
 # the services that need it (TASK-0003 #1, #7): .env (Laravel runtime) and, in .secrets/, migrator.env
 # (migrator service, MySQL init), services.env (MySQL), s3.env (SeaweedFS and its init), anchor.env (SeaweedFS and
-# the auditor) and signing.env (the auditor only; P1-50, PO decision O43). Every container that
+# the auditor), signing.env (the auditor only; P1-50, PO decision O43), readonly.env (MySQL and the backup service)
+# and backup.env (SeaweedFS and the backup service; P1-51). restore.env, the backup decryption key, is used only by
+# the drill project (docker/backup/compose.drill.yaml). Every container that
 # bind-mounts the repository gets an empty read-only tmpfs over .secrets, so those files are not readable
 # inside it (TASK-0004 N2); Compose reads them on the host.
 name: competitive-ais
@@ -107,6 +109,37 @@ services:
     depends_on:
       mysql: { condition: service_healthy }
 
+  # Encrypted backup (P1-51, PO decisions O47 and O48): a MySQL dump with the read-only account and every version of
+  # the evidence and audit-anchor buckets with the read-only backup key, each encrypted to the age public key, into
+  # backups/<UTC time>/. It cannot decrypt what it writes. Not started by `up` (profile "tools").
+  #   docker compose run --rm backup
+  # Restore drill: bash scripts/ops/restore-drill.sh (restores into the separate cais-drill project, O46).
+  backup:
+    build:
+      context: .
+      dockerfile: docker/backup/Dockerfile
+    image: competitive-ais/backup:dev
+    profiles: [tools]
+    user: "${DEV_UID:-1000}:${DEV_GID:-1000}"
+    env_file: [.secrets/readonly.env, .secrets/backup.env]
+    environment:
+      DB_DATABASE: ${DB_DATABASE}
+      DB_READONLY_USERNAME: cais_readonly
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-evidence}
+      AUDIT_ANCHOR_BUCKET: ${AUDIT_ANCHOR_BUCKET:-audit-anchor}
+      HOME: /work
+    command: ["bash", "/opt/backup/backup.sh"]
+    volumes:
+      - ./docker/backup:/opt/backup:ro
+      - ./backups:/backups
+    # Plaintext object copies live only here, in memory, while each is hashed and encrypted.
+    tmpfs: ["/work:mode=0700,uid=${DEV_UID:-1000},gid=${DEV_GID:-1000}"]
+    networks: [data]
+    restart: "no"
+    depends_on:
+      mysql: { condition: service_healthy }
+      seaweedfs-init: { condition: service_completed_successfully }
+
   node:
     build:
       context: .
@@ -147,7 +180,7 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
       - --default-time-zone=+00:00
       - --skip-name-resolve
-    env_file: [.secrets/services.env, .secrets/migrator.env]
+    env_file: [.secrets/services.env, .secrets/migrator.env, .secrets/readonly.env]
     environment:
       MYSQL_DATABASE: ${DB_DATABASE}
       # Least-privilege accounts (P1-09): created by docker/mysql/init/10-accounts.sh.
@@ -191,7 +224,7 @@ services:
     image: chrislusf/seaweedfs:4.51
     entrypoint: ["/bin/sh", "/etc/seaweedfs/start.sh"]
     # Only the S3 keys: the server must hold every identity's secret to verify request signatures.
-    env_file: [.secrets/s3.env, .secrets/anchor.env]
+    env_file: [.secrets/s3.env, .secrets/anchor.env, .secrets/backup.env]
     environment:
       S3_APP_ACCESS_KEY: ${AWS_ACCESS_KEY_ID}
       S3_APP_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
