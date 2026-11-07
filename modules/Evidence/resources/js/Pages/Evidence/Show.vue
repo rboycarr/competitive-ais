@@ -7,13 +7,15 @@ import { eventLabel, scanLabel, sizeLabel, statusLabel } from './labels';
 type Asset = {
     ulid: string; title: string; description: string | null; status: string; scanStatus: string; originalFilename: string; sizeBytes: number;
     sourceUrl: string | null; capturedAt: string; uploadedBy: string | null; uploadedAt: string | null; classification: string; legalHold: boolean;
-    competitors: string[]; markets: string[]; source: CaptureSource | null;
+    competitors: string[]; markets: string[]; source: CaptureSource | null; sha256?: string | null;
 };
+// P1-45: the intelligence citing this evidence; items the viewer cannot see are only counted.
+type Citations = { items: { ulid: string; title: string; status: string; relations: string[] }[]; hidden: number };
 // P1-37: the source and the policy version in force at capture; a placeholder when the source is hidden from the viewer.
 type CaptureSource = { visible: false } | { visible: true; ulid: string; name: string; status: string; policyVersion: number | null; policyDecidedAt: string | null };
 type CustodyEvent = { event: string; actor: string | null; occurredAt: string; reason: string | null };
 
-const props = defineProps<{ asset: Asset; canDownload: boolean; canHold: boolean; custody: CustodyEvent[] }>();
+const props = defineProps<{ asset: Asset; canDownload: boolean; canHold: boolean; custody: CustodyEvent[]; citations?: Citations | null }>();
 
 // P1-35: a reason is required both to place and to release a hold (PO decision O35); the server checks again.
 const holdForm = useForm<{ hold: boolean; reason: string }>({ hold: true, reason: '' });
@@ -53,6 +55,7 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
             <dt class="font-medium">Status</dt><dd>{{ statusLabel(props.asset.status) }}</dd>
             <dt class="font-medium">Scan</dt><dd>{{ scanLabel(props.asset.scanStatus) }}</dd>
             <dt class="font-medium">File</dt><dd class="break-all">{{ props.asset.originalFilename }} ({{ sizeLabel(props.asset.sizeBytes) }})</dd>
+            <dt class="font-medium">SHA-256</dt><dd class="break-all font-mono text-xs">{{ props.asset.sha256 ?? 'Not stored yet' }}</dd>
             <dt class="font-medium">Captured</dt><dd>{{ when(props.asset.capturedAt) }}</dd>
             <dt class="font-medium">Found at</dt>
             <dd>
@@ -95,6 +98,17 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
                 <li v-for="(message, field) in holdForm.errors" :key="field">{{ message }}</li>
             </ul>
         </form>
+        <section v-if="props.citations" aria-labelledby="citations-heading" class="mb-6 max-w-2xl">
+            <h2 id="citations-heading" class="mb-2 text-lg font-semibold">Cited by</h2>
+            <p v-if="props.citations.items.length === 0 && props.citations.hidden === 0" class="text-sm text-slate-700">No intelligence cites it.</p>
+            <ul class="space-y-1 text-sm">
+                <li v-for="item in props.citations.items" :key="item.ulid">
+                    <Link :href="`/intelligence/${item.ulid}`" class="underline">{{ item.title }}</Link>
+                    <span class="text-slate-600"> ({{ item.status.replace('_', ' ') }}; {{ item.relations.join(', ') }})</span>
+                </li>
+                <li v-if="props.citations.hidden > 0" class="text-slate-700">{{ props.citations.hidden }} more {{ props.citations.hidden === 1 ? 'item' : 'items' }} hidden (insufficient access)</li>
+            </ul>
+        </section>
         <section aria-labelledby="custody-heading" class="max-w-2xl">
             <h2 id="custody-heading" class="mb-2 text-lg font-semibold">Chain of custody</h2>
             <ol class="space-y-1 text-sm">

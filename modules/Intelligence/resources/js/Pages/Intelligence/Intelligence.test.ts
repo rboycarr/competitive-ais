@@ -30,6 +30,7 @@ vi.mock('@inertiajs/vue3', async () => {
 const { default: Index } = await import('./Index.vue');
 const { default: Show } = await import('./Show.vue');
 const { default: Queue } = await import('./Queue.vue');
+const { default: Provenance } = await import('./Provenance.vue');
 const { ageLabel } = await import('./labels');
 
 const options = {
@@ -280,5 +281,43 @@ describe('Intelligence publication (P1-44)', () => {
         expect(reader({ supersededBy: { ulid: '01JITEM0000000000000000009', title: 'Fixed', status: 'published' } }, 'superseded').text()).toContain('Superseded by Fixed.');
         expect(reader({}, 'superseded').text()).toContain('Superseded by an item you cannot see.');
         expect(reader({ supersedes: { ulid: '01JITEM0000000000000000008', title: 'Old', status: 'published' } }, 'draft').text()).toContain('Will replace, once published, Old.');
+    });
+});
+
+describe('Intelligence/Provenance (P1-45)', () => {
+    const asset = {
+        ulid: '01JEVID0000000000000000001', title: '<b>Price list</b>', status: 'available', classification: 'internal', capturedAt: '2026-11-01T10:00:00Z',
+        uploadedBy: 'Ana', sha256: 'b'.repeat(64), sizeBytes: 10, mime: 'application/pdf', integrity: 'ok',
+        source: { visible: false as const }, custody: [{ event: 'scan_clean', actor: null, occurredAt: '2026-11-01T10:01:00Z' }],
+    };
+    const props = {
+        item: { ulid: item.ulid, title: 'Launch', status: 'published', classification: 'internal', version: 3, author: 'Ana', owner: 'Ana', submittedAt: null, verifiedAt: null, releasedAt: null },
+        content: { hash: 'c'.repeat(64), approvedHash: 'c'.repeat(64), matchesApproval: true as boolean | null },
+        claims: [{ ulid: '01JCLAIM000000000000000001', statement: '<i>Sold</i>', type: 'observed_fact', reliability: 'B', credibility: 2, status: 'active',
+            evidence: [{ relation: 'supports', locator: 'p. 4', excerpt: '<script>x</script>', asset }], hiddenEvidence: 1 }],
+        reviews: [{ ulid: '01JREV00000000000000000001', decision: 'approve', by: 'Rui', assignee: null, rationale: null, version: 3, contentHash: 'c'.repeat(64), decidedAt: '2026-11-02T10:00:00Z' }],
+        retraction: null, supersedes: null, supersededBy: null,
+        audit: null as { events: { ulid: string; action: string; actor: string; occurredAt: string; context: Record<string, unknown> }[]; more: boolean } | null,
+    };
+
+    it('traces claims to evidence, hashes, sources and custody as text, counting hidden evidence', () => {
+        const wrapper = mount(Provenance, { props });
+        expect(wrapper.find('i, b, script').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<i>Sold</i>');
+        expect(wrapper.text()).toContain('<b>Price list</b>');
+        expect(wrapper.text()).toContain('b'.repeat(64));
+        expect(wrapper.text()).toContain('Recorded, but not visible at your access');
+        expect(wrapper.text()).toContain('1 evidence item hidden (insufficient access)');
+        expect(wrapper.text()).toContain('Yes: the content is what the reviewer approved');
+        expect(wrapper.text()).toContain('(as now)');
+        expect(wrapper.find('#audit-heading').exists()).toBe(false);
+    });
+
+    it('flags content that changed after approval, and shows the audit trail to auditors', () => {
+        const wrapper = mount(Provenance, { props: { ...props, content: { ...props.content, matchesApproval: false },
+            audit: { events: [{ ulid: '01JAUD00000000000000000001', action: 'intelligence.published', actor: 'Dee', occurredAt: '2026-11-02T11:00:00Z', context: { version: 3 } }], more: true } } });
+        expect(wrapper.text()).toContain('No: the content changed after it was approved');
+        expect(wrapper.text()).toContain('intelligence.published by Dee');
+        expect(wrapper.get('#audit-heading ~ p a').attributes('href')).toBe(`/admin/audit?subject=${item.ulid}`);
     });
 });

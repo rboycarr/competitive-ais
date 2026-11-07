@@ -179,3 +179,25 @@ describe('Evidence/Show', () => {
         expect([sizeLabel(512), sizeLabel(2048), sizeLabel(50 * 1024 * 1024)]).toEqual(['512 B', '2.0 KB', '50.0 MB']);
     });
 });
+
+describe('Evidence/Show citations (P1-45)', () => {
+    const asset = {
+        ulid: row.ulid, title: 'Shelf', description: null, status: 'available', scanStatus: 'clean', originalFilename: 'a.pdf', sizeBytes: 10,
+        sourceUrl: null, capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal', legalHold: false,
+        competitors: [], markets: [], source: null, sha256: 'a'.repeat(64),
+    };
+
+    it('shows the content hash and the intelligence citing it, counting hidden items', () => {
+        const wrapper = mount(Show, { props: { asset, canDownload: false, canHold: false, custody: [], citations: {
+            items: [{ ulid: '01JITEM0000000000000000001', title: '<b>Launch</b>', status: 'in_review', relations: ['contradicts', 'supports'] }], hidden: 2,
+        } } });
+        expect(wrapper.text()).toContain('a'.repeat(64));
+        expect(wrapper.find('#citations-heading ~ ul b').exists()).toBe(false);
+        expect(wrapper.text()).toContain('<b>Launch</b> (in review; contradicts, supports)');
+        expect(wrapper.get('#citations-heading ~ ul a').attributes('href')).toBe('/intelligence/01JITEM0000000000000000001');
+        expect(wrapper.text()).toContain('2 more items hidden (insufficient access)');
+
+        expect(mount(Show, { props: { asset, canDownload: false, canHold: false, custody: [], citations: { items: [], hidden: 0 } } }).text()).toContain('No intelligence cites it.');
+        expect(mount(Show, { props: { asset: { ...asset, sha256: null }, canDownload: false, canHold: false, custody: [], citations: null } }).find('#citations-heading').exists()).toBe(false);
+    });
+});

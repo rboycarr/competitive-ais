@@ -159,7 +159,10 @@ function uncite(c: Claim, e: Citation): void {
             <span v-if="props.item.highImpact" class="rounded border border-amber-700 px-2 text-amber-800">High impact</span>
             <span class="rounded border border-slate-400 px-2">Version {{ props.item.version }}</span>
         </p>
-        <p class="mb-4 text-sm text-slate-700">Author: {{ props.item.author ?? '—' }} · Owner: {{ props.item.owner ?? '—' }}</p>
+        <p class="mb-4 text-sm text-slate-700">
+            Author: {{ props.item.author ?? '—' }} · Owner: {{ props.item.owner ?? '—' }} ·
+            <Link :href="`/intelligence/${props.item.ulid}/provenance`" class="underline">Provenance</Link>
+        </p>
 
         <div v-if="props.publication.retraction" role="note" class="mb-4 max-w-3xl rounded border border-red-700 bg-red-50 p-3 text-sm">
             <p class="font-semibold text-red-800">Retracted {{ when(props.publication.retraction.at) }}<template v-if="props.publication.retraction.by"> by {{ props.publication.retraction.by }}</template>. Do not rely on it.</p>

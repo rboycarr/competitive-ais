@@ -2,7 +2,9 @@
 
 namespace Modules\Intelligence;
 
+use Modules\Intelligence\Contracts\IntelligenceCitations;
 use Modules\Intelligence\Contracts\IntelligenceReferences;
+use Modules\Intelligence\Lookup\EloquentIntelligenceCitations;
 use Modules\Intelligence\Lookup\EloquentIntelligenceReferences;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Support\ModuleServiceProvider;
@@ -22,6 +24,8 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
 
         // The Registry's archive guard asks through this contract (P1-40).
         $this->app->bind(IntelligenceReferences::class, EloquentIntelligenceReferences::class);
+        // The evidence page lists the intelligence citing an asset through this one (P1-45).
+        $this->app->bind(IntelligenceCitations::class, EloquentIntelligenceCitations::class);
     }
 
     public function boot(): void
@@ -52,6 +56,8 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
         $audit->define('intelligence.superseded', ['replacement_ulid' => 'ulid', 'version' => 'int']);
         $audit->define('intelligence.retracted', ['replacement' => 'bool', 'version' => 'int']);
         $audit->define('intelligence.replacement_drafted', ['replaces_ulid' => 'ulid']);
+        // P1-45: showing an item's audit trail is itself audited (as an audit search is), with how many rows were shown.
+        $audit->define('intelligence.provenance_viewed', ['events' => 'int']);
         // Domain events (docs/03: IntelligenceSubmitted, …) are defined with their first consumer.
     }
 }
