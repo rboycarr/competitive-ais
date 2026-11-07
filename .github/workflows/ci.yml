@@ -30,8 +30,10 @@ jobs:
         run: docker compose build php
       - name: Start MySQL (runs the account init script on a fresh volume)
         run: docker compose up -d --wait mysql
-      - name: Composer install
-        run: docker compose run --rm --no-deps -T php composer install --no-interaction --no-progress
+      - name: Composer install (the job's read-only token avoids GitHub's anonymous rate limit)
+        env:
+          COMPOSER_AUTH: '{"github-oauth": {"github.com": "${{ github.token }}"}}'
+        run: bash scripts/ci/composer-install.sh
       - name: App key
         run: docker compose run --rm --no-deps -T php php artisan key:generate --no-interaction
       - name: Checks
@@ -53,8 +55,10 @@ jobs:
         run: bash scripts/ops/backup-keys.sh
       - name: Start MySQL, Valkey, the object store and mail
         run: docker compose up -d --wait mysql valkey seaweedfs mailpit && docker compose up seaweedfs-init --exit-code-from seaweedfs-init
-      - name: Composer install
-        run: docker compose run --rm --no-deps -T php composer install --no-interaction --no-progress
+      - name: Composer install (the job's read-only token avoids GitHub's anonymous rate limit)
+        env:
+          COMPOSER_AUTH: '{"github-oauth": {"github.com": "${{ github.token }}"}}'
+        run: bash scripts/ci/composer-install.sh
       - name: App key
         run: docker compose run --rm --no-deps -T php php artisan key:generate --no-interaction
       - name: Backup, drill, damaged backups
