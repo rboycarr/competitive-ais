@@ -121,7 +121,7 @@ class AuditAnchorTest extends TestCase
 
         $key = AuditAnchor::objectKey(1, $checkpoint['from'], $checkpoint['to'], 1);
         $object = json_decode((string) Storage::disk('audit-anchor')->get($key), true, 4, JSON_THROW_ON_ERROR);
-        $object['manifest']['count'] = 2;
+        $object['manifest']['root'] = str_repeat('f', 64); // in range, so only the signature catches it
         Storage::disk('audit-anchor')->put($key, AuditAnchor::encode($object));
 
         $issues = $this->verify();
@@ -184,28 +184,26 @@ class AuditAnchorTest extends TestCase
 
     public function test_a_late_commit_is_reanchored_only_on_purpose(): void
     {
-        $this->recordAt(-60, 'first');
-        try {
-            DB::transaction(function () {
-                $this->app->make(AuditLogger::class)->record('probe.recorded', null, ['note' => 'rolled back']);
-                throw new RuntimeException('rolled back');
-            });
-        } catch (RuntimeException) {
-        }
-        $this->recordAt(-58, 'third');
-        $checkpoint = $this->anchor()->checkpoint()['checkpoint'];
-        $this->assertNotNull($checkpoint);
-        $this->assertSame([1, 3, 2], [$checkpoint['from'], $checkpoint['to'], $checkpoint['count']]);
-
+        $this->signedRangeWithGap();
         $this->lateCommit(2);
         $this->assertSame(['late_commit'], array_column($this->verify(), 'type'));
 
-        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1']));
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '2']));
         $this->assertStringContainsString('Give the reason', Artisan::output());
-        $this->assertSame(2, Artisan::call('audit:reanchor', ['from' => 'one', '--reason' => 'x']));
-        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '999', '--reason' => 'x']));
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--reason' => 'x']));
+        $this->assertStringContainsString('Name the late-committed audit IDs', Artisan::output());
+        $this->assertSame(2, Artisan::call('audit:reanchor', ['from' => 'one', '--late' => '2', '--reason' => 'x']));
+        $this->assertSame(2, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '2,x', '--reason' => 'x']));
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '999', '--late' => '2', '--reason' => 'x']));
+        $this->assertStringContainsString('No signed manifest', Artisan::output());
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '7', '--reason' => 'x']));
+        $this->assertStringContainsString('not rows of this range', Artisan::output());
+        // Naming the wrong row: without row 1 the range no longer matches what was signed.
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '1', '--reason' => 'x']));
+        $this->assertStringContainsString('does not match its signed manifest', Artisan::output());
+        $this->assertSame(1, DB::table('audit_checkpoints')->count());
 
-        $this->assertSame(0, Artisan::call('audit:reanchor', ['from' => '1', '--reason' => 'Batch import held its transaction open; row 2 checked against the import log.']));
+        $this->assertSame(0, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '2', '--reason' => 'Batch import held its transaction open; row 2 checked against the import log.']));
         $supplement = DB::table('audit_checkpoints')->where('revision', 2)->sole();
         $this->assertSame([1, 3, 3], [(int) $supplement->from_audit_id, (int) $supplement->to_audit_id, (int) $supplement->event_count]);
         $this->assertSame((int) DB::table('audit_checkpoints')->where('revision', 1)->value('id'), (int) $supplement->supplements_id);
@@ -213,18 +211,112 @@ class AuditAnchorTest extends TestCase
         $this->assertSame([], $this->verify());
 
         $audit = DB::table('audit_events')->where('action', 'audit.reanchored')->sole();
-        $this->assertEquals(['count' => 3, 'from' => 1, 'generation' => 1, 'previous_count' => 2, 'reason' => 'Batch import held its transaction open; row 2 checked against the import log.', 'revision' => 2, 'to' => 3],
+        $this->assertEquals(['count' => 3, 'from' => 1, 'generation' => 1, 'late_ids' => [2], 'previous_count' => 2, 'reason' => 'Batch import held its transaction open; row 2 checked against the import log.', 'revision' => 2, 'to' => 3],
             json_decode((string) $audit->context, true));
         $this->assertSame('system', $audit->actor_type);
 
-        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--reason' => 'again']));
-        $this->assertStringContainsString('Nothing to re-anchor', Artisan::output());
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '2', '--reason' => 'again']));
+        $this->assertStringContainsString('does not match its signed manifest (r2)', Artisan::output());
 
         // A deletion is never re-anchored.
         DB::connection('migrator')->table('audit_events')->where('id', 2)->delete();
         $this->assertSame(['rows_missing'], array_column($this->verify(), 'type'));
-        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--reason' => 'hide it']));
+        $this->assertSame(1, Artisan::call('audit:reanchor', ['from' => '1', '--late' => '3', '--reason' => 'hide it']));
         $this->assertSame(2, DB::table('audit_checkpoints')->count());
+    }
+
+    public function test_a_forged_supplement_written_into_the_database_is_never_signed(): void
+    {
+        $this->signedRangeWithGap();
+        $this->lateCommit(2); // a fabricated row with a valid hash (TASK-0096 #1)
+
+        // ... and a supplementary checkpoint that counts it, written straight into the table.
+        $rows = array_values(DB::table('audit_events')->orderBy('id')->get(['id', 'row_hash'])->map(fn ($r): array => ['id' => (int) $r->id, 'row_hash' => (string) $r->row_hash])->all());
+        $signed = DB::table('audit_checkpoints')->sole();
+        DB::connection('migrator')->table('audit_checkpoints')->insert(['generation' => 1, 'from_audit_id' => 1, 'to_audit_id' => 3, 'revision' => 2,
+            'supplements_id' => $signed->id, 'event_count' => 3, 'merkle_root' => $this->app->make(AuditHasher::class)->merkleRoot($rows),
+            'watermark_at' => $signed->watermark_at, 'created_at' => $signed->created_at]);
+
+        $this->assertSame(['anchored' => 0, 'checkpoint' => null], $this->anchor()->checkpoint());
+        $this->assertFalse(Storage::disk('audit-anchor')->exists(AuditAnchor::objectKey(1, 1, 3, 2)));
+        $this->assertSame(['late_commit', 'unsigned_supplement'], array_column($this->verify(), 'type'));
+        $this->assertSame('critical', $this->verify()[1]['severity']);
+    }
+
+    public function test_a_checkpoint_row_that_does_not_continue_the_signed_ranges_is_not_signed(): void
+    {
+        $this->recordAt(-60, 'a');
+        $this->recordAt(-59, 'b');
+        $this->anchor()->checkpoint(); // signs 1-2
+        $this->recordAt(-50, 'c');
+
+        // Someone inserts a checkpoint over rows 2-3, overlapping the signed range (TASK-0096 #3).
+        $rows = array_values(DB::table('audit_events')->where('id', '>=', 2)->orderBy('id')->get(['id', 'row_hash'])->map(fn ($r): array => ['id' => (int) $r->id, 'row_hash' => (string) $r->row_hash])->all());
+        $signed = DB::table('audit_checkpoints')->sole();
+        DB::table('audit_checkpoints')->insert(['generation' => 1, 'from_audit_id' => 2, 'to_audit_id' => 3, 'event_count' => 2,
+            'merkle_root' => $this->app->make(AuditHasher::class)->merkleRoot($rows), 'watermark_at' => $signed->watermark_at, 'created_at' => $signed->created_at]);
+
+        $this->assertThrows(fn () => $this->anchor()->anchorPending(), RuntimeException::class, 'but the signed ranges end at 2, so it is not signed');
+        $this->assertCount(1, Storage::disk('audit-anchor')->files('g1'));
+    }
+
+    public function test_a_changed_or_deleted_export_record_is_reported_and_recorded_again_visibly(): void
+    {
+        $this->recordAt(-60, 'a');
+        $this->anchor()->checkpoint();
+
+        DB::connection('migrator')->table('audit_anchors')->update(['signature' => str_repeat('0', 128)]);
+        $this->assertSame(['anchor_record_mismatch'], array_column($this->verify(), 'type'));
+
+        DB::connection('migrator')->table('audit_anchors')->delete();
+        $this->assertSame(['anchor_record_mismatch'], array_column($this->verify(), 'type'));
+        $this->assertStringContainsString('missing', $this->verify()[0]['detail']);
+
+        $log = Log::spy();
+        $this->assertSame(1, $this->anchor()->anchorPending());
+        $log->shouldHaveReceived('warning')->once()->with('Audit manifest already exported; recording its anchor again', Mockery::type('array'));
+        $this->assertSame([], $this->verify());
+    }
+
+    public function test_verification_needs_only_the_public_keys(): void
+    {
+        $this->recordAt(-60, 'a');
+        $this->anchor()->checkpoint();
+        $publicKey = $this->app->make(AuditSigner::class)->publicKeyHex();
+
+        config(['audit.anchor.signing_seed' => null, 'audit.anchor.trusted_keys' => $publicKey]);
+        $this->assertSame([], $this->verify());
+        $this->assertThrows(fn () => $this->anchor()->checkpoint(), RuntimeException::class, 'auditor service');
+    }
+
+    public function test_a_signed_manifest_with_values_out_of_range_is_rejected(): void
+    {
+        $this->recordAt(-60, 'a');
+        $this->anchor()->checkpoint();
+
+        $signer = $this->app->make(AuditSigner::class);
+        $manifest = ['v' => 1, 'generation' => 1, 'revision' => 2, 'from' => 1, 'to' => 1, 'count' => 5, 'root' => str_repeat('a', 64),
+            'watermark_at' => '2026-11-07 00:00:00.000000', 'closed_at' => '2026-11-07 00:00:00.000000', 'key_id' => $signer->keyId()];
+        Storage::disk('audit-anchor')->put(AuditAnchor::objectKey(1, 1, 1, 2), AuditAnchor::encode(['manifest' => $manifest, 'signature' => $signer->sign(AuditAnchor::encode($manifest))]));
+
+        $issues = $this->verify();
+        $this->assertSame(['manifest_invalid'], array_column($issues, 'type'));
+        $this->assertStringContainsString('values out of range', $issues[0]['detail']);
+    }
+
+    public function test_the_scheduler_watches_that_anchoring_keeps_running(): void
+    {
+        $this->assertSame(0, $this->freshness());
+        $this->recordAt(-20, 'recent');
+        $this->assertSame(0, $this->freshness());
+
+        $this->recordAt(-60, 'old');
+        $log = Log::spy();
+        $this->assertSame(1, $this->freshness());
+        $log->shouldHaveReceived('critical')->once()->with('Audit rows are not being anchored; check the auditor service', Mockery::type('array'));
+
+        $this->anchor()->checkpoint();
+        $this->assertSame(0, $this->freshness());
     }
 
     public function test_unexported_checkpoints_and_unsigned_rows_are_reported_once_stale(): void
@@ -264,7 +356,7 @@ class AuditAnchorTest extends TestCase
         $this->assertSame(0, DB::table('audit_checkpoints')->count());
     }
 
-    public function test_the_auditor_loop_runs_once_and_audit_work_is_not_on_the_app_schedule(): void
+    public function test_the_auditor_loop_runs_once_and_only_the_freshness_watch_is_on_the_app_schedule(): void
     {
         $ulid = $this->recordAt(-60, 'a');
         $this->assertSame(0, Artisan::call('audit:work', ['--once' => true]));
@@ -275,7 +367,9 @@ class AuditAnchorTest extends TestCase
 
         $scheduled = collect($this->app->make(Schedule::class)->events())->map(fn ($event): string => $event->command.' '.$event->description);
         $this->assertNotEmpty($scheduled);
-        $this->assertEmpty($scheduled->filter(fn (string $line): bool => str_contains(strtolower($line), 'audit')), 'The scheduler has no signing key.');
+        $audit = $scheduled->filter(fn (string $line): bool => str_contains(strtolower($line), 'audit'))->values();
+        $this->assertCount(1, $audit, 'The scheduler has no signing key: it only watches the auditor.');
+        $this->assertStringContainsString('audit:freshness', (string) $audit->first());
     }
 
     public function test_long_transactions_are_alerted_when_they_commit(): void
@@ -350,10 +444,20 @@ class AuditAnchorTest extends TestCase
         return $this->app->make(AuditAnchor::class);
     }
 
-    /** @return list<array{type: string, severity: string, detail: string}> */
+    /**
+     * @return list<array{type: string, severity: string, detail: string}>
+     *
+     * @phpstan-impure
+     */
     private function verify(): array
     {
         return $this->app->make(AuditVerifier::class)->verify();
+    }
+
+    /** @phpstan-impure */
+    private function freshness(): int
+    {
+        return Artisan::call('audit:freshness');
     }
 
     /** Records an event as if it happened $minutes from now (negative = in the past). */
@@ -365,6 +469,23 @@ class AuditAnchorTest extends TestCase
         } finally {
             Carbon::setTestNow();
         }
+    }
+
+    /** Rows 1 and 3 (ID 2 rolled back), signed as one range 1-3 that counts 2. */
+    private function signedRangeWithGap(): void
+    {
+        $this->recordAt(-60, 'first');
+        try {
+            DB::transaction(function () {
+                $this->app->make(AuditLogger::class)->record('probe.recorded', null, ['note' => 'rolled back']);
+                throw new RuntimeException('rolled back');
+            });
+        } catch (RuntimeException) {
+        }
+        $this->recordAt(-58, 'third');
+        $checkpoint = $this->anchor()->checkpoint()['checkpoint'];
+        $this->assertNotNull($checkpoint);
+        $this->assertSame([1, 3, 2], [$checkpoint['from'], $checkpoint['to'], $checkpoint['count']]);
     }
 
     /** A valid row committed with ID $id after its range was signed, as a long transaction would. */

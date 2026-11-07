@@ -28,6 +28,7 @@ use League\Flysystem\AwsS3V3\AwsS3V3Adapter as S3Adapter;
 use League\Flysystem\Filesystem;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
+use Modules\Platform\Console\CheckAuditFreshness;
 use Modules\Platform\Console\CreateAuditCheckpoint;
 use Modules\Platform\Console\ReanchorAuditRange;
 use Modules\Platform\Console\RelayOutbox;
@@ -83,7 +84,7 @@ class PlatformServiceProvider extends ModuleServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, ReanchorAuditRange::class,
-                RunAuditor::class, RelayOutbox::class,
+                RunAuditor::class, CheckAuditFreshness::class, RelayOutbox::class,
                 ShowFeatures::class, SwitchFeature::class,
             ]);
         }
@@ -160,12 +161,15 @@ class PlatformServiceProvider extends ModuleServiceProvider
 
     /**
      * Outbox delivery (P1-06); the job runs on the queue. Audit checkpoints and verification are not scheduled here:
-     * they need the signing key, so the auditor service runs them (audit:work, P1-50).
+     * they need the signing key, so the auditor service runs them (audit:work, P1-50); the scheduler only watches that
+     * they keep running (audit:freshness).
      */
     private function scheduleJobs(): void
     {
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
             $schedule->job(new RelayOutboxJob)->everyMinute();
+            // Holds no key: only watches that the auditor keeps anchoring (TASK-0096 #5).
+            $schedule->command('audit:freshness')->everyFifteenMinutes();
         });
     }
 
@@ -176,7 +180,8 @@ class PlatformServiceProvider extends ModuleServiceProvider
     private function auditAnchoring(): void
     {
         $this->app->make(AuditActions::class)->define('audit.reanchored', [
-            'generation' => 'int', 'from' => 'int', 'to' => 'int', 'revision' => 'int', 'count' => 'int', 'previous_count' => 'int', 'reason' => 'text',
+            'generation' => 'int', 'from' => 'int', 'to' => 'int', 'revision' => 'int', 'count' => 'int', 'previous_count' => 'int',
+            'late_ids' => 'int[]', 'reason' => 'text',
         ]);
 
         $monitor = $this->app->make(TransactionDurationMonitor::class);

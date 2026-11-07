@@ -15,6 +15,7 @@ class ReanchorAuditRange extends Command
 {
     protected $signature = 'audit:reanchor
         {from : The first audit event ID of the range (from audit:verify)}
+        {--late= : The late-committed audit event IDs the investigation found, comma-separated (required)}
         {--reason= : What the investigation found (required, at most 500 characters, recorded in the audit trail)}';
 
     protected $description = 'Re-anchor an audit range after an investigated late commit';
@@ -28,8 +29,19 @@ class ReanchorAuditRange extends Command
             return self::INVALID;
         }
 
+        $late = [];
+        foreach (array_filter(array_map('trim', explode(',', (string) $this->option('late'))), fn (string $id): bool => $id !== '') as $id) {
+            $value = filter_var($id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($value === false) {
+                $this->components->error('The late IDs must be positive integers, separated by commas.');
+
+                return self::INVALID;
+            }
+            $late[] = $value;
+        }
+
         try {
-            $result = $anchor->reanchor($from, (string) $this->option('reason'));
+            $result = $anchor->reanchor($from, $late, (string) $this->option('reason'));
         } catch (InvalidArgumentException|RuntimeException $e) {
             $this->components->error($e->getMessage());
 

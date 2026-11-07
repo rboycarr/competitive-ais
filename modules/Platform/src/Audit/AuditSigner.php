@@ -52,11 +52,19 @@ final class AuditSigner
         return sodium_crypto_sign_verify_detached($bytes, $message, $publicKey);
     }
 
-    /** @return array<string, non-empty-string> binary public keys by key ID: the current key and the configured earlier ones */
+    /**
+     * Binary public keys by key ID: the current key (where the seed is configured) and the configured earlier ones.
+     * Verification needs only these, never the seed (TASK-0096 #4).
+     *
+     * @return array<string, non-empty-string>
+     */
     public function trustedKeys(): array
     {
-        $current = $this->publicKey();
-        $keys = [self::keyIdOf($current) => $current];
+        $keys = [];
+        if ($this->configured()) {
+            $current = $this->publicKey();
+            $keys[self::keyIdOf($current)] = $current;
+        }
         foreach (array_filter(array_map('trim', explode(',', (string) $this->config->get('audit.anchor.trusted_keys')))) as $hex) {
             $key = preg_match('/^[0-9a-f]{64}$/', $hex) === 1 ? hex2bin($hex) : false;
             if ($key === false || $key === '') {

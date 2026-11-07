@@ -142,6 +142,7 @@ AI approval never replaces human approval.
 | TASK-0093 | Verification of the TASK-0092 fixes (P1-45) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/provenance-view` @ `f9c8b9a` | **Verified: all resolved, no new finding, "yes".** | `handoffs/TASK-0093-review.md` |
 | TASK-0094 | Review of P1-48 (flags for re-review) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/rereview-flags` @ `fe35d15` | **Reviewed: "yes after fixes" (high: reconciler deadlock, not a defect: it takes no asset locks, documented; medium: scan onto a mismatched blob, fixed; fake disk ignores versions, documented; low: payload checked against the aggregate, fixed); tests added.** | `handoffs/TASK-0094-review.md` |
 | TASK-0095 | Verification of the TASK-0094 fixes (P1-48) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/rereview-flags` @ `02d5d04` | **Verified: #2 and #4 resolved, #1 and #3 correctly dispositioned, no new finding, "yes".** | `handoffs/TASK-0095-review.md` |
+| TASK-0096 | Review of P1-50 (signed audit anchor) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/audit-anchor` @ `6c7e795` | **Reviewed: "no"; 2 high (a forged supplement could be signed; deleted export records undetected), 3 medium, 1 low; all fixed with tests.** | `handoffs/TASK-0096-review.md` |
 
 ## 4. Decision and disagreement log
 
