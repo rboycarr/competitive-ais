@@ -265,8 +265,11 @@ class AuditAnchorTest extends TestCase
         $this->recordAt(-60, 'a');
         $this->anchor()->checkpoint();
 
+        $original = DB::table('audit_anchors')->sole();
         DB::connection('migrator')->table('audit_anchors')->update(['signature' => str_repeat('0', 128)]);
         $this->assertSame(['anchor_record_mismatch'], array_column($this->verify(), 'type'));
+        DB::connection('migrator')->table('audit_anchors')->update(['signature' => $original->signature, 'manifest_sha256' => str_repeat('0', 64)]);
+        $this->assertSame(['anchor_record_mismatch'], array_column($this->verify(), 'type'), 'TASK-0097 #2');
 
         DB::connection('migrator')->table('audit_anchors')->delete();
         $this->assertSame(['anchor_record_mismatch'], array_column($this->verify(), 'type'));
@@ -275,6 +278,23 @@ class AuditAnchorTest extends TestCase
         $log = Log::spy();
         $this->assertSame(1, $this->anchor()->anchorPending());
         $log->shouldHaveReceived('warning')->once()->with('Audit manifest already exported; recording its anchor again', Mockery::type('array'));
+        $this->assertSame([], $this->verify());
+    }
+
+    public function test_an_earlier_export_record_deleted_after_later_ranges_is_recorded_again(): void
+    {
+        $this->recordAt(-60, 'a');
+        $this->anchor()->checkpoint(); // 1-1
+        $this->recordAt(-50, 'b');
+        $this->anchor()->checkpoint(); // 2-2
+        $first = (int) DB::table('audit_checkpoints')->where('from_audit_id', 1)->value('id');
+
+        DB::connection('migrator')->table('audit_anchors')->where('checkpoint_id', $first)->delete();
+        $this->assertSame(['anchor_record_mismatch'], array_column($this->verify(), 'type'));
+
+        // TASK-0097 #1: the locked bytes are already there, so the record comes back although later ranges are signed.
+        $this->assertSame(1, $this->anchor()->anchorPending());
+        $this->assertSame(2, DB::table('audit_anchors')->count());
         $this->assertSame([], $this->verify());
     }
 

@@ -82,11 +82,6 @@ class AuditAnchor
             ->get(['c.*']);
 
         foreach ($pending as $checkpoint) {
-            $signedTo = (int) $db->table('audit_checkpoints as c')->join('audit_anchors as a', 'a.checkpoint_id', '=', 'c.id')
-                ->where('c.generation', $this->generation())->max('c.to_audit_id');
-            if ((int) $checkpoint->from_audit_id !== $signedTo + 1) {
-                throw new RuntimeException("Checkpoint {$checkpoint->id} starts at audit ID {$checkpoint->from_audit_id}, but the signed ranges end at $signedTo, so it is not signed. Run audit:verify and follow the runbook (docs/10 §6).");
-            }
             $this->export($checkpoint);
         }
 
@@ -232,9 +227,17 @@ class AuditAnchor
         $disk = $this->disk();
         if ($disk->exists($key) && $disk->get($key) === $body) {
             // Exported before, but its record is missing: the write succeeded and the insert below did not, or someone
-            // deleted the record (TASK-0096 #2). The same bytes are already locked; record them again, visibly.
+            // deleted the record (TASK-0096 #2). The same bytes are already locked; record them again, visibly, wherever
+            // the range lies (TASK-0097 #1).
             Log::warning('Audit manifest already exported; recording its anchor again', ['checkpoint' => (int) $checkpoint->id, 'object_key' => $key]);
         } else {
+            if ($manifest['revision'] === 1) {
+                $signedTo = (int) $this->db->connection()->table('audit_checkpoints as c')->join('audit_anchors as a', 'a.checkpoint_id', '=', 'c.id')
+                    ->where('c.generation', $manifest['generation'])->max('c.to_audit_id');
+                if ($from !== $signedTo + 1) {
+                    throw new RuntimeException("Checkpoint {$checkpoint->id} starts at audit ID $from, but the signed ranges end at $signedTo, so it is not signed. Run audit:verify and follow the runbook (docs/10 §6).");
+                }
+            }
             LockedObjects::write($disk, $key, $body, 'application/json', $now->addDays($this->retentionDays()), $this->lockMode());
         }
 

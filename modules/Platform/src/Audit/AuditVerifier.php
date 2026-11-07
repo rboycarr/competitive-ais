@@ -30,7 +30,8 @@ use RuntimeException;
  * - manifest_missing (critical): a checkpoint recorded as exported has no valid manifest
  * - unsigned_supplement (critical): a supplementary checkpoint without a manifest; only audit:reanchor creates them, and
  *   it exports them at once (TASK-0096 #1, #3)
- * - anchor_record_mismatch (high): an export record missing for a manifest, or differing from it (TASK-0096 #2); the
+ * - anchor_record_mismatch (high): an export record missing for a manifest, or differing from it in object key, key ID,
+ *   signature or SHA-256 (TASK-0096 #2, TASK-0097 #2); the
  *   trail itself is intact, but its bookkeeping was changed
  * - unanchored (high): a checkpoint still not exported after the stale window
  * - anchor_stale (high): rows older than the lag window plus the stale window are in no signed manifest
@@ -38,7 +39,7 @@ use RuntimeException;
  * For each range the highest valid revision counts (a supplementary checkpoint after a late commit).
  *
  * @phpstan-type Manifest array{v: int, generation: int, revision: int, from: int, to: int, count: int, root: string, watermark_at: string, closed_at: string, key_id: string}
- * @phpstan-type Signed array{manifest: Manifest, signature: string, key: string}
+ * @phpstan-type Signed array{manifest: Manifest, signature: string, key: string, sha256: string}
  */
 class AuditVerifier
 {
@@ -95,7 +96,7 @@ class AuditVerifier
                 if (AuditAnchor::manifest($checkpoint, $entry['manifest']['key_id']) !== $entry['manifest']) {
                     $issues[] = $this->issue('checkpoint_mismatch', 'critical', "checkpoint {$checkpoint->id} ($key) differs from its signed manifest");
                 }
-                if ($anchor === null || [$anchor->object_key, $anchor->key_id, $anchor->signature] !== [$entry['key'], $entry['manifest']['key_id'], $entry['signature']]) {
+                if ($anchor === null || [$anchor->object_key, $anchor->key_id, $anchor->signature, $anchor->manifest_sha256] !== [$entry['key'], $entry['manifest']['key_id'], $entry['signature'], $entry['sha256']]) {
                     $issues[] = $this->issue('anchor_record_mismatch', 'high', "checkpoint {$checkpoint->id} ($key): its export record is ".($anchor === null ? 'missing' : 'different from the manifest'));
                 }
                 unset($signed[$key]);
@@ -193,7 +194,8 @@ class AuditVerifier
 
         $signed = [];
         foreach ($keys as $key) {
-            $entry = $this->signedManifest((string) $disk->get($key));
+            $body = (string) $disk->get($key);
+            $entry = $this->signedManifest($body);
             if (is_string($entry)) {
                 $issues[] = $this->issue('manifest_invalid', 'critical', "$key: $entry");
 
@@ -205,7 +207,7 @@ class AuditVerifier
 
                 continue;
             }
-            $signed["{$manifest['from']}/{$manifest['revision']}"] = $entry + ['key' => $key];
+            $signed["{$manifest['from']}/{$manifest['revision']}"] = $entry + ['key' => $key, 'sha256' => hash('sha256', $body)];
         }
 
         return $signed;
