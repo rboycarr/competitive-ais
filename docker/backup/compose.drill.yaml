@@ -1,7 +1,7 @@
-# Restore-drill project (P1-51, PO decision O46). Used only together with compose.yaml under the project name
-# cais-drill, by scripts/ops/restore-drill.sh:
-#   docker compose -p cais-drill -f compose.yaml -f docker/backup/compose.drill.yaml ...
-# Its MySQL, object store and other volumes are its own (cais-drill_*), so it never touches the development data.
+# Restore-drill project (P1-51, PO decision O46). Used only together with compose.yaml under a project name of the
+# form cais-drill-<run>, new for each run of scripts/ops/restore-drill.sh:
+#   docker compose -p cais-drill-<run> -f compose.yaml -f docker/backup/compose.drill.yaml ...
+# Its MySQL, object store and other volumes are its own (cais-drill-<run>_*), so it never touches the development data.
 # No ports are published. The PHP dependencies are read from the development project's vendor volume.
 services:
   nginx: { ports: !reset [] }
@@ -34,14 +34,7 @@ services:
       mysql: { condition: service_healthy }
       seaweedfs-init: { condition: service_completed_successfully }
 
-# Every volume this project creates carries the drill label; restore-drill.sh removes the project only when all of its
-# volumes do, so an unrelated project that happens to be called cais-drill is never deleted (TASK-0099 #2).
 volumes:
   vendor:
     external: true
     name: competitive-ais_vendor
-  node_modules: { labels: { cais.restore-drill: "1" } }
-  mysql-data: { labels: { cais.restore-drill: "1" } }
-  valkey-data: { labels: { cais.restore-drill: "1" } }
-  seaweedfs-data: { labels: { cais.restore-drill: "1" } }
-  clamav-db: { labels: { cais.restore-drill: "1" } }

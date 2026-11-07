@@ -17,6 +17,7 @@ umask 077
   || { echo "backup.sh: BACKUP_AGE_RECIPIENT is not an age public key (run scripts/ops/backup-keys.sh)" >&2; exit 1; }
 
 BUCKETS=("${EVIDENCE_BUCKET:-evidence}" "${AUDIT_ANCHOR_BUCKET:-audit-anchor}")
+[ "${BUCKETS[0]}" != "${BUCKETS[1]}" ] || { echo "backup.sh: EVIDENCE_BUCKET and AUDIT_ANCHOR_BUCKET must differ" >&2; exit 1; }
 . /opt/backup/lib.sh
 enc() { age -r "$BACKUP_AGE_RECIPIENT" -o "$1"; }
 

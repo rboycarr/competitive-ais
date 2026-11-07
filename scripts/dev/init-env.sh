@@ -32,6 +32,8 @@ FILES=(.env .secrets/migrator.env .secrets/services.env .secrets/s3.env .secrets
        .secrets/readonly.env .secrets/backup.env .secrets/restore.env)
 
 mkdir -p .secrets && chmod 700 .secrets
+# Encrypted backups (P1-51). Created here so it belongs to this user, not to root via a container bind mount.
+mkdir -p backups && chmod 700 backups
 
 # Earlier layouts kept these files at the repository root (TASK-0003 branch).
 for pair in .env.migrator:.secrets/migrator.env .env.services:.secrets/services.env .env.s3:.secrets/s3.env; do

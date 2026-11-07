@@ -113,7 +113,7 @@ services:
   # the evidence and audit-anchor buckets with the read-only backup key, each encrypted to the age public key, into
   # backups/<UTC time>/. It cannot decrypt what it writes. Not started by `up` (profile "tools").
   #   docker compose run --rm backup
-  # Restore drill: bash scripts/ops/restore-drill.sh (restores into the separate cais-drill project, O46).
+  # Restore drill: bash scripts/ops/restore-drill.sh (restores into a separate cais-drill-<run> project, O46).
   backup:
     build:
       context: .

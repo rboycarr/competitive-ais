@@ -138,7 +138,7 @@ Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates 
 
 **Backup (P1-51):** `docker compose run --rm backup` writes `backups/<UTC time>/`: `mysql.sql.age`, `manifest.tsv.age`, `objects/<n>.age` and a plaintext `backup.info` (counts only). Every file is encrypted with age to `BACKUP_AGE_RECIPIENT`, a public key (O47): the backup service cannot decrypt what it writes. The matching identity (`BACKUP_AGE_IDENTITY`, `.secrets/restore.env`) is needed only to restore. In production, keep it offline, away from the backup host, and copy `backups/` to the offsite store once O3 fixes the target. `scripts/ops/backup-keys.sh` creates the key pair locally. `evidence-quarantine` and `exports` are not backed up, because they are transient. The test database is not backed up either. Grants are not in the dump; the restore recreates them from code (`10-accounts.sh`, `db:apply-grants`).
 
-**Restore drill (P1-51, O46, O49):** `bash scripts/ops/restore-drill.sh [<backup>] [--keep]` runs monthly and before each release; CI runs it on every push with synthetic data, together with damaged backups that must fail (`scripts/ci/restore-drill-test.sh`). It restores into the separate Compose project `cais-drill`, which has its own volumes and no published ports and is removed afterwards. Steps:
+**Restore drill (P1-51, O46, O49):** `bash scripts/ops/restore-drill.sh [<backup>] [--keep]` runs monthly and before each release; CI runs it on every push with synthetic data, together with damaged backups that must fail (`scripts/ci/restore-drill-test.sh`). It restores into a separate Compose project, `cais-drill-<UTC time>-<pid>`, with a new name for every run, its own volumes and no published ports. The run refuses to start if anything already uses that name. Afterwards it removes only that project, without `--remove-orphans` (TASK-0099 #2, TASK-0100). Drills run one at a time (`flock`). Steps:
 1. Load the dump.
 2. Replay every object version in order. Each version's SHA-256 and size must match the manifest. Each restored version gets a 1-day GOVERNANCE lock.
 3. Point `evidence_blobs.object_version_id` at the new version IDs, because a restore creates new ones.
@@ -151,7 +151,7 @@ Ubuntu Server LTS VM(s) with Docker Compose. Nginx terminates TLS (certificates 
 
 Each run appends one line (time, backup, PASS/FAIL, failed step, seconds, commit) to `backups/restore-drills.log`.
 
-**Disaster recovery** uses the same restore with the original locks. Run it into an empty project with `docker compose -p <project> -f compose.yaml -f docker/backup/compose.drill.yaml run --rm -e RESTORE_CONFIRM=<project> restore <backup> --disaster-recovery`, then apply the same checks. Get explicit authorization first. The restore refuses a database that already has tables. Without `--disaster-recovery`, it refuses any project except `cais-drill`.
+**Disaster recovery** uses the same restore with the original locks. Run it into an empty project with `docker compose -p <project> -f compose.yaml -f docker/backup/compose.drill.yaml run --rm -e RESTORE_CONFIRM=<project> restore <backup> --disaster-recovery`, then apply the same checks. Get explicit authorization first. The restore refuses a database that already has tables. Without `--disaster-recovery`, it refuses any project not named `cais-drill-<run>`.
 
 ## 5. Monitoring and alerting
 

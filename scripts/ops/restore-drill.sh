@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# Restore drill (P1-51, PO decisions O46-O49; docs/10 §4). Restores a backup into the separate cais-drill Compose
-# project, checks it, appends the result to backups/restore-drills.log and removes the drill project again.
+# Restore drill (P1-51, PO decisions O46-O49; docs/10 §4). Restores a backup into a separate Compose project of its
+# own, cais-drill-<UTC time>-<pid>, checks it, appends the result to backups/restore-drills.log and removes that project.
 #   bash scripts/ops/restore-drill.sh [<backup name>] [--keep]
-# Without a name it drills the newest complete backup. --keep leaves the drill project running for inspection
-# (remove it later with: docker compose -p cais-drill -f compose.yaml -f docker/backup/compose.drill.yaml down -v).
+# Without a name it drills the newest complete backup. --keep leaves the drill project running for inspection; the
+# script prints the command that removes it.
 # Checks: dump and every object version restored (SHA-256 against the manifest); evidence pointed at the restored
 # versions; the restored manifest's lock mode, retain-until and legal hold for every version match the source store
 # (retention may only have grown since); account grants identical to the source; no pending migration; the app
 # answers /up; feature flags valid; an evidence hash sample re-hashed from the restored store; the audit trail
 # verified against the restored signed manifests.
-# Only the cais-drill project's containers and volumes are ever created or removed.
+# Only this run's project is ever created or removed: its name is new for every run, and the script refuses to start
+# if anything already carries it (TASK-0099 #2, TASK-0100).
 set -euo pipefail
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
 
-PROJECT=cais-drill
+PROJECT=cais-drill-$(date -u +%Y%m%d%H%M%S)-$$
 [ "$PROJECT" != "$(docker compose config --format json | jq -r .name)" ] || { echo "The drill project must not be the development project." >&2; exit 1; }
 drill() { docker compose -p "$PROJECT" -f compose.yaml -f docker/backup/compose.drill.yaml "$@"; }
 source_dc() { docker compose "$@"; }
@@ -33,11 +34,9 @@ fi
 exec 9> backups/.restore-drill.lock
 flock -n 9 || { echo "Another restore drill is running." >&2; exit 1; }
 
-# Remove the project only if every volume under its name carries the drill label (compose.drill.yaml), so a
-# different project that is also called cais-drill is never deleted (TASK-0099 #2).
-foreign=$(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | while read -r v; do
-  [ "$(docker volume inspect -f '{{index .Labels "cais.restore-drill"}}' "$v")" = 1 ] || echo "$v"; done)
-[ -z "$foreign" ] || { echo "Volumes under the project name $PROJECT were not made by this drill; nothing removed: $foreign" >&2; exit 1; }
+label="label=com.docker.compose.project=$PROJECT"
+[ -z "$(docker ps -aq --filter "$label")$(docker volume ls -q --filter "$label")$(docker network ls -q --filter "$label")" ] \
+  || { echo "Something already uses the project name $PROJECT; nothing removed." >&2; exit 1; }
 
 started=$(date -u +%s) step="start" result=FAIL
 log_result() {
@@ -46,14 +45,14 @@ log_result() {
   mkdir -p backups
   printf '%s\tbackup=%s\tresult=%s\tfailed_step=%s\tseconds=%s\tcommit=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$result" \
     "$([ "$result" = PASS ] && echo - || echo "$step")" "$(( $(date -u +%s) - started ))" "$(git rev-parse --short HEAD)" >> backups/restore-drills.log
-  if [ $keep -eq 0 ]; then drill down -v --remove-orphans >/dev/null 2>&1 || true; fi
-  echo; echo "Restore drill $result (backup $name); logged in backups/restore-drills.log"
+  if [ $keep -eq 0 ]; then drill down -v >/dev/null 2>&1 || true
+  else echo "Kept. Remove with: docker compose -p $PROJECT -f compose.yaml -f docker/backup/compose.drill.yaml down -v"; fi
+  echo; echo "Restore drill $result (backup $name, project $PROJECT); logged in backups/restore-drills.log"
 }
 trap log_result EXIT
 step() { step=$*; echo; echo "=== $*"; }
 
-step "Fresh drill project"
-drill down -v --remove-orphans >/dev/null 2>&1 || true
+step "Fresh drill project ($PROJECT)"
 drill up -d --wait mysql seaweedfs valkey mailpit
 drill run --rm seaweedfs-init
 

@@ -8,6 +8,18 @@ ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
 . scripts/ci/lib.sh
 mask_secrets .env .secrets/*.env
+mkdir -p backups
+
+# In GitHub Actions, a failure becomes a public annotation with the redacted tail of the output (as in backend.sh).
+LOG=$(mktemp)
+exec > >(tee "$LOG") 2>&1
+annotate() {
+  local rc=$?
+  if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::error title=restore-drill::failed (exit $rc)%0A$(annotation_body "$LOG" .env .secrets/*.env)"
+  fi
+}
+trap annotate EXIT
 
 fail=0
 pass() { echo "ok: $*"; }
@@ -48,7 +60,7 @@ grep -q '^object_versions=[1-9]' "backups/$name/backup.info" && pass "backup $na
 if grep -rqa 'Synthetic restore-drill evidence' "backups/$name"; then bad "plaintext evidence in the backup"; else pass "backup encrypted"; fi
 
 echo "=== Drill on the intact backup"
-if out=$(bash scripts/ops/restore-drill.sh "$name" 2>&1); then pass "drill passed"; else bad "drill failed"; fi
+if out=$(bash scripts/ops/restore-drill.sh "$name" 2>&1); then pass "drill passed"; else bad "drill failed: $(last_log)"; echo "$out" | tail -25; fi
 echo "$out" | grep -E '^=== |Blobs verified|Lock metadata|Restore complete|matches its signed|Restore drill' || true
 grep -q 'Blobs verified: 3;' <<<"$out" && pass "3 evidence blobs re-hashed through the restored version IDs" || bad "evidence sample"
 grep -q '^delete_markers=1$' "backups/$name/backup.info" && grep -q 'version history matches the manifest' <<<"$out" \
@@ -95,12 +107,18 @@ probe 's3 delete-object --bucket audit-anchor --key drill/probe' && bad "backup 
 probe 's3 list-objects-v2 --bucket exports' && bad "backup key lists exports" || pass "backup key cannot list exports"
 probe 's3 list-objects-v2 --bucket evidence-quarantine' && bad "backup key lists the quarantine" || pass "backup key cannot list the quarantine"
 
-echo "=== A different project called cais-drill is never removed (TASK-0099 #2)"
-docker volume create --label com.docker.compose.project=cais-drill cais-drill_not-ours >/dev/null
-if bash scripts/ops/restore-drill.sh "$name" >/dev/null 2>&1; then bad "drill ran over a foreign cais-drill volume"
-elif docker volume inspect cais-drill_not-ours >/dev/null 2>&1; then pass "drill refused and left the foreign volume"
-else bad "the foreign volume was removed"; fi
-docker volume rm cais-drill_not-ours >/dev/null
+echo "=== Another project's resources are never removed (TASK-0099 #2, TASK-0100)"
+# A project named like an older drill, with a container, a network and a volume: a full drill run must leave it.
+docker volume create --label com.docker.compose.project=cais-drill not-ours-volume >/dev/null
+docker network create --label com.docker.compose.project=cais-drill not-ours-network >/dev/null
+docker create --name not-ours-container --label com.docker.compose.project=cais-drill competitive-ais/backup:dev true >/dev/null
+bash scripts/ops/restore-drill.sh "$name" >/dev/null 2>&1 || bad "drill failed beside another project: $(last_log)"
+docker volume inspect not-ours-volume >/dev/null 2>&1 && docker network inspect not-ours-network >/dev/null 2>&1 \
+  && docker inspect not-ours-container >/dev/null 2>&1 && pass "the other project's container, network and volume are untouched" \
+  || bad "the drill removed another project's resources"
+docker rm not-ours-container >/dev/null; docker network rm not-ours-network >/dev/null; docker volume rm not-ours-volume >/dev/null
+[ -z "$(docker ps -aq --filter 'label=com.docker.compose.project' --filter 'name=cais-drill-')" ] \
+  && pass "no drill project left behind" || bad "a drill project was left behind"
 
 echo "=== Lock metadata that differs from the source must fail"
 locks="backups/$name/drill/locks.tsv"
@@ -112,7 +130,7 @@ mv "$locks.orig" "$locks"
 echo "=== The restore refuses the development project"
 if out=$(docker compose -f compose.yaml -f docker/backup/compose.drill.yaml run --rm -T --no-deps restore "$name" 2>&1); then
   bad "restore ran against the development project"
-elif grep -q 'restores only into the cais-drill project' <<<"$out"; then pass "restore refused outside cais-drill"
+elif grep -q 'restores only into a cais-drill-<run> project' <<<"$out"; then pass "restore refused outside a drill project"
 else bad "restore failed for another reason: $out"; fi
 
 rm -rf backups/20000101T*

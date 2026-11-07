@@ -1,7 +1,7 @@
 #!/bin/bash
 # Restore a backup (P1-51, PO decisions O46-O49). Runs in the `restore` service of docker/backup/compose.drill.yaml:
 #   restore.sh <backup directory name> [--disaster-recovery]
-# Refuses unless the target database is empty, and unless the Compose project is cais-drill, or --disaster-recovery
+# Refuses unless the target database is empty, and unless the Compose project is cais-drill-<run>, or --disaster-recovery
 # is given with RESTORE_CONFIRM set to the project's name.
 #  1. Loads the MySQL dump into the (empty) main database.
 #  2. Replays every object version in its original order and checks each one's SHA-256 against the manifest. A
@@ -20,8 +20,9 @@ dir=/backups/$name
 : "${RESTORE_PROJECT:?}" "${DB_DATABASE:?}" "${MYSQL_ROOT_PASSWORD:?}" "${BACKUP_AGE_IDENTITY:?}"
 : "${S3_ADMIN_ACCESS_KEY:?}" "${S3_ADMIN_SECRET_KEY:?}"
 EVIDENCE_BUCKET=${EVIDENCE_BUCKET:-evidence} AUDIT_ANCHOR_BUCKET=${AUDIT_ANCHOR_BUCKET:-audit-anchor}
+[ "$EVIDENCE_BUCKET" != "$AUDIT_ANCHOR_BUCKET" ] || { echo "restore.sh: EVIDENCE_BUCKET and AUDIT_ANCHOR_BUCKET must differ" >&2; exit 1; }
 case $mode in
-  drill) [ "$RESTORE_PROJECT" = cais-drill ] || { echo "restore.sh: a drill restores only into the cais-drill project" >&2; exit 1; } ;;
+  drill) [[ $RESTORE_PROJECT =~ ^cais-drill-[0-9]{14}-[0-9]+$ ]] || { echo "restore.sh: a drill restores only into a cais-drill-<run> project" >&2; exit 1; } ;;
   --disaster-recovery) [ "${RESTORE_CONFIRM:-}" = "$RESTORE_PROJECT" ] \
     || { echo "restore.sh: set RESTORE_CONFIRM=$RESTORE_PROJECT to restore into that project" >&2; exit 1; } ;;
   *) echo "restore.sh: unknown option $mode" >&2; exit 2 ;;
