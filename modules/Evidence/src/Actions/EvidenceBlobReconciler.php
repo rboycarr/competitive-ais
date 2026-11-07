@@ -14,6 +14,10 @@ use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Storage\LockedObjects;
 
 /**
+ * Locks: only the blob's row; its assets are read without locks, so it never waits for an asset while holding the blob
+ * and cannot deadlock with the asset-then-blob order of holds, scans, withdrawals and the re-hash (TASK-0094 #1). Any
+ * asset lock added here must be taken before the blob's.
+ *
  * Keeps a blob's records and its stored version in step with the assets that reference it (P1-38, ADR-0007, TASK-0074;
  * PO decision O38: the safeguards now, the deleting job with withdrawal or retention expiry).
  * - Retention: a blob is kept until the latest `retention_until` of its assets, never shorter. The stored version's

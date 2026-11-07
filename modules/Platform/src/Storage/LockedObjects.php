@@ -128,7 +128,8 @@ final class LockedObjects
     /**
      * The bytes of one stored version, as a stream the caller closes (P1-48: the integrity re-hash), or null when the
      * store has no such object or version. Any other error is raised, so an unreachable store is never taken for a
-     * missing object. Any other disk reads the key, in tests only.
+     * missing object. Any other disk reads the key, in tests only: the fakes keep no versions (TASK-0094 #3), so
+     * version fidelity is tested against the S3 adapter with the SDK's mock handler.
      *
      * @return resource|null
      */

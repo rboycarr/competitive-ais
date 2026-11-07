@@ -158,6 +158,26 @@ class EvidenceScanTest extends TestCase
         $this->assertSame([$first->id, $second->id], $seen($colleague));
     }
 
+    /** P1-48 (TASK-0094 #2): bytes whose stored copy a re-hash found bad are never made available on that copy. */
+    public function test_identical_bytes_are_rejected_when_their_stored_copy_failed_its_integrity_check(): void
+    {
+        $first = $this->quarantined('one.pdf', self::PDF);
+        $this->clamReturns(ClamAvClient::CLEAN);
+        app(EvidenceScanService::class)->scan($first->id);
+        DB::table('evidence_blobs')->update(['integrity_status' => 'mismatch']);
+
+        $second = $this->quarantined('two.pdf', self::PDF);
+        app(EvidenceScanService::class)->scan($second->id);
+
+        $second = $second->fresh();
+        $this->assertNotNull($second);
+        $this->assertSame(['rejected', 'clean', null, null], [$second->status, $second->scan_status, $second->quarantine_key, $second->evidence_blob_id]);
+        $this->assertSame(['scanned', 'rejected'], EvidenceCustodyEvent::query()->where('evidence_asset_id', $second->id)->orderBy('id')->pluck('event')->all());
+        $audit = DB::table('audit_events')->where('action', 'evidence.rejected')->sole();
+        $this->assertSame([$second->ulid, 'stored_copy_failed'], [$audit->subject_ulid, json_decode((string) $audit->context, true)['reason']]);
+        $this->assertSame(1, EvidenceBlob::query()->count());
+    }
+
     public function test_a_type_mismatch_at_scan_time_is_rejected_outright(): void
     {
         // The upload service would have refused this at the door; this is defence in depth if the stored bytes ever

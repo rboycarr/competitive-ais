@@ -72,6 +72,15 @@ interface EvidenceLinking
     public function availableSeen(Authenticatable $viewer, array $ids): array;
 
     /**
+     * The ULIDs of the assets with these IDs, keyed by ID, whoever can see them (P1-48: a system consumer checks an
+     * outbox event's payload against its aggregate); nothing else about them.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, string>
+     */
+    public function ulids(array $ids): array;
+
+    /**
      * The assets with these IDs that the viewer can see, keyed by ID, in any status the viewer may see.
      *
      * @param  list<int>  $ids

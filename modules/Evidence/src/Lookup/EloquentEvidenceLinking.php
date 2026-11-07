@@ -108,6 +108,11 @@ class EloquentEvidenceLinking implements EvidenceLinking
             array_filter($available, fn (EvidenceAsset $a): bool => in_array((int) $a->evidence_blob_id, $ok, true))));
     }
 
+    public function ulids(array $ids): array
+    {
+        return $ids === [] ? [] : array_map('strval', EvidenceAsset::query()->whereIn('id', $ids)->pluck('ulid', 'id')->all());
+    }
+
     public function inherit(Authenticatable $actor, int $assetId, string $itemUlid, array $competitorIds, array $marketIds): bool
     {
         $this->inTransaction('Inherit scopes inside the transaction that links the evidence.');

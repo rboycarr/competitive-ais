@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use LogicException;
 use Modules\Evidence\Actions\EvidenceIntegrityService;
 use Modules\Evidence\Actions\EvidenceScanService;
 use Modules\Evidence\Actions\EvidenceWithdrawalService;
@@ -24,6 +25,7 @@ use Modules\Intelligence\Outbox\FlagCitingItems;
 use Modules\Platform\Classification;
 use Modules\Platform\Outbox\OutboxMessage;
 use Modules\Platform\Outbox\OutboxRelay;
+use Spatie\Permission\Models\Role;
 use Tests\Support\CreatesUsers;
 use Tests\TestCase;
 
@@ -180,6 +182,58 @@ class IntelligenceRereviewTest extends TestCase
         $this->assertSame(1, DB::table('audit_events')->where('action', 'intelligence.rereview_flagged')->count());
     }
 
+    public function test_contradicting_and_context_citations_flag_too_and_the_approver_may_clear(): void
+    {
+        $deputy = $this->enableTwoFactor($this->createUser('deputy@example.test', 'ci_director', clearance: Classification::Confidential));
+        $this->grantAll($deputy);
+        $shared = $this->available();
+        $flagged = [];
+        foreach (['contradicts', 'context'] as $relation) {
+            $item = $this->draft();
+            $claim = $this->claims()->add($this->analyst, $item, ['statement' => 'Acme sells it', 'claim_type' => 'observed_fact', 'source_reliability' => 'B', 'info_credibility' => 2, 'version' => $item->version]);
+            $this->claims()->link($this->analyst, $item->refresh(), $claim->ulid, ['evidence' => $this->available()->ulid, 'relation' => 'supports', 'version' => $item->version]);
+            $this->claims()->link($this->analyst, $item->refresh(), $claim->ulid, ['evidence' => $shared->ulid, 'relation' => $relation, 'version' => $item->version]);
+            $this->workflow()->submit($this->analyst, $item->refresh(), ['version' => $item->version]);
+            $flagged[] = $this->approve($item->refresh(), $deputy);
+        }
+
+        app(EvidenceWithdrawalService::class)->withdraw($this->director, $shared, 'Not reliable');
+        $this->relay();
+        $this->assertEqualsCanonicalizing(array_map(fn (IntelligenceItem $i): int => $i->id, $flagged), RereviewFlag::query()->pluck('intelligence_item_id')->all());
+
+        // Its approving reviewer (a director here) may clear it: the support it relied on is untouched.
+        $item = $flagged[0]->refresh();
+        $this->workflow()->clearRereview($deputy, $item, ['rationale' => 'The withdrawn copy only contradicted it', 'version' => $item->version]);
+        $this->assertNull($item->refresh()->rereview_since);
+    }
+
+    public function test_confidential_items_are_cleared_by_the_director_role(): void
+    {
+        $publisher = $this->enableTwoFactor($this->createUser('publisher@example.test', 'ci_analyst', clearance: Classification::Confidential));
+        $this->grantAll($publisher);
+        Role::create(['name' => 'publisher', 'guard_name' => 'web'])->givePermissionTo(['intelligence.view', 'intelligence.publish']);
+        $publisher->assignRole('publisher');
+        $item = $this->approved([$this->available(), $this->available()], classification: 'confidential');
+        DB::table('intelligence_items')->where('id', $item->id)->update(['rereview_since' => now()]);
+
+        $message = 'Confidential, restricted or high-impact intelligence is cleared by a director.';
+        $this->actingAs($publisher)->get("/intelligence/{$item->ulid}")->assertInertia(fn ($page) => $page->where('rereview.clearProblems', [$message]));
+        $this->actingAs($publisher)->post("/intelligence/{$item->ulid}/rereview/clear", ['rationale' => 'Fine', 'version' => $item->version])->assertForbidden();
+        $this->workflow()->clearRereview($this->director, $item->refresh(), ['rationale' => 'Fine', 'version' => $item->version]);
+        $this->assertNull($item->refresh()->rereview_since);
+    }
+
+    public function test_an_event_naming_another_asset_than_its_aggregate_is_refused(): void
+    {
+        $evidence = $this->available();
+        $this->published([$evidence]);
+        $other = $this->available();
+
+        $this->assertThrows(fn () => app(FlagCitingItems::class)->handle(new OutboxMessage((string) Str::ulid(), 'evidence.withdrawn', 'evidence_asset', $evidence->id, ['evidence_ulid' => $other->ulid], 1)),
+            LogicException::class, 'names another asset');
+        $this->assertSame(0, RereviewFlag::query()->count());
+    }
+
     public function test_clearing_is_404_on_a_hidden_item_and_never_by_its_author_or_owner(): void
     {
         $evidence = $this->available();
@@ -244,11 +298,12 @@ class IntelligenceRereviewTest extends TestCase
         return $this->approve($item->refresh());
     }
 
-    private function approve(IntelligenceItem $item): IntelligenceItem
+    private function approve(IntelligenceItem $item, ?User $reviewer = null): IntelligenceItem
     {
-        $this->workflow()->assign($this->director, $item, ['reviewer' => $this->reviewer->ulid]);
-        $this->workflow()->startReview($this->reviewer, $item);
-        $this->workflow()->decide($this->reviewer, $item, ['decision' => 'approve', 'version' => $item->version]);
+        $reviewer ??= $this->reviewer;
+        $this->workflow()->assign($this->director, $item, ['reviewer' => $reviewer->ulid]);
+        $this->workflow()->startReview($reviewer, $item);
+        $this->workflow()->decide($reviewer, $item, ['decision' => 'approve', 'version' => $item->version]);
 
         return $item->refresh();
     }

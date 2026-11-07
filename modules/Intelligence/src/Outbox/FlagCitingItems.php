@@ -5,6 +5,7 @@ namespace Modules\Intelligence\Outbox;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 use LogicException;
+use Modules\Evidence\Contracts\EvidenceLinking;
 use Modules\Evidence\Events\EvidenceEvents;
 use Modules\Intelligence\Models\IntelligenceItem;
 use Modules\Intelligence\Models\RereviewFlag;
@@ -32,13 +33,20 @@ class FlagCitingItems implements OutboxHandler
         EvidenceEvents::INTEGRITY_FAILED => 'evidence_integrity_failed',
     ];
 
-    public function __construct(private readonly AuditLogger $audit) {}
+    public function __construct(
+        private readonly AuditLogger $audit,
+        private readonly EvidenceLinking $evidence,
+    ) {}
 
     public function handle(OutboxMessage $message): void
     {
         $cause = self::CAUSES[$message->eventType] ?? throw new LogicException("FlagCitingItems does not handle [{$message->eventType}].");
         $assetId = $message->aggregateId;
         $evidenceUlid = (string) ($message->payload['evidence_ulid'] ?? '');
+        // The asset acted on and the one audited must be the same (TASK-0094 #4): a mismatched event fails its delivery.
+        if (($this->evidence->ulids([$assetId])[$assetId] ?? null) !== $evidenceUlid) {
+            throw new LogicException("Outbox event [{$message->ulid}] names another asset than its aggregate.");
+        }
 
         $ids = IntelligenceItem::query()
             ->whereIn('status', IntelligenceItem::FLAGGABLE)
