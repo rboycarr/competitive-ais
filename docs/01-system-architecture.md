@@ -15,7 +15,8 @@ Browser (Vue 3 + Inertia; PWA in Phase 5)
 Nginx ──► Laravel (PHP-FPM) — modular monolith
             ├─ HTTP: Inertia pages, /api/v1 (Sanctum tokens), signed callbacks
             ├─ Horizon workers — queues: default, evidence, index, notify, collect[P3], ai[P4], voice[P5]
-            ├─ Scheduler — outbox relay, audit checkpoints, retention, health checks
+            ├─ Scheduler — outbox relay, retention, health checks
+            ├─ Auditor (P1-50) — signed audit checkpoints and verification; the only holder of the signing key
             └─ Reverb — authorized realtime events (alerts, job progress)
    ├─ MySQL 8.4 LTS ........ canonical records (source of truth)
    ├─ Redis ................ cache, queues, rate limiters (sessions: MySQL, P1-17)

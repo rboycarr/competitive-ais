@@ -269,6 +269,7 @@ return [
         ],
 
         'append_only' => [
+            'audit_anchors', // P1-50: one row per exported manifest
             'audit_events',
             'audit_event_network',
             'audit_checkpoints',

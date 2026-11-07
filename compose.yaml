@@ -2,7 +2,8 @@
 # First run: bash scripts/dev/setup.sh   ·   Daily: docker compose up -d --wait
 # Every published port is bound to 127.0.0.1 only. Secrets come from gitignored env files, each given only to
 # the services that need it (TASK-0003 #1, #7): .env (Laravel runtime) and, in .secrets/, migrator.env
-# (migrator service, MySQL init), services.env (MySQL), s3.env (SeaweedFS and its init). Every container that
+# (migrator service, MySQL init), services.env (MySQL), s3.env (SeaweedFS and its init), anchor.env (SeaweedFS and
+# the auditor) and signing.env (the auditor only; P1-50, PO decision O43). Every container that
 # bind-mounts the repository gets an empty read-only tmpfs over .secrets, so those files are not readable
 # inside it (TASK-0004 N2); Compose reads them on the host.
 name: competitive-ais
@@ -68,6 +69,27 @@ services:
     healthcheck:
       # Proves the app boots with its config; the process itself is PID 1, so the container stops if it dies.
       test: ["CMD", "php", "artisan", "schedule:list"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  # Signed audit anchors (P1-50, ADR-0006, PO decision O43): the only service with the signing seed and the
+  # audit-anchor key. Closes, signs and exports a checkpoint every five minutes, verifies hourly (audit:work).
+  # Locally the manifests are locked in governance mode for a day (O44: compliance for 7 years in production).
+  #   docker compose exec auditor php artisan audit:verify
+  auditor:
+    <<: *app
+    env_file: [.secrets/anchor.env, .secrets/signing.env]
+    environment:
+      DB_GRANT_DATABASES: "${DB_DATABASE} ${DB_TEST_DATABASE:-cais_test}"
+      AUDIT_ANCHOR_LOCK_MODE: GOVERNANCE
+      AUDIT_ANCHOR_RETENTION_DAYS: "1"
+    networks: [data]
+    command: ["php", "artisan", "audit:work"]
+    healthcheck:
+      # Proves the app boots with its config; the process itself is PID 1, so the container stops if it dies.
+      test: ["CMD", "php", "artisan", "list", "audit", "--raw"]
       interval: 60s
       timeout: 15s
       retries: 3
@@ -169,7 +191,7 @@ services:
     image: chrislusf/seaweedfs:4.51
     entrypoint: ["/bin/sh", "/etc/seaweedfs/start.sh"]
     # Only the S3 keys: the server must hold every identity's secret to verify request signatures.
-    env_file: [.secrets/s3.env]
+    env_file: [.secrets/s3.env, .secrets/anchor.env]
     environment:
       S3_APP_ACCESS_KEY: ${AWS_ACCESS_KEY_ID}
       S3_APP_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}

@@ -19,7 +19,10 @@
     {
       "name": "audit-anchor",
       "credentials": [{ "accessKey": "__S3_ANCHOR_ACCESS_KEY__", "secretKey": "__S3_ANCHOR_SECRET_KEY__" }],
-      "actions": ["Read:audit-anchor", "Write:audit-anchor", "List:audit-anchor"]
+      "actions": [
+        "Read:audit-anchor", "Write:audit-anchor", "List:audit-anchor",
+        "GetObjectRetention:audit-anchor", "PutObjectRetention:audit-anchor"
+      ]
     }
   ]
 }

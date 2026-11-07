@@ -5,6 +5,8 @@
 !.env.services.example
 !.env.migrator.example
 !.env.s3.example
+!.env.anchor.example
+!.env.signing.example
 /.secrets/
 *.pem
 *.key

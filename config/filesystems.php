@@ -92,6 +92,20 @@ return [
             'report' => false,
         ],
 
+        // Signed audit manifests (P1-50, ADR-0006): the audit-anchor key, which only the auditor service holds
+        // (.secrets/anchor.env, PO decision O43); elsewhere the key is empty and every request is refused.
+        'audit-anchor' => [
+            'driver' => 's3-private',
+            'key' => env('S3_ANCHOR_ACCESS_KEY'),
+            'secret' => env('S3_ANCHOR_SECRET_KEY'),
+            'region' => env('AWS_DEFAULT_REGION'),
+            'bucket' => env('AUDIT_ANCHOR_BUCKET', 'audit-anchor'),
+            'endpoint' => env('AWS_ENDPOINT'),
+            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'throw' => true,
+            'report' => false,
+        ],
+
     ],
 
     /*

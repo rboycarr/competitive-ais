@@ -16,7 +16,7 @@ use Modules\Platform\Database\UniqueViolation;
  * late_commit. Idempotent: with nothing new to close it does nothing, and a concurrent run that closes the same
  * range first wins through the unique keys.
  *
- * Signed manifests exported to the audit-anchor bucket follow in P1-50.
+ * Closes revision 1 of a range; AuditAnchor signs and exports it, and adds supplementary revisions (P1-50).
  */
 class AuditCheckpointer
 {
@@ -62,8 +62,8 @@ class AuditCheckpointer
             ]);
         } catch (UniqueConstraintViolationException $e) {
             // A concurrent run closed this range first (either key); anything else surfaces.
-            if (UniqueViolation::on($e, 'audit_checkpoints', 'audit_checkpoints_generation_from_audit_id_unique')
-                || UniqueViolation::on($e, 'audit_checkpoints', 'audit_checkpoints_to_audit_id_unique')) {
+            if (UniqueViolation::on($e, 'audit_checkpoints', 'audit_checkpoints_generation_from_audit_id_revision_unique')
+                || UniqueViolation::on($e, 'audit_checkpoints', 'audit_checkpoints_to_audit_id_revision_unique')) {
                 return null;
             }
 
