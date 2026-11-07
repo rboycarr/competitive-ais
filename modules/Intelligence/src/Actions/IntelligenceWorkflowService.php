@@ -7,6 +7,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Evidence\Contracts\EvidenceLinking;
@@ -14,6 +15,7 @@ use Modules\Identity\Contracts\UserDirectory;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Intelligence\Models\RereviewFlag;
 use Modules\Intelligence\Models\Retraction;
 use Modules\Intelligence\Models\VerificationReview;
 use Modules\Intelligence\Support\IntelligenceContent;
@@ -49,6 +51,12 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  *   published), both rows locked in ID order.
  * - retract (P1-44): published to retracted, by intelligence.retract, with a reason, optionally naming another
  *   published item the actor can see as the replacement (both rows locked in ID order); an append-only retraction row.
+ * - flags for re-review (P1-48; PO decision 2026-11-07): an approved or published item citing evidence that was
+ *   withdrawn or failed an integrity check is flagged by the system (FlagCitingItems) and keeps its status; it cannot
+ *   be published while flagged. clearRereview: by intelligence.publish (the Director role for confidential, restricted
+ *   or high-impact items), never the author or owner, from the version read, with a reason, and only if every claim is
+ *   still supported by available evidence the director can see (otherwise: retract, or draft a replacement); a
+ *   `clear_rereview` review row. Nothing is retracted automatically.
  */
 class IntelligenceWorkflowService
 {
@@ -226,6 +234,9 @@ class IntelligenceWorkflowService
             if (self::needsDirector($locked) && ! $this->users->lockedHoldsRole($actorId, self::DIRECTOR_ROLE)) {
                 throw new AuthorizationException('Confidential, restricted or high-impact intelligence is published by a director.');
             }
+            if ($locked->rereview_since !== null) {
+                throw ValidationException::withMessages(['item' => 'Evidence it cites was withdrawn or failed an integrity check. A director must clear the re-review first.']);
+            }
             $problems = $this->problems($locked, lock: true);
             if ($problems !== []) {
                 throw ValidationException::withMessages(['claims' => $problems]);
@@ -296,6 +307,62 @@ class IntelligenceWorkflowService
         });
     }
 
+    /** @param  array<string, mixed>  $data  rationale (required), version */
+    public function clearRereview(Authenticatable $actor, IntelligenceItem $item, array $data): void
+    {
+        $item->ensureSeenBy($actor, $this->gate, $this->access);
+        if (! $this->gate->forUser($actor)->allows('intelligence.publish')) {
+            throw new AuthorizationException('Only a director clears a re-review.');
+        }
+        $rationale = self::rationale($data['rationale'] ?? null)
+            ?? throw ValidationException::withMessages(['rationale' => 'Give the reason the item still stands.']);
+
+        $this->db->transaction(function () use ($actor, $item, $data, $rationale): void {
+            $locked = IntelligenceItem::query()->whereKey($item->id)->lockForUpdate()->firstOrFail();
+            $locked->ensureSeenBy($actor, $this->gate, $this->access);
+            $actorId = (int) $actor->getAuthIdentifier();
+            if ($locked->rereview_since === null || ! in_array($locked->status, IntelligenceItem::FLAGGABLE, true)) {
+                throw ValidationException::withMessages(['item' => 'This item is not flagged for re-review.']);
+            }
+            $version = $data['version'] ?? null;
+            if (! is_numeric($version) || (int) $version !== $locked->version) {
+                throw ValidationException::withMessages(['version' => 'This item changed since you opened it. Reload it and check it again.']);
+            }
+            if (in_array($actorId, [$locked->author_id, $locked->owner_id], true)) {
+                throw new AuthorizationException('The author or owner of an item cannot clear its re-review.');
+            }
+            if (self::needsDirector($locked) && ! $this->users->lockedHoldsRole($actorId, self::DIRECTOR_ROLE)) {
+                throw new AuthorizationException('Confidential, restricted or high-impact intelligence is cleared by a director.');
+            }
+            // It must still stand on evidence the director can check: otherwise retract it or draft a replacement.
+            $problems = $this->problems($locked, lock: true, reviewer: $actor);
+            if ($problems !== []) {
+                throw ValidationException::withMessages(['claims' => $problems]);
+            }
+
+            $flags = $this->openFlags($locked)->count();
+            $locked->forceFill(['rereview_since' => null])->save();
+            $review = $this->record($actor, $locked, 'clear_rereview', $rationale);
+            $this->audit->record('intelligence.rereview_cleared', $locked, ['review_ulid' => $review->ulid, 'flags' => $flags, 'version' => $locked->version], Actor::user($actorId));
+            $item->setRawAttributes($locked->getAttributes(), true);
+        });
+    }
+
+    /**
+     * The flags raised since the item was last cleared (P1-48): none when it is not flagged.
+     *
+     * @return HasMany<RereviewFlag, IntelligenceItem>
+     */
+    public function openFlags(IntelligenceItem $item): HasMany
+    {
+        // Compared with its microseconds: a date object would be bound to the second, opening a flag cleared that second.
+        $since = $item->rereview_since?->format('Y-m-d H:i:s.u');
+
+        return $item->rereviewFlags()
+            ->when($since === null, fn ($q) => $q->whereRaw('1 = 0'), fn ($q) => $q->where('raised_at', '>=', $since))
+            ->orderBy('raised_at')->orderBy('id');
+    }
+
     /**
      * What keeps the actor from publishing the approved item, in words, for the page (publish() checks everything again
      * under the lock).
@@ -319,6 +386,9 @@ class IntelligenceWorkflowService
         }
         if ($item->supersedes_id !== null && IntelligenceItem::query()->whereKey($item->supersedes_id)->value('status') !== 'published') {
             $problems[] = 'The item it replaces is no longer published.';
+        }
+        if ($item->rereview_since !== null) {
+            $problems[] = 'Evidence it cites was withdrawn or failed an integrity check. A director must clear the re-review first.';
         }
 
         return array_merge($problems, $this->problems($item));

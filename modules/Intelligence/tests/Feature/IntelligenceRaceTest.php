@@ -53,6 +53,8 @@ class IntelligenceRaceTest extends TestCase
 
     private const RETRACTIONS = 'modules/Intelligence/database/migrations/2026_11_27_000100_create_retractions_table.php';
 
+    private const REREVIEW = 'modules/Intelligence/database/migrations/2026_11_28_000100_create_rereview_flags_table.php';
+
     private User $analyst;
 
     private User $director;
@@ -76,7 +78,7 @@ class IntelligenceRaceTest extends TestCase
         if (Schema::hasTable('intelligence_items')) {
             $migrator = DB::connection('migrator');
             $migrator->table('intelligence_items')->update(['supersedes_id' => null]); // RESTRICT on the replacement's link
-            foreach (['retractions', 'verification_reviews'] as $table) {
+            foreach (['rereview_flags', 'retractions', 'verification_reviews'] as $table) {
                 if (Schema::hasTable($table)) {
                     $migrator->table($table)->delete(); // RESTRICT: before the items
                 }
@@ -424,7 +426,23 @@ class IntelligenceRaceTest extends TestCase
     public function test_the_migrations_refuse_to_roll_back_while_intelligence_exists(): void
     {
         $tables = fn (): array => [Schema::hasTable('claim_evidence_links'), Schema::hasTable('intelligence_items')];
-        // P1-44: retractions first (they refer to items).
+        // P1-48: flags for re-review and their clearing first (they refer to items and evidence, and change the reviews' checks).
+        $flagged = $this->item($this->competitor('Globex'));
+        DB::table('intelligence_items')->where('id', $flagged->id)->update(['status' => 'approved', 'rereview_since' => now()]);
+        $assetId = (int) DB::table('evidence_assets')->where('ulid', $this->available())->value('id');
+        DB::table('rereview_flags')->insert(['ulid' => (string) Str::ulid(), 'intelligence_item_id' => $flagged->id, 'evidence_asset_id' => $assetId,
+            'cause' => 'evidence_withdrawn', 'item_version' => 1, 'raised_at' => now()]);
+        $this->assertThrows(fn () => Artisan::call('migrate:rollback', ['--path' => self::REREVIEW, '--force' => true]), RuntimeException::class, 'Re-review flags exist');
+        DB::connection('migrator')->table('rereview_flags')->delete();
+        DB::table('verification_reviews')->insert(['ulid' => (string) Str::ulid(), 'intelligence_item_id' => $flagged->id, 'item_version' => 1, 'reviewer_id' => $this->director->id,
+            'decision' => 'clear_rereview', 'rationale' => 'Synthetic', 'content_hash' => str_repeat('a', 64), 'decided_at' => now()]);
+        $this->assertThrows(fn () => Artisan::call('migrate:rollback', ['--path' => self::REREVIEW, '--force' => true]), RuntimeException::class, 'Re-review clearances exist');
+        DB::connection('migrator')->table('verification_reviews')->delete();
+        DB::connection('migrator')->table('intelligence_items')->where('id', $flagged->id)->delete();
+        $this->assertSame(0, Artisan::call('migrate:rollback', ['--path' => self::REREVIEW, '--force' => true]));
+        $this->assertSame([false, false], [Schema::hasTable('rereview_flags'), Schema::hasColumn('intelligence_items', 'rereview_since')]);
+
+        // P1-44: retractions next (they refer to items).
         $retracted = $this->item($this->competitor('Hooli'));
         DB::table('intelligence_items')->where('id', $retracted->id)->update(['status' => 'retracted']);
         DB::table('retractions')->insert(['intelligence_item_id' => $retracted->id, 'reason' => 'Synthetic', 'retracted_by' => $this->director->id, 'retracted_at' => now()]);
@@ -485,6 +503,8 @@ class IntelligenceRaceTest extends TestCase
         $this->assertNull($draft->refresh()->submitted_at);
         $this->assertSame(0, Artisan::call('migrate', ['--path' => self::RETRACTIONS, '--force' => true]));
         $this->assertTrue(Schema::hasTable('retractions'));
+        $this->assertSame(0, Artisan::call('migrate', ['--path' => self::REREVIEW, '--force' => true]));
+        $this->assertSame([true, true], [Schema::hasTable('rereview_flags'), Schema::hasColumn('intelligence_items', 'rereview_since')]);
     }
 
     private function reviewer(string $email): User

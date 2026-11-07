@@ -41,5 +41,7 @@ Route::middleware('auth')->group(function () {
         Route::post('/intelligence/{item}/publish', [IntelligenceItemController::class, 'publish'])->name('intelligence.publish');
         Route::post('/intelligence/{item}/retract', [IntelligenceItemController::class, 'retract'])->name('intelligence.retract');
         Route::post('/intelligence/{item}/replacement', [IntelligenceItemController::class, 'replacement'])->name('intelligence.replacement');
+        // P1-48: a director confirms a flagged item still stands (the service checks intelligence.publish).
+        Route::post('/intelligence/{item}/rereview/clear', [IntelligenceItemController::class, 'clearRereview'])->name('intelligence.rereview.clear');
     });
 });

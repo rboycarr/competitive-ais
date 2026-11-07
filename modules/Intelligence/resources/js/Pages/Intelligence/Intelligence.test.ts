@@ -321,3 +321,41 @@ describe('Intelligence/Provenance (P1-45)', () => {
         expect(wrapper.get('#audit-heading ~ p a').attributes('href')).toBe(`/admin/audit?subject=${item.ulid}`);
     });
 });
+
+describe('Intelligence re-review flags (P1-48)', () => {
+    const rereview = {
+        since: '2026-11-03T10:00:00Z',
+        flags: [
+            { cause: 'evidence_withdrawn', raisedAt: '2026-11-03T10:00:00Z', evidence: { ulid: '01JEVID0000000000000000001', title: '<b>Price list</b>' } },
+            { cause: 'evidence_integrity_failed', raisedAt: '2026-11-03T11:00:00Z', evidence: null },
+        ],
+        canClear: false, clearProblems: [] as string[],
+    };
+    const page = (overrides: Partial<typeof rereview> | null, status = 'published') => mount(Show, {
+        props: { ...showProps, item: { ...item, status }, canEdit: false, form: null, rereview: overrides === null ? null : { ...rereview, ...overrides } },
+    });
+
+    it('shows every reader the banner, naming only the evidence they can see, as text', () => {
+        const wrapper = page({});
+        const note = wrapper.get('[role="note"]');
+        expect(note.text()).toContain('Under re-review since');
+        expect(note.text()).toContain('Evidence withdrawn: <b>Price list</b>');
+        expect(note.find('b').exists()).toBe(false);
+        expect(note.get('a').attributes('href')).toBe('/evidence/01JEVID0000000000000000001');
+        expect(note.text()).toContain('Evidence failed an integrity check: evidence you cannot see');
+        expect(wrapper.find('#clear-rationale').exists()).toBe(false);
+        expect(page(null).find('[role="note"]').exists()).toBe(false);
+    });
+
+    it('lets a director clear it with a reason, or says why it cannot be cleared', async () => {
+        const blocked = page({ canClear: true, clearProblems: ['Claim 1 cites no available evidence that you can see and that supports it.'] });
+        expect(blocked.text()).toContain('It cannot be cleared: retract it or draft a replacement');
+        expect(blocked.find('#clear-rationale').exists()).toBe(false);
+
+        const ready = page({ canClear: true }, 'approved');
+        expect(ready.get('#clear-rationale').attributes('required')).toBeDefined();
+        await ready.get('#clear-rationale').setValue('Two other sources support it');
+        await ready.get('#clear-rationale').element.closest('form')?.dispatchEvent(new Event('submit'));
+        expect(post).toHaveBeenCalledWith(`/intelligence/${item.ulid}/rereview/clear`, expect.any(Object));
+    });
+});

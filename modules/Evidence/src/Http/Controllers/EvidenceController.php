@@ -14,6 +14,7 @@ use Inertia\Response;
 use Modules\Evidence\Actions\EvidenceDownloadService;
 use Modules\Evidence\Actions\EvidenceHoldService;
 use Modules\Evidence\Actions\EvidenceUploadService;
+use Modules\Evidence\Actions\EvidenceWithdrawalService;
 use Modules\Evidence\Http\Requests\UploadEvidenceRequest;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
@@ -94,6 +95,9 @@ class EvidenceController
         abort_unless($seen, 404);
         $events = $asset->custodyEvents()->orderBy('occurred_at')->orderBy('id')->get();
         $names = $this->users->summaries(array_values(array_unique(array_filter([$asset->uploaded_by, ...$events->pluck('actor_id')->all()]))));
+        $withdrawal = $events->firstWhere('event', 'withdrawn');
+        $integrity = $asset->blob?->integrity_status;
+        $holder = $this->gate->forUser($viewer)->allows('evidence.hold');
 
         return Inertia::render('Evidence/Show', [
             'asset' => [
@@ -115,20 +119,26 @@ class EvidenceController
                 'competitors' => array_values(array_map(fn (CompetitorSummary $c): string => $c->name, $this->competitors->summaries($viewer, $asset->competitorIds()))),
                 'markets' => array_values(array_map(fn (MarketSummary $m): string => "{$m->name} ({$m->code})", $this->markets->summaries($asset->marketIds()))),
                 'source' => $this->captureSource($viewer, $asset),
-                // P1-45: the stored content's SHA-256 (none while quarantined, or after withdrawal).
-                'sha256' => $asset->blob?->sha256,
+                // P1-45: the stored content's SHA-256 (none while quarantined); after a withdrawal (P1-48), the one
+                // recorded in the custody trail when the asset let go of its blob.
+                'sha256' => $asset->blob->sha256 ?? (is_string($withdrawal?->details['sha256'] ?? null) ? $withdrawal->details['sha256'] : null),
+                // P1-48: 'mismatch' once a re-hash found the stored bytes changed or missing.
+                'integrity' => $integrity,
+                'withdrawnAt' => $withdrawal?->occurred_at->toIso8601ZuluString(),
             ],
             // P1-45: the intelligence citing it, for viewers of intelligence: items they see are named, others counted.
             'citations' => $this->gate->forUser($viewer)->allows('intelligence.view') ? $this->citations->forEvidence($viewer, $asset->id) : null,
             // Offered only where it would succeed; EvidenceDownloadService and EvidenceHoldService check again.
-            'canDownload' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.download'),
-            'canHold' => $asset->status === 'available' && $this->gate->forUser($viewer)->allows('evidence.hold'),
+            'canDownload' => $asset->status === 'available' && $integrity === 'ok' && $this->gate->forUser($viewer)->allows('evidence.download'),
+            'canHold' => $asset->status === 'available' && $holder,
+            // P1-48: EvidenceWithdrawalService checks again.
+            'canWithdraw' => $asset->status === 'available' && ! $asset->legal_hold && $holder,
             'custody' => $events->map(fn (EvidenceCustodyEvent $e): array => [
                 'event' => $e->event,
                 'actor' => $e->actor_id === null ? null : ($names[$e->actor_id]->name ?? null),
                 'occurredAt' => $e->occurred_at->toIso8601ZuluString(),
-                // The reason a holder gave for a legal-hold change (P1-35, O35); shown as text.
-                'reason' => in_array($e->event, ['hold_set', 'hold_released'], true) && is_string($e->details['reason'] ?? null) ? $e->details['reason'] : null,
+                // The reason a holder gave for a legal-hold change (P1-35, O35) or a withdrawal (P1-48); shown as text.
+                'reason' => in_array($e->event, ['hold_set', 'hold_released', 'withdrawn'], true) && is_string($e->details['reason'] ?? null) ? $e->details['reason'] : null,
             ])->all(),
         ]);
     }
@@ -152,6 +162,14 @@ class EvidenceController
         $holds->change($this->viewer($request), $asset, (bool) $data['hold'], $data['reason']);
 
         return redirect()->route('evidence.show', $asset)->with('status', $data['hold'] ? 'Placed on legal hold.' : 'Legal hold released.');
+    }
+
+    /** P1-48: withdraws the evidence, with the reason (EvidenceWithdrawalService checks and validates). */
+    public function withdraw(Request $request, EvidenceAsset $asset, EvidenceWithdrawalService $withdrawals): RedirectResponse
+    {
+        $withdrawals->withdraw($this->viewer($request), $asset, $request->input('reason'));
+
+        return redirect()->route('evidence.show', $asset)->with('status', 'Evidence withdrawn. Intelligence citing it is flagged for re-review.');
     }
 
     public function store(UploadEvidenceRequest $request, EvidenceUploadService $uploads): RedirectResponse

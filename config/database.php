@@ -276,6 +276,7 @@ return [
             'evidence_asset_market',
             'evidence_custody_events',
             'outbox_receipts',
+            'rereview_flags', // P1-48: a flag is cleared by a review row, never changed or removed
             'retractions', // P1-44: a retraction is never changed or removed
             'source_policies',
             'source_status_changes', // P1-31b: suspensions, reinstatements, retirements

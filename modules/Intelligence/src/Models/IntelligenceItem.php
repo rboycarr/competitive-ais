@@ -40,6 +40,7 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * @property ?CarbonInterface $submitted_at when the current submission was made (P1-43: the queue's age)
  * @property ?CarbonInterface $verified_at when a reviewer approved it (P1-43)
  * @property ?CarbonInterface $released_at published here (P1-44)
+ * @property ?CarbonInterface $rereview_since set while it has open flags for re-review (P1-48)
  * @property int $version
  * @property ?int $supersedes_id the published item this one replaces once published (P1-44)
  * @property ?CarbonInterface $created_at
@@ -64,6 +65,9 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
 
     /** Not yet decided: a competitor they are about cannot be archived (docs/03 Registry). */
     public const OPEN = ['draft', 'submitted', 'in_review', 'changes_requested', 'approved'];
+
+    /** Flagged for re-review when evidence they cite is withdrawn or fails an integrity check (P1-48). */
+    public const FLAGGABLE = ['approved', 'published'];
 
     protected $guarded = ['*'];
 
@@ -197,6 +201,12 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
         return $this->hasOne(Retraction::class);
     }
 
+    /** @return HasMany<RereviewFlag, $this> */
+    public function rereviewFlags(): HasMany
+    {
+        return $this->hasMany(RereviewFlag::class);
+    }
+
     /** @return HasMany<VerificationReview, $this> */
     public function reviews(): HasMany
     {
@@ -222,6 +232,7 @@ class IntelligenceItem extends Model implements Classifiable, Scoped
             'submitted_at' => 'datetime',
             'verified_at' => 'datetime',
             'released_at' => 'datetime',
+            'rereview_since' => 'datetime',
         ];
     }
 }

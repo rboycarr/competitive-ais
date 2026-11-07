@@ -19,6 +19,7 @@ use Modules\Intelligence\Http\Requests\SaveItemRequest;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Intelligence\Models\RereviewFlag;
 use Modules\Intelligence\Models\VerificationReview;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Classification;
@@ -165,6 +166,7 @@ class IntelligenceItemController
             'submission' => $canSubmit ? ['problems' => $this->workflow->problems($item)] : null,
             'review' => $this->review($viewer, $item),
             'publication' => $this->publication($viewer, $item),
+            'rereview' => $this->rereview($viewer, $item),
             'relations' => ClaimEvidenceLink::RELATIONS,
             // P1-41: what the editor may cite; the search is a partial reload of this prop.
             'evidenceOptions' => $canEdit ? array_map(fn (EvidenceSummary $e): array => [
@@ -228,6 +230,14 @@ class IntelligenceItemController
         $this->workflow->retract($this->viewer($request), $item, $request->only(['reason', 'replacement']));
 
         return redirect()->route('intelligence.show', $item)->with('status', 'Retracted. It stays readable, marked as retracted.');
+    }
+
+    /** P1-48: a director confirms a flagged item still stands, with the reason. */
+    public function clearRereview(Request $request, IntelligenceItem $item): RedirectResponse
+    {
+        $this->workflow->clearRereview($this->viewer($request), $item, $request->only(['rationale', 'version']));
+
+        return redirect()->route('intelligence.show', $item)->with('status', 'Re-review cleared. The reason is in the review history.');
     }
 
     public function replacement(Request $request, IntelligenceItem $item, IntelligenceItemService $items): RedirectResponse
@@ -367,6 +377,42 @@ class IntelligenceItemController
                 ->where('status', 'published')->whereKeyNot($item->id)->orderByDesc('released_at')->limit(self::PAGE)->get(['id', 'ulid', 'title'])
                 ->map(fn (IntelligenceItem $i): array => ['ulid' => $i->ulid, 'title' => $i->title])->values()->all() : [],
             'canReplace' => $item->status === 'published' && $gate->allows('intelligence.create'),
+        ];
+    }
+
+    /**
+     * The item's open flags for re-review (P1-48), for anyone who sees it: why and since when; the evidence is named only
+     * to viewers who can see it (counted otherwise, docs/07 §3). Null when it is not flagged. A director who did not
+     * write or own it may clear the flags, seeing what still keeps them from doing so (clearRereview checks again).
+     *
+     * @return array<string, mixed>|null
+     */
+    private function rereview(Authenticatable $viewer, IntelligenceItem $item): ?array
+    {
+        if ($item->rereview_since === null || ! in_array($item->status, IntelligenceItem::FLAGGABLE, true)) {
+            return null;
+        }
+        $flags = $this->workflow->openFlags($item)->get();
+        $assets = $this->evidence->summaries($viewer, array_values(array_unique($flags->pluck('evidence_asset_id')->all())));
+        $viewerId = (int) $viewer->getAuthIdentifier();
+        $canClear = $this->gate->forUser($viewer)->allows('intelligence.publish') && ! in_array($viewerId, [$item->author_id, $item->owner_id], true);
+        $problems = [];
+        if ($canClear) {
+            if (IntelligenceWorkflowService::needsDirector($item) && ! $this->users->lockedHoldsRole($viewerId, IntelligenceWorkflowService::DIRECTOR_ROLE)) {
+                $problems[] = 'Confidential, restricted or high-impact intelligence is cleared by a director.';
+            }
+            $problems = array_merge($problems, $this->workflow->problems($item, reviewer: $viewer));
+        }
+
+        return [
+            'since' => $item->rereview_since->toIso8601ZuluString(),
+            'flags' => $flags->map(fn (RereviewFlag $f): array => [
+                'cause' => $f->cause,
+                'raisedAt' => $f->raised_at->toIso8601ZuluString(),
+                'evidence' => isset($assets[$f->evidence_asset_id]) ? ['ulid' => $assets[$f->evidence_asset_id]->ulid, 'title' => $assets[$f->evidence_asset_id]->title] : null,
+            ])->values()->all(),
+            'canClear' => $canClear,
+            'clearProblems' => $problems,
         ];
     }
 

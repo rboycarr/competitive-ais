@@ -7,8 +7,9 @@ use Illuminate\Contracts\Auth\Authenticatable;
 /**
  * Evidence for claims (P1-41, docs/03 Evidence): which assets a viewer may cite, and the custody trail of each link.
  * Assets are seen as on the evidence pages (evidence.view, then EvidenceAsset::seenBy); one the viewer cannot see is left out, like one
- * that does not exist. Only `available` evidence (scanned clean, stored) can be cited. Returns summaries, never the
- * model.
+ * that does not exist. Only `available` evidence (scanned clean, stored) can be cited. Since P1-48, "available" below
+ * also means that its stored bytes passed their integrity checks: evidence whose blob is marked `mismatch` is neither
+ * citable nor support. Returns summaries, never the model.
  */
 interface EvidenceLinking
 {

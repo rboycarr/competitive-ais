@@ -201,3 +201,42 @@ describe('Evidence/Show citations (P1-45)', () => {
         expect(mount(Show, { props: { asset: { ...asset, sha256: null }, canDownload: false, canHold: false, custody: [], citations: null } }).find('#citations-heading').exists()).toBe(false);
     });
 });
+
+describe('Evidence/Show withdrawal and integrity (P1-48)', () => {
+    const asset = {
+        ulid: row.ulid, title: 'Shelf', description: null, status: 'available', scanStatus: 'clean', originalFilename: 'a.pdf', sizeBytes: 10,
+        sourceUrl: null, capturedAt: row.capturedAt, uploadedBy: 'Ana', uploadedAt: row.capturedAt, classification: 'internal', legalHold: false,
+        competitors: [], markets: [], source: null, sha256: 'a'.repeat(64), integrity: 'ok', withdrawnAt: null,
+    };
+
+    it('lets a director withdraw with a reason, only after confirming', async () => {
+        const reader = mount(Show, { props: { asset, canDownload: false, canHold: false, canWithdraw: false, custody: [] } });
+        expect(reader.find('#withdraw-reason').exists()).toBe(false);
+
+        const director = mount(Show, { props: { asset, canDownload: false, canHold: false, canWithdraw: true, custody: [] } });
+        expect(director.get('#withdraw-reason').attributes('required')).toBeDefined();
+        await director.get('#withdraw-reason').setValue('Fabricated screenshot');
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+        post.mockClear();
+        await director.get('form').trigger('submit');
+        expect(post).not.toHaveBeenCalled();
+        await director.get('form').trigger('submit');
+        expect(post).toHaveBeenLastCalledWith(`/evidence/${row.ulid}/withdraw`, expect.any(Object));
+        expect(confirm).toHaveBeenCalledTimes(2);
+        confirm.mockRestore();
+    });
+
+    it('says when evidence was withdrawn or failed its integrity check, and shows the withdrawal reason as text', () => {
+        const withdrawn = mount(Show, { props: { asset: { ...asset, status: 'withdrawn', withdrawnAt: row.capturedAt }, canDownload: false, canHold: false, canWithdraw: false,
+            custody: [{ event: 'withdrawn', actor: 'Dana', occurredAt: row.capturedAt, reason: '<b>Fabricated</b>' }] } });
+        expect(withdrawn.get('[role="note"]').text()).toContain('Withdrawn on');
+        expect(withdrawn.get('[role="note"]').text()).toContain('flagged for re-review');
+        expect(withdrawn.text()).toContain('Reason: <b>Fabricated</b>');
+        expect(withdrawn.find('b').exists()).toBe(false);
+        expect(withdrawn.text()).toContain('a'.repeat(64));
+
+        const broken = mount(Show, { props: { asset: { ...asset, integrity: 'mismatch' }, canDownload: false, canHold: false, custody: [] } });
+        expect(broken.get('[role="note"]').text()).toContain('Integrity check failed');
+        expect(mount(Show, { props: { asset, canDownload: false, canHold: false, custody: [] } }).find('[role="note"]').exists()).toBe(false);
+    });
+});
