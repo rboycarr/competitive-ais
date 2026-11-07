@@ -8,6 +8,12 @@
 
 ## 1. Operating model (decision D4: manual handoff)
 
+**From 2026-11-08 (PO decision, after a process review): a leaner loop per story.**
+- **Tests:** locally, Claude Code runs Pint, Larastan and the changed module's tests only. The full suite runs in CI, where it takes 17 minutes against about 90 locally.
+- **Codex:** one review, then fixes, then one verification of those fixes, and the loop stops there. Codex's output is still recorded verbatim in `handoffs/TASK-####-review.md`. There are no separate brief or prompt files and no session-history rows. Under §2, Codex is skipped for UI-only and docs-only changes.
+- **Scope:** each story starts with a stated size and time box. A story larger than its roadmap size is sliced. Claude Code decides routine design questions; trade-offs go to the PO.
+- **Docs and pushes:** each story gets one PR description and one short roadmap line, and the design docs change only when the design does. Branches are pushed early, so CI overlaps the review. The next independent story starts while a PR waits for merge.
+
 **From 2026-11-04 (PO decision): roles switched back. Claude Code implements and Codex reviews read-only, as until 2026-11-02 (below).**
 
 **What happened during Codex's turn as implementer:**
