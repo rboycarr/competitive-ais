@@ -21,6 +21,7 @@ services:
       DB_DATABASE: ${DB_DATABASE}
       RESTORE_PROJECT: ${COMPOSE_PROJECT_NAME}
       EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-evidence}
+      AUDIT_ANCHOR_BUCKET: ${AUDIT_ANCHOR_BUCKET:-audit-anchor}
       HOME: /work
     entrypoint: ["bash", "/opt/backup/restore.sh"]
     volumes:
@@ -33,7 +34,14 @@ services:
       mysql: { condition: service_healthy }
       seaweedfs-init: { condition: service_completed_successfully }
 
+# Every volume this project creates carries the drill label; restore-drill.sh removes the project only when all of its
+# volumes do, so an unrelated project that happens to be called cais-drill is never deleted (TASK-0099 #2).
 volumes:
   vendor:
     external: true
     name: competitive-ais_vendor
+  node_modules: { labels: { cais.restore-drill: "1" } }
+  mysql-data: { labels: { cais.restore-drill: "1" } }
+  valkey-data: { labels: { cais.restore-drill: "1" } }
+  seaweedfs-data: { labels: { cais.restore-drill: "1" } }
+  clamav-db: { labels: { cais.restore-drill: "1" } }

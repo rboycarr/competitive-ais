@@ -33,7 +33,11 @@ run php php artisan tinker --execute '
       // A second, newer version of the first object: the row keeps pointing at the older one.
       if ($word === "alpha") { Modules\Platform\Storage\LockedObjects::write($disk, $key, $bytes, "text/plain", $until); }
   }
-  echo "seeded 3 evidence blobs (4 object versions)\n";'
+  // An object whose latest entry is a delete marker (no blob row): the restore must rebuild that history too.
+  $gone = "drill/deleted-object";
+  Modules\Platform\Storage\LockedObjects::write($disk, $gone, "Synthetic restore-drill evidence: removed", "text/plain", $until);
+  $disk->delete($gone);
+  echo "seeded 3 evidence blobs (5 object versions, 1 delete marker)\n";'
 # Sign the seeded audit rows now rather than after the 15-minute lag window.
 run auditor php artisan tinker --execute 'config(["audit.lag_minutes" => 0]); usleep(1100000); app(Modules\Platform\Audit\AuditAnchor::class)->checkpoint(); echo "checkpoint signed\n";'
 
@@ -47,6 +51,8 @@ echo "=== Drill on the intact backup"
 if out=$(bash scripts/ops/restore-drill.sh "$name" 2>&1); then pass "drill passed"; else bad "drill failed"; fi
 echo "$out" | grep -E '^=== |Blobs verified|Lock metadata|Restore complete|matches its signed|Restore drill' || true
 grep -q 'Blobs verified: 3;' <<<"$out" && pass "3 evidence blobs re-hashed through the restored version IDs" || bad "evidence sample"
+grep -q '^delete_markers=1$' "backups/$name/backup.info" && grep -q 'version history matches the manifest' <<<"$out" \
+  && pass "delete marker backed up and the restored history matches" || bad "delete-marker round trip"
 grep -q 'matches its signed manifests' <<<"$out" \
   && pass "audit trail verified against the restored manifests" || bad "audit verification"
 
@@ -71,6 +77,30 @@ damaged 20000101T000002Z cp "objects/$total.age" objects/1.age
 expect_drill_fail 20000101T000002Z "Restore (dump, object versions, evidence version IDs)" "swapped object bytes"
 damaged 20000101T000003Z sh -c 'head -c 200 mysql.sql.age > t && mv t mysql.sql.age'
 expect_drill_fail 20000101T000003Z "Restore (dump, object versions, evidence version IDs)" "a truncated database dump"
+damaged 20000101T000004Z cp objects/1.age objects/999.age
+expect_drill_fail 20000101T000004Z "Restore (dump, object versions, evidence version IDs)" "an extra object file"
+
+echo "=== A failed object listing leaves no complete backup (TASK-0099 #1)"
+before=$(find backups -maxdepth 1 -type d -regextype posix-extended -regex 'backups/[0-9]{8}T[0-9]{6}Z' | wc -l)
+if run -e S3_ENDPOINT=http://seaweedfs:1 backup >/dev/null 2>&1; then bad "backup succeeded without the object store"
+elif [ "$(find backups -maxdepth 1 -type d -regextype posix-extended -regex 'backups/[0-9]{8}T[0-9]{6}Z' | wc -l)" = "$before" ]; then
+  pass "backup failed and wrote no complete backup"
+else bad "a failed backup left a complete-looking directory"; fi
+
+echo "=== The backup key reads and lists only (TASK-0099 #5)"
+probe() { run --no-deps --entrypoint bash backup -c ". /opt/backup/lib.sh; $1" >/dev/null 2>&1; }
+probe 's3 list-object-versions --bucket evidence --max-items 1' && pass "backup key lists evidence" || bad "backup key cannot list evidence"
+probe 's3 put-object --bucket evidence --key drill/probe --body /etc/hostname' && bad "backup key wrote to evidence" || pass "backup key cannot write"
+probe 's3 delete-object --bucket audit-anchor --key drill/probe' && bad "backup key deleted in audit-anchor" || pass "backup key cannot delete"
+probe 's3 list-objects-v2 --bucket exports' && bad "backup key lists exports" || pass "backup key cannot list exports"
+probe 's3 list-objects-v2 --bucket evidence-quarantine' && bad "backup key lists the quarantine" || pass "backup key cannot list the quarantine"
+
+echo "=== A different project called cais-drill is never removed (TASK-0099 #2)"
+docker volume create --label com.docker.compose.project=cais-drill cais-drill_not-ours >/dev/null
+if bash scripts/ops/restore-drill.sh "$name" >/dev/null 2>&1; then bad "drill ran over a foreign cais-drill volume"
+elif docker volume inspect cais-drill_not-ours >/dev/null 2>&1; then pass "drill refused and left the foreign volume"
+else bad "the foreign volume was removed"; fi
+docker volume rm cais-drill_not-ours >/dev/null
 
 echo "=== Lock metadata that differs from the source must fail"
 locks="backups/$name/drill/locks.tsv"

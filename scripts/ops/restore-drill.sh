@@ -29,6 +29,16 @@ if [ -z "$name" ]; then
 fi
 [[ $name =~ ^[0-9]{8}T[0-9]{6}Z$ ]] && [ -f "backups/$name/backup.info" ] || { echo "backups/$name is not a complete backup." >&2; exit 1; }
 
+# One drill at a time (TASK-0099 #7).
+exec 9> backups/.restore-drill.lock
+flock -n 9 || { echo "Another restore drill is running." >&2; exit 1; }
+
+# Remove the project only if every volume under its name carries the drill label (compose.drill.yaml), so a
+# different project that is also called cais-drill is never deleted (TASK-0099 #2).
+foreign=$(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | while read -r v; do
+  [ "$(docker volume inspect -f '{{index .Labels "cais.restore-drill"}}' "$v")" = 1 ] || echo "$v"; done)
+[ -z "$foreign" ] || { echo "Volumes under the project name $PROJECT were not made by this drill; nothing removed: $foreign" >&2; exit 1; }
+
 started=$(date -u +%s) step="start" result=FAIL
 log_result() {
   local rc=$?

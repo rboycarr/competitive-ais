@@ -34,9 +34,12 @@ n=0 versions=0 markers=0 bytes=0
 for bucket in "${BUCKETS[@]}"; do
   echo "=== Object store: $bucket"
   # Oldest first per key, so a restore recreates the versions in their original order.
-  listing=$(s3 list-object-versions --bucket "$bucket" --output text \
+  # A failed or partial listing stops the backup (TASK-0099 #1): the CLI pages through every result itself.
+  s3 list-object-versions --bucket "$bucket" --output text \
     --query '[Versions[].[`v`,Key,VersionId,IsLatest,LastModified], DeleteMarkers[].[`d`,Key,VersionId,IsLatest,LastModified]][]' \
-    | grep -v '^None$' | sort -t$'\t' -k2,2 -k5,5 || true)
+    > /work/listing.tsv
+  listing=$({ grep -v '^None$' /work/listing.tsv || true; } | sort -t$'\t' -k2,2 -k5,5)
+  rm -f /work/listing.tsv
   while IFS=$'\t' read -r kind key version latest modified; do
     [ -n "$kind" ] || continue
     [[ $key =~ ^[A-Za-z0-9][A-Za-z0-9/._-]*$ ]] || { echo "backup.sh: unexpected object key in $bucket" >&2; exit 1; }

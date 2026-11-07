@@ -19,6 +19,7 @@ dir=/backups/$name
 [ -f "$dir/backup.info" ] || { echo "restore.sh: $dir is not a complete backup" >&2; exit 1; }
 : "${RESTORE_PROJECT:?}" "${DB_DATABASE:?}" "${MYSQL_ROOT_PASSWORD:?}" "${BACKUP_AGE_IDENTITY:?}"
 : "${S3_ADMIN_ACCESS_KEY:?}" "${S3_ADMIN_SECRET_KEY:?}"
+EVIDENCE_BUCKET=${EVIDENCE_BUCKET:-evidence} AUDIT_ANCHOR_BUCKET=${AUDIT_ANCHOR_BUCKET:-audit-anchor}
 case $mode in
   drill) [ "$RESTORE_PROJECT" = cais-drill ] || { echo "restore.sh: a drill restores only into the cais-drill project" >&2; exit 1; } ;;
   --disaster-recovery) [ "${RESTORE_CONFIRM:-}" = "$RESTORE_PROJECT" ] \
@@ -55,9 +56,11 @@ i=0 restored=0
 while IFS=$'\t' read -r n bucket key version latest modified sha size lmode luntil hold; do
   i=$((i + 1))
   [ "$n" = "$i" ] || { echo "restore.sh: manifest line $i is numbered $n" >&2; exit 1; }
-  # Keys and version IDs go into SQL below: plain characters only.
+  # Keys and version IDs go into SQL below: plain characters only. Only the backed-up buckets (TASK-0099 #4).
   [[ $key =~ ^[A-Za-z0-9][A-Za-z0-9/._-]*$ && $version =~ ^[A-Za-z0-9._-]+$ ]] \
     || { echo "restore.sh: manifest line $i has an unexpected key or version ID" >&2; exit 1; }
+  [ "$bucket" = "$EVIDENCE_BUCKET" ] || [ "$bucket" = "$AUDIT_ANCHOR_BUCKET" ] \
+    || { echo "restore.sh: manifest line $i names a bucket that is not backed up" >&2; exit 1; }
   if [ "$sha" = delete-marker ]; then
     s3 delete-object --bucket "$bucket" --key "$key" >/dev/null
     continue
@@ -84,14 +87,30 @@ while IFS=$'\t' read -r n bucket key version latest modified sha size lmode lunt
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$bucket" "$key" "$version" "$lmode" "$luntil" "$hold" >> "$dir/drill/locks.tsv"
 done < /work/manifest.tsv
 [ "$restored" = "$expected" ] || { echo "restore.sh: restored $restored of $expected object versions" >&2; exit 1; }
+
+# The restored history must match the manifest per key (TASK-0099 #3): number of versions, number of delete markers,
+# and whether the latest entry is a marker. Version IDs differ after a restore; the order is the manifest's.
+# Input lines: bucket, key, kind (v or d), IsLatest (True/False).
+summary() { awk -F'\t' '{ k = $1 "\t" $2; if ($3 == "d") m[k]++; else v[k]++; if ($4 == "True") last[k] = $3; seen[k] = 1 }
+  END { for (k in seen) print k "\t" v[k]+0 "\t" m[k]+0 "\t" (k in last ? last[k] : "-") }' | sort; }
+want=$(awk -F'\t' -v OFS='\t' '{ print $2, $3, ($7 == "delete-marker" ? "d" : "v"), $5 }' /work/manifest.tsv | summary)
+have=$(for b in "$EVIDENCE_BUCKET" "$AUDIT_ANCHOR_BUCKET"; do
+  s3 list-object-versions --bucket "$b" --output text \
+    --query '[Versions[].[`v`,Key,IsLatest], DeleteMarkers[].[`d`,Key,IsLatest]][]' > /work/listing.tsv
+  { grep -v '^None$' /work/listing.tsv || true; } | awk -F'\t' -v OFS='\t' -v b="$b" '{ print b, $2, $1, $3 }'
+done | summary)
+[ "$want" = "$have" ] || { echo "restore.sh: the restored version history differs from the manifest" >&2; diff <(echo "$want") <(echo "$have") >&2 || true; exit 1; }
+echo "version history matches the manifest for $(echo "$want" | grep -c .) keys"
 echo "replayed $entries manifest entries ($restored object versions)"
 
 echo "=== MySQL: point evidence at the restored versions"
 {
   echo "CREATE TEMPORARY TABLE restored_versions (storage_key VARCHAR(512) NOT NULL, old_id VARCHAR(255) NOT NULL, new_id VARCHAR(255) NOT NULL, PRIMARY KEY (storage_key, old_id));"
   awk -F'\t' -v b="${EVIDENCE_BUCKET:-evidence}" '$1 == b { printf "INSERT INTO restored_versions VALUES (\x27%s\x27, \x27%s\x27, \x27%s\x27);\n", $2, $3, $4 }' /work/versions.tsv
-  echo "SELECT COUNT(*) FROM evidence_blobs b LEFT JOIN restored_versions r ON r.storage_key = b.storage_key AND r.old_id = b.object_version_id WHERE b.object_version_id IS NOT NULL AND r.new_id IS NULL;"
-  echo "UPDATE evidence_blobs b JOIN restored_versions r ON r.storage_key = b.storage_key AND r.old_id = b.object_version_id SET b.object_version_id = r.new_id;"
+  # Only rows on the evidence disk (the evidence bucket) are remapped; any other row with a version ID counts as
+  # missing (TASK-0099 #6).
+  echo "SELECT COUNT(*) FROM evidence_blobs b LEFT JOIN restored_versions r ON b.storage_disk = 'evidence' AND r.storage_key = b.storage_key AND r.old_id = b.object_version_id WHERE b.object_version_id IS NOT NULL AND r.new_id IS NULL;"
+  echo "UPDATE evidence_blobs b JOIN restored_versions r ON b.storage_disk = 'evidence' AND r.storage_key = b.storage_key AND r.old_id = b.object_version_id SET b.object_version_id = r.new_id;"
 } > /work/remap.sql
 missing=$(sql "$DB_DATABASE" < /work/remap.sql)
 [ "$missing" = 0 ] || { echo "restore.sh: $missing evidence blobs reference a version that is not in the backup" >&2; exit 1; }
