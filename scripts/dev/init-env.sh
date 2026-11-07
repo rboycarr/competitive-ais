@@ -3,7 +3,9 @@
 #   .env                    Laravel runtime (web, Horizon, scheduler); readable inside the PHP containers
 #   .secrets/migrator.env   migrator account: `migrator` service and MySQL init only (TASK-0003 #1)
 #   .secrets/services.env   MySQL root and readonly passwords: MySQL only
-#   .secrets/s3.env         object-store admin and audit-anchor keys: SeaweedFS and its init only
+#   .secrets/s3.env         object-store admin key: SeaweedFS and its init only
+#   .secrets/anchor.env     audit-anchor object-store key: SeaweedFS and the auditor service only (P1-50)
+#   .secrets/signing.env    audit manifest signing seed: the auditor service only (P1-50, PO decision O43)
 # .secrets/ is hidden inside every container that bind-mounts the repository (TASK-0004 N2); Compose reads
 # the files on the host for `env_file`.
 # Keeps existing values, migrates earlier layouts, appends keys new in the examples, and fills empty secrets
@@ -17,8 +19,10 @@ declare -A EXAMPLE=(
   [.secrets/migrator.env]=.env.migrator.example
   [.secrets/services.env]=.env.services.example
   [.secrets/s3.env]=.env.s3.example
+  [.secrets/anchor.env]=.env.anchor.example
+  [.secrets/signing.env]=.env.signing.example
 )
-FILES=(.env .secrets/migrator.env .secrets/services.env .secrets/s3.env)
+FILES=(.env .secrets/migrator.env .secrets/services.env .secrets/s3.env .secrets/anchor.env .secrets/signing.env)
 
 mkdir -p .secrets && chmod 700 .secrets
 
@@ -63,12 +67,12 @@ move_keys() {
   done
 }
 
-# Fill KEY= lines that are empty with a random hex value.
+# Fill KEY= lines that are empty with a random hex value of BYTES bytes (default 24).
 fill_secrets() {
   local file=$1; shift
   for key in "$@"; do
     if grep -q "^${key}=$" "$file"; then
-      sed -i "s/^${key}=$/${key}=$(openssl rand -hex 24)/" "$file"
+      sed -i "s/^${key}=$/${key}=$(openssl rand -hex "${BYTES:-24}")/" "$file"
       echo "  ${file}: generated ${key}"
     fi
   done
@@ -80,6 +84,7 @@ done
 
 move_keys .env .secrets/migrator.env DB_MIGRATOR_USERNAME DB_MIGRATOR_PASSWORD
 move_keys .secrets/services.env .secrets/s3.env S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY
+move_keys .secrets/s3.env .secrets/anchor.env S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY   # P1-50
 
 for f in "${FILES[@]}"; do add_missing_keys "$f" "${EXAMPLE[$f]}"; chmod 600 "$f"; done
 
@@ -87,4 +92,6 @@ sed -i "s/^DEV_UID=$/DEV_UID=$(id -u)/; s/^DEV_GID=$/DEV_GID=$(id -g)/" .env
 fill_secrets .env DB_PASSWORD DB_RETENTION_PASSWORD REDIS_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 fill_secrets .secrets/migrator.env DB_MIGRATOR_PASSWORD
 fill_secrets .secrets/services.env MYSQL_ROOT_PASSWORD DB_READONLY_PASSWORD
-fill_secrets .secrets/s3.env S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY
+fill_secrets .secrets/s3.env S3_ADMIN_ACCESS_KEY S3_ADMIN_SECRET_KEY
+fill_secrets .secrets/anchor.env S3_ANCHOR_ACCESS_KEY S3_ANCHOR_SECRET_KEY
+BYTES=32 fill_secrets .secrets/signing.env AUDIT_SIGNING_SEED   # an Ed25519 seed

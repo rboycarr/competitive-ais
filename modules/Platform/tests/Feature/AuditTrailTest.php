@@ -3,7 +3,6 @@
 namespace Modules\Platform\Tests\Feature;
 
 use Carbon\Carbon;
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
@@ -11,26 +10,26 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use LogicException;
 use Modules\Platform\Audit\Actor;
 use Modules\Platform\Audit\AuditActions;
-use Modules\Platform\Audit\AuditCheckpointer;
+use Modules\Platform\Audit\AuditAnchor;
 use Modules\Platform\Audit\AuditHasher;
 use Modules\Platform\Audit\AuditLogger;
 use Modules\Platform\Audit\AuditVerifier;
 use Modules\Platform\Classification;
 use Modules\Platform\Events\AuditVerificationFailed;
-use Modules\Platform\Jobs\CreateAuditCheckpointJob;
-use Modules\Platform\Jobs\VerifyAuditChainJob;
 use RuntimeException;
 use Tests\TestCase;
 
 /**
  * P1-05 / ADR-0006 / docs/09 #6 and #18: one hashed audit row per action in the caller's transaction; checkpoints
  * over rows older than the lag window; verification reports tampering, deletion, late commits and gaps.
- * Runs on MySQL 8.4 as the real app, retention and migrator accounts.
+ * Runs on MySQL 8.4 as the real app, retention and migrator accounts. Since P1-50 checkpoints are signed and exported
+ * (a fake audit-anchor disk, a synthetic signing seed) and verified against the manifests (AuditAnchorTest).
  */
 class AuditTrailTest extends TestCase
 {
@@ -43,6 +42,9 @@ class AuditTrailTest extends TestCase
         $actions = $this->app->make(AuditActions::class);
         $actions->define('probe.recorded', ['note' => 'text', 'items' => 'code[]', 'count' => 'int', 'asset' => 'ulid', 'digest' => 'sha256']);
         $actions->define('probe.http');
+
+        config(['audit.anchor.signing_seed' => str_repeat('5e', 32), 'audit.anchor.lock_mode' => 'GOVERNANCE']);
+        Storage::fake('audit-anchor');
     }
 
     protected function tearDown(): void
@@ -197,7 +199,7 @@ class AuditTrailTest extends TestCase
         $this->assertSame(hash('sha256', 'ProbeAgent/1.0'), $network->user_agent_hash);
 
         // Retention may delete it; the hashed trail stays valid.
-        $this->app->make(AuditCheckpointer::class)->close();
+        $this->checkpoint();
         $this->assertSame(1, DB::connection('retention')->table('audit_event_network')->delete());
         $this->assertSame([], $this->verify());
     }
@@ -221,19 +223,18 @@ class AuditTrailTest extends TestCase
 
     public function test_checkpoints_close_only_rows_older_than_the_lag_window_and_are_idempotent(): void
     {
-        $checkpointer = $this->app->make(AuditCheckpointer::class);
         $this->recordAt(-20, 'a');
         $this->recordAt(-16, 'b');
         $recent = $this->recordAt(-5, 'c');
 
-        $checkpoint = $checkpointer->close();
+        $checkpoint = $this->checkpoint();
         $this->assertNotNull($checkpoint);
         $this->assertSame([1, 2], [$checkpoint['from'], $checkpoint['count']]);
         $this->assertLessThan($this->idOf($recent), $checkpoint['to']);
-        $this->assertNull($checkpointer->close(), 'Nothing new is due.');
+        $this->assertNull($this->checkpoint(), 'Nothing new is due.');
 
         Carbon::setTestNow(now()->addMinutes(11));
-        $next = $checkpointer->close();
+        $next = $this->checkpoint();
         $this->assertNotNull($next);
         $this->assertSame([$checkpoint['to'] + 1, $this->idOf($recent), 1], [$next['from'], $next['to'], $next['count']]);
         $this->assertSame(2, DB::table('audit_checkpoints')->count());
@@ -244,7 +245,7 @@ class AuditTrailTest extends TestCase
     {
         $ulid = $this->recordAt(-60, 'original');
         $this->recordAt(-59, 'second');
-        $this->app->make(AuditCheckpointer::class)->close();
+        $this->checkpoint();
 
         DB::connection('migrator')->table('audit_events')->where('ulid', $ulid)->update(['context' => json_encode(['note' => 'forged'])]);
 
@@ -254,7 +255,7 @@ class AuditTrailTest extends TestCase
     public function test_an_edited_row_with_a_recomputed_hash_breaks_the_checkpoint_root(): void
     {
         $ulid = $this->recordAt(-60, 'original');
-        $this->app->make(AuditCheckpointer::class)->close();
+        $this->checkpoint();
 
         $row = (array) DB::table('audit_events')->where('ulid', $ulid)->sole();
         $row['context'] = ['note' => 'forged'];
@@ -268,7 +269,7 @@ class AuditTrailTest extends TestCase
     {
         $ulid = $this->recordAt(-60, 'deleted');
         $this->recordAt(-59, 'kept');
-        $this->app->make(AuditCheckpointer::class)->close();
+        $this->checkpoint();
 
         DB::connection('migrator')->table('audit_events')->where('ulid', $ulid)->delete();
 
@@ -288,7 +289,7 @@ class AuditTrailTest extends TestCase
         }
         Carbon::setTestNow();
         $this->recordAt(-58, 'third');
-        $checkpoint = $this->app->make(AuditCheckpointer::class)->close();
+        $checkpoint = $this->checkpoint();
         $this->assertNotNull($checkpoint);
         $this->assertSame(2, $checkpoint['count'], 'A rolled-back ID is a gap, not a missing row.');
         $this->assertSame([], $this->verify());
@@ -303,21 +304,36 @@ class AuditTrailTest extends TestCase
         $this->assertSame([['late_commit', 'high']], array_map(fn (array $i): array => [$i['type'], $i['severity']], $this->verify()));
     }
 
-    public function test_a_removed_checkpoint_is_reported_as_a_chain_gap(): void
+    public function test_a_removed_checkpoint_row_is_reported_against_its_manifest(): void
     {
-        $checkpointer = $this->app->make(AuditCheckpointer::class);
         $this->recordAt(-60, 'a');
-        $first = $checkpointer->close();
+        $first = $this->checkpoint();
         $this->recordAt(-50, 'b');
-        $checkpointer->close();
+        $this->checkpoint();
         $this->assertNotNull($first);
 
-        DB::connection('migrator')->table('audit_checkpoints')->where('to_audit_id', $first['to'])->delete();
+        $id = DB::table('audit_checkpoints')->where('to_audit_id', $first['to'])->value('id');
+        DB::connection('migrator')->table('audit_anchors')->where('checkpoint_id', $id)->delete();
+        DB::connection('migrator')->table('audit_checkpoints')->where('id', $id)->delete();
 
-        $this->assertSame(['chain_gap'], array_column($this->verify(), 'type'));
+        $this->assertSame(['checkpoint_missing'], array_column($this->verify(), 'type'));
     }
 
-    public function test_the_command_and_the_job_report_failures(): void
+    public function test_a_missing_manifest_is_reported_as_a_chain_gap(): void
+    {
+        $this->recordAt(-60, 'a');
+        $first = $this->checkpoint();
+        $this->recordAt(-50, 'b');
+        $this->checkpoint();
+        $this->assertNotNull($first);
+
+        // Not possible on the locked bucket; the fake disk stands in for a store that lost an object.
+        Storage::disk('audit-anchor')->delete(AuditAnchor::objectKey(1, $first['from'], $first['to'], 1));
+
+        $this->assertSame(['chain_gap', 'manifest_missing'], array_column($this->verify(), 'type'));
+    }
+
+    public function test_the_command_reports_failures_and_raises_the_alert_event(): void
     {
         $ulid = $this->recordAt(-60, 'original');
         $this->assertSame(0, Artisan::call('audit:checkpoint'));
@@ -325,25 +341,27 @@ class AuditTrailTest extends TestCase
 
         DB::connection('migrator')->table('audit_events')->where('ulid', $ulid)->update(['action' => 'probe.forged']);
 
+        Event::fake([AuditVerificationFailed::class]);
         $this->assertSame(1, Artisan::call('audit:verify'));
         $this->assertStringContainsString('row_tampered', Artisan::output());
-
-        Event::fake([AuditVerificationFailed::class]);
-        $this->app->call([new VerifyAuditChainJob, 'handle']);
         Event::assertDispatched(AuditVerificationFailed::class, fn (AuditVerificationFailed $e): bool => $e->issues[0]['type'] === 'row_tampered');
-    }
-
-    public function test_checkpoint_and_verification_jobs_are_scheduled(): void
-    {
-        $events = collect($this->app->make(Schedule::class)->events())->map(fn ($event): array => [(string) $event->description, $event->expression]);
-
-        $this->assertContains([CreateAuditCheckpointJob::class, '*/5 * * * *'], $events->all());
-        $this->assertContains([VerifyAuditChainJob::class, '0 * * * *'], $events->all());
     }
 
     private function logger(): AuditLogger
     {
         return $this->app->make(AuditLogger::class);
+    }
+
+    /**
+     * Closes the next due range and exports its signed manifest (P1-50).
+     *
+     * @return array{from: int, to: int, count: int, root: string}|null
+     *
+     * @phpstan-impure
+     */
+    private function checkpoint(): ?array
+    {
+        return $this->app->make(AuditAnchor::class)->checkpoint()['checkpoint'];
     }
 
     /** Records an event as if it happened $minutes from now (negative = in the past). */

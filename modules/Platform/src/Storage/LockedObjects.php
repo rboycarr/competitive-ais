@@ -11,7 +11,7 @@ use RuntimeException;
 
 /**
  * Writes an object **once**, with its object-lock retention on that same write (ADR-0007: governance mode on the
- * locked buckets). Flysystem cannot pass lock options, and a plain write followed by a second, locked write would leave
+ * evidence bucket; the audit manifests use compliance mode in production, P1-50). Flysystem cannot pass lock options, and a plain write followed by a second, locked write would leave
  * an earlier version without retention, so on the S3 store the SDK's upload is used directly (no ACL, as the
  * `s3-private` driver; single or multipart). The version ID is returned, for retention and legal-hold changes later
  * (P1-35), so a write that returns none fails closed. Any other disk is written plainly and returns no version, in
@@ -20,14 +20,17 @@ use RuntimeException;
  */
 final class LockedObjects
 {
-    /** @param  resource  $stream */
-    public static function write(Filesystem $disk, string $key, $stream, string $contentType, CarbonImmutable $retainUntil): ?string
+    /**
+     * @param  resource|string  $stream
+     * @param  'GOVERNANCE'|'COMPLIANCE'  $mode  compliance only for the audit manifests (P1-50, PO decision O44)
+     */
+    public static function write(Filesystem $disk, string $key, $stream, string $contentType, CarbonImmutable $retainUntil, string $mode = 'GOVERNANCE'): ?string
     {
         if (! $disk instanceof AwsS3V3Adapter) {
             if (! app()->environment('testing')) {
                 throw new RuntimeException('Locked objects need the S3 object store.');
             }
-            $disk->writeStream($key, $stream);
+            is_string($stream) ? $disk->put($key, $stream) : $disk->writeStream($key, $stream);
 
             return null;
         }
@@ -36,7 +39,7 @@ final class LockedObjects
         $result = $disk->getClient()->upload((string) $config['bucket'], ltrim(((string) ($config['root'] ?? '')).'/'.$key, '/'), $stream, '', [
             'params' => [
                 'ContentType' => $contentType,
-                'ObjectLockMode' => 'GOVERNANCE',
+                'ObjectLockMode' => $mode,
                 'ObjectLockRetainUntilDate' => $retainUntil->utc()->format('Y-m-d\TH:i:s\Z'),
             ],
         ]);

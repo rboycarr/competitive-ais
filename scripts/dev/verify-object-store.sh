@@ -19,7 +19,7 @@ envval() { grep -m1 "^$2=" "$1" | cut -d= -f2-; }
 umask 077
 printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .env AWS_ACCESS_KEY_ID)" "$(envval .env AWS_SECRET_ACCESS_KEY)" > "$KEYS/app"
 printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .secrets/s3.env S3_ADMIN_ACCESS_KEY)" "$(envval .secrets/s3.env S3_ADMIN_SECRET_KEY)" > "$KEYS/admin"
-printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .secrets/s3.env S3_ANCHOR_ACCESS_KEY)" "$(envval .secrets/s3.env S3_ANCHOR_SECRET_KEY)" > "$KEYS/anchor"
+printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$(envval .secrets/anchor.env S3_ANCHOR_ACCESS_KEY)" "$(envval .secrets/anchor.env S3_ANCHOR_SECRET_KEY)" > "$KEYS/anchor"
 umask 022
 printf 'verify\n' > "$WORK/obj.txt"
 cat > "$WORK/config" <<'EOF'
@@ -79,6 +79,18 @@ A=$(put anchor audit-anchor "$K/m" 2>/dev/null)
 [ -n "$A" ] && rec K13 PASS "anchor: put in audit-anchor" || rec K13 FAIL "anchor: put in audit-anchor"
 no  K14 "anchor: list evidence denied"                    as anchor list-objects-v2 --bucket evidence
 no  K15 "anchor: put in evidence denied"                  as anchor put-object --bucket evidence --key "$K/x" --body /cfg/obj.txt
+# P1-50: a manifest is written with its lock (governance locally, O44), and the anchor key cannot remove it.
+M=$(put anchor audit-anchor "$K/l" --object-lock-mode GOVERNANCE --object-lock-retain-until-date "$UNTIL" 2>/dev/null)
+[ -n "$M" ] && rec K19 PASS "anchor: put locked manifest in audit-anchor" || rec K19 FAIL "anchor: put locked manifest in audit-anchor"
+if [ -n "$M" ]; then
+  no  K20 "anchor: delete locked manifest denied"         as anchor delete-object --bucket audit-anchor --key "$K/l" --version-id "$M"
+  no  K21 "anchor: delete with bypass denied"             as anchor delete-object --bucket audit-anchor --key "$K/l" --version-id "$M" --bypass-governance-retention
+  no  K22 "anchor: shorten retention denied"              as anchor put-object-retention --bucket audit-anchor --key "$K/l" --version-id "$M" --bypass-governance-retention --retention "{\"Mode\":\"GOVERNANCE\",\"RetainUntilDate\":\"$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)\"}"
+else
+  rec K20 FAIL "anchor: delete locked manifest denied :: no manifest was written (K19)"
+  rec K21 FAIL "anchor: delete with bypass denied :: no manifest was written (K19)"
+  rec K22 FAIL "anchor: shorten retention denied :: no manifest was written (K19)"
+fi
 
 # No key
 no  K16 "anonymous: list evidence denied"                 as anon list-objects-v2 --bucket evidence

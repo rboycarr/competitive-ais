@@ -10,6 +10,9 @@ use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\Events\MigrationsEnded;
 use Illuminate\Database\Events\NoPendingMigrations;
+use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Filesystem\AwsS3V3Adapter;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Application;
@@ -25,19 +28,21 @@ use League\Flysystem\AwsS3V3\AwsS3V3Adapter as S3Adapter;
 use League\Flysystem\Filesystem;
 use Modules\Platform\Audit\AuditActions;
 use Modules\Platform\Console\ApplyDatabaseGrants;
+use Modules\Platform\Console\CheckAuditFreshness;
 use Modules\Platform\Console\CreateAuditCheckpoint;
+use Modules\Platform\Console\ReanchorAuditRange;
 use Modules\Platform\Console\RelayOutbox;
+use Modules\Platform\Console\RunAuditor;
 use Modules\Platform\Console\ShowFeatures;
 use Modules\Platform\Console\SwitchFeature;
 use Modules\Platform\Console\VerifyAuditTrail;
 use Modules\Platform\Database\TableGrants;
+use Modules\Platform\Database\TransactionDurationMonitor;
 use Modules\Platform\Http\Middleware\AssignRequestId;
 use Modules\Platform\Http\Middleware\HandleInertiaRequests;
 use Modules\Platform\Http\Middleware\SecurityHeaders;
 use Modules\Platform\Http\ProblemDetails;
-use Modules\Platform\Jobs\CreateAuditCheckpointJob;
 use Modules\Platform\Jobs\RelayOutboxJob;
-use Modules\Platform\Jobs\VerifyAuditChainJob;
 use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Storage\PrivateBucketVisibility;
 use Modules\Platform\Support\Features;
@@ -67,6 +72,7 @@ class PlatformServiceProvider extends ModuleServiceProvider
         $this->app->singleton(TableGrants::class);
         $this->app->singleton(AuditActions::class);
         $this->app->singleton(OutboxEvents::class);
+        $this->app->singleton(TransactionDurationMonitor::class);
     }
 
     public function boot(): void
@@ -77,12 +83,14 @@ class PlatformServiceProvider extends ModuleServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([
-                ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, RelayOutbox::class,
+                ApplyDatabaseGrants::class, CreateAuditCheckpoint::class, VerifyAuditTrail::class, ReanchorAuditRange::class,
+                RunAuditor::class, CheckAuditFreshness::class, RelayOutbox::class,
                 ShowFeatures::class, SwitchFeature::class,
             ]);
         }
 
         $this->runSchemaCommandsAsMigrator();
+        $this->auditAnchoring();
         $this->scheduleJobs();
         $this->secureHttpDefaults();
         $this->featureFlags();
@@ -152,15 +160,34 @@ class PlatformServiceProvider extends ModuleServiceProvider
     }
 
     /**
-     * Audit checkpoints and verification (P1-05, ADR-0006) and outbox delivery (P1-06); the jobs run on the queue.
+     * Outbox delivery (P1-06); the job runs on the queue. Audit checkpoints and verification are not scheduled here:
+     * they need the signing key, so the auditor service runs them (audit:work, P1-50); the scheduler only watches that
+     * they keep running (audit:freshness).
      */
     private function scheduleJobs(): void
     {
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
-            $schedule->job(new CreateAuditCheckpointJob)->everyFiveMinutes();
-            $schedule->job(new VerifyAuditChainJob)->hourly();
             $schedule->job(new RelayOutboxJob)->everyMinute();
+            // Holds no key: only watches that the auditor keeps anchoring (TASK-0096 #5).
+            $schedule->command('audit:freshness')->everyFifteenMinutes();
         });
+    }
+
+    /**
+     * Signed audit anchors (P1-50, ADR-0006): the re-anchoring audit action, and the alert on long transactions, which
+     * would commit audit rows after their range closed (TASK-0010 #4).
+     */
+    private function auditAnchoring(): void
+    {
+        $this->app->make(AuditActions::class)->define('audit.reanchored', [
+            'generation' => 'int', 'from' => 'int', 'to' => 'int', 'revision' => 'int', 'count' => 'int', 'previous_count' => 'int',
+            'late_ids' => 'int[]', 'reason' => 'text',
+        ]);
+
+        $monitor = $this->app->make(TransactionDurationMonitor::class);
+        Event::listen(TransactionBeginning::class, $monitor->began(...));
+        Event::listen(TransactionCommitted::class, $monitor->committed(...));
+        Event::listen(TransactionRolledBack::class, $monitor->rolledBack(...));
     }
 
     /**

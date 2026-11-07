@@ -12,7 +12,7 @@ val() { grep -m1 "^$2=" "$1" | cut -d= -f2-; }
 
 # 1. Fresh: all files created, secrets filled, modes 600/700.
 d=$(fresh); run "$d"
-for f in .env .secrets/migrator.env .secrets/services.env .secrets/s3.env; do
+for f in .env .secrets/migrator.env .secrets/services.env .secrets/s3.env .secrets/anchor.env .secrets/signing.env; do
   [ -f "$d/$f" ] && [ "$(stat -c %a "$d/$f")" = 600 ] || bad "fresh: $f missing or not 600"
 done
 [ "$(stat -c %a "$d/.secrets")" = 700 ] || bad "fresh: .secrets not 700"
@@ -44,5 +44,17 @@ d=$(fresh); run "$d"; keep=$(val "$d/.secrets/migrator.env" DB_MIGRATOR_PASSWORD
 printf 'DB_MIGRATOR_PASSWORD=\n' >> "$d/.env"; run "$d"
 [ "$(val "$d/.secrets/migrator.env" DB_MIGRATOR_PASSWORD)" = "$keep" ] && ! grep -q '^DB_MIGRATOR_PASSWORD' "$d/.env" \
   && pass "empty old key dropped" || bad "empty old key handling"
+
+# 6. P1-50: the audit-anchor key moves from s3.env to anchor.env with its values; the signing seed is 32 bytes.
+d=$(fresh); run "$d"
+printf 'S3_ANCHOR_ACCESS_KEY=aaaaaaaaaaaaaaaaaaaa\nS3_ANCHOR_SECRET_KEY=bbbbbbbbbbbbbbbbbbbb\n' >> "$d/.secrets/s3.env"
+sed -i '/^S3_ANCHOR_/d' "$d/.secrets/anchor.env"; printf 'S3_ANCHOR_ACCESS_KEY=\nS3_ANCHOR_SECRET_KEY=\n' >> "$d/.secrets/anchor.env"
+run "$d"
+[ "$(val "$d/.secrets/anchor.env" S3_ANCHOR_ACCESS_KEY)" = aaaaaaaaaaaaaaaaaaaa ] \
+  && [ "$(val "$d/.secrets/anchor.env" S3_ANCHOR_SECRET_KEY)" = bbbbbbbbbbbbbbbbbbbb ] \
+  && ! grep -q '^S3_ANCHOR_' "$d/.secrets/s3.env" \
+  && [[ $(val "$d/.secrets/signing.env" AUDIT_SIGNING_SEED) =~ ^[0-9a-f]{64}$ ]] \
+  && [ -z "$(val "$d/.secrets/signing.env" AUDIT_TRUSTED_KEYS)" ] \
+  && pass "anchor key moved to anchor.env; signing seed is 64 hex" || bad "anchor key move or signing seed"
 
 [ $fail -eq 0 ] && echo "init-env tests passed." || exit 1

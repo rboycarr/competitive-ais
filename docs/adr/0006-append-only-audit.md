@@ -1,6 +1,6 @@
 # ADR-0006 — Append-only audit with database grants and signed, externally anchored checkpoints
 
-- **Status:** Accepted, 2026-10-31. **Amended 2026-10-31** after Codex review TASK-0001 (findings #8, #9).
+- **Status:** Accepted, 2026-10-31. **Amended 2026-10-31** after Codex review TASK-0001 (findings #8, #9). **Implemented 2026-11-07** (P1-50, PO decisions O43–O45; see "As built" below).
 
 ## Context
 Audit events must be immutable (`skills/06`) and tamper-evident. A sequential hash chain (each row hashes the previous one) serializes every audited write through one lock, which hurts concurrency. The Codex review showed three gaps in the first version of this ADR:
@@ -28,3 +28,12 @@ Audit events must be immutable (`skills/06`) and tamper-evident. A sequential ha
 - Strict hash chain: stronger ordering proof; rejected for write contention.
 - Nulling IP columns in place: rejected; it breaks hashes and needs an UPDATE grant.
 - External SIEM/WORM log store: a good later addition (Phase 6); the signed-manifest export provides the independent anchor now.
+
+## As built (P1-50, 2026-11-07)
+- **Who holds the key:** a separate `auditor` service (PO decision O43) is the only holder of the Ed25519 seed and the audit-anchor bucket key. It closes, signs and exports checkpoints every five minutes and verifies hourly (`audit:work`); the web, Horizon and scheduler containers hold neither key.
+- **Where the signature is recorded:** in an append-only `audit_anchors` row written after each export, not on the checkpoint row (which cannot be updated once inserted). A checkpoint not yet exported is exported by the next run, after its rows are checked again; this also signed the checkpoints closed before P1-50 (O45).
+- **Lock mode:** compliance for 7 years in production, enforced by the app; governance for one day locally and in CI (O44).
+- **Late commits:** re-anchored by a supplementary checkpoint (`revision` > 1, `supplements_id`), only by the `audit:reanchor` command with the late IDs and a reason, after the runbook investigation (`docs/10` §6). The range without the named rows must match its signed manifest in the bucket, so deletions, replaced rows and unnamed rows are never re-anchored, and the routine export never signs a supplement (TASK-0096 #1).
+- **Liveness:** the ordinary scheduler, which holds no key, runs `audit:freshness` to notice an auditor that stopped (TASK-0096 #5). Verification needs only public keys (#4).
+- **Transaction cap:** web requests end after 120 s (FPM `request_terminate_timeout`) and queued jobs after their Horizon timeout; any transaction that still commits after 300 s is logged critically. Commands are not cut off.
+- **Rotation:** a new seed; earlier public keys stay trusted through `AUDIT_TRUSTED_KEYS`; the generation does not change.

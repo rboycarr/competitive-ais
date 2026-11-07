@@ -2,27 +2,54 @@
 
 namespace Modules\Platform\Audit;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Filesystem\FilesystemManager;
+use Illuminate\Support\Facades\Log;
+use JsonException;
+use Modules\Platform\Events\AuditVerificationFailed;
+use RuntimeException;
 
 /**
- * Checks the audit trail against its checkpoints (ADR-0006, docs/09 #18). Reports, never repairs:
+ * Checks the audit trail against the signed manifests in the audit-anchor bucket (P1-50, ADR-0006, docs/09 #18), not
+ * against the checkpoint rows alone: someone who can rewrite both the rows and the checkpoints still cannot sign a
+ * manifest or remove one from the locked bucket. Needs only public keys (AuditSigner::trustedKeys). Reports, never
+ * repairs:
  *
+ * - manifest_invalid (critical): an object in the bucket that is not a well-formed manifest, whose signature does not
+ *   verify with a trusted key, or whose content does not match its name
  * - row_tampered (critical): a row's stored hash does not match its columns
- * - rows_missing (critical): a closed range holds fewer rows than its checkpoint counted
- * - late_commit (high): a closed range holds more rows than counted; a transaction committed after the range
- *   closed (investigate per runbook; re-anchoring follows in P1-50)
+ * - rows_missing (critical): a signed range holds fewer rows than its manifest counted
+ * - late_commit (high): a signed range holds more rows than counted; a transaction committed after the range closed
+ *   (investigate per runbook, then audit:reanchor)
  * - root_mismatch (critical): same count, different Merkle root (rows replaced or IDs changed)
- * - chain_gap (critical): checkpoints of a generation do not cover IDs contiguously from 1
+ * - chain_gap (critical): the signed ranges of a generation do not cover IDs contiguously from 1
+ * - checkpoint_missing / checkpoint_mismatch (critical): a manifest has no checkpoint row, or the row differs from it
+ * - manifest_missing (critical): a checkpoint recorded as exported has no valid manifest
+ * - unsigned_supplement (critical): a supplementary checkpoint without a manifest; only audit:reanchor creates them, and
+ *   it exports them at once (TASK-0096 #1, #3)
+ * - anchor_record_mismatch (high): an export record missing for a manifest, or differing from it in object key, key ID,
+ *   signature or SHA-256 (TASK-0096 #2, TASK-0097 #2); the
+ *   trail itself is intact, but its bookkeeping was changed
+ * - unanchored (high): a checkpoint still not exported after the stale window
+ * - anchor_stale (high): rows older than the lag window plus the stale window are in no signed manifest
  *
- * Detects changes made without also rewriting the checkpoints. An attacker who can rewrite both is caught by the
- * signed manifests in the audit-anchor bucket (P1-50).
+ * For each range the highest valid revision counts (a supplementary checkpoint after a late commit).
+ *
+ * @phpstan-type Manifest array{v: int, generation: int, revision: int, from: int, to: int, count: int, root: string, watermark_at: string, closed_at: string, key_id: string}
+ * @phpstan-type Signed array{manifest: Manifest, signature: string, key: string, sha256: string}
  */
 class AuditVerifier
 {
+    private const TIME = '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}$/';
+
     public function __construct(
         private readonly DatabaseManager $db,
         private readonly AuditHasher $hasher,
+        private readonly AuditSigner $signer,
+        private readonly FilesystemManager $storage,
         private readonly Config $config,
     ) {}
 
@@ -31,39 +58,104 @@ class AuditVerifier
      */
     public function verify(): array
     {
+        $this->requireKeys();
         $db = $this->db->connection();
+        $generation = (int) $this->config->get('audit.generation');
         $issues = [];
+
+        $signed = $this->signedManifests($generation, $issues);
+
         $expectedFrom = 1;
-
-        $checkpoints = $db->table('audit_checkpoints')
-            ->where('generation', (int) $this->config->get('audit.generation'))
-            ->orderBy('from_audit_id')
-            ->get();
-
-        foreach ($checkpoints as $checkpoint) {
-            $from = (int) $checkpoint->from_audit_id;
-            $to = (int) $checkpoint->to_audit_id;
-            if ($from !== $expectedFrom) {
-                $issues[] = $this->issue('chain_gap', 'critical', "checkpoint {$checkpoint->id} starts at $from, expected $expectedFrom");
+        foreach ($this->authoritative($signed) as $manifest) {
+            $label = "manifest {$manifest['from']}-{$manifest['to']} r{$manifest['revision']}";
+            if ($manifest['from'] !== $expectedFrom) {
+                $issues[] = $this->issue('chain_gap', 'critical', "$label starts at {$manifest['from']}, expected $expectedFrom");
             }
-            $expectedFrom = $to + 1;
+            $expectedFrom = $manifest['to'] + 1;
 
-            $rows = $this->checkRows($from, $to, $issues);
+            $rows = $this->rows($manifest['from'], $manifest['to'], $issues);
             $count = count($rows);
-            $expected = (int) $checkpoint->event_count;
-            if ($count > $expected) {
-                $issues[] = $this->issue('late_commit', 'high', "checkpoint {$checkpoint->id} ($from-$to): $count rows, $expected when closed");
-            } elseif ($count < $expected) {
-                $issues[] = $this->issue('rows_missing', 'critical', "checkpoint {$checkpoint->id} ($from-$to): $count rows, $expected when closed");
-            } elseif ($this->hasher->merkleRoot($rows) !== $checkpoint->merkle_root) {
-                $issues[] = $this->issue('root_mismatch', 'critical', "checkpoint {$checkpoint->id} ($from-$to): Merkle root differs");
+            if ($count > $manifest['count']) {
+                $issues[] = $this->issue('late_commit', 'high', "$label: $count rows, {$manifest['count']} when signed");
+            } elseif ($count < $manifest['count']) {
+                $issues[] = $this->issue('rows_missing', 'critical', "$label: $count rows, {$manifest['count']} when signed");
+            } elseif ($this->hasher->merkleRoot($rows) !== $manifest['root']) {
+                $issues[] = $this->issue('root_mismatch', 'critical', "$label: Merkle root differs");
             }
         }
 
-        // Rows not yet closed into a checkpoint: their own hashes still have to match.
-        $this->checkRows($expectedFrom, PHP_INT_MAX, $issues);
+        // Checkpoint rows and their export records against every valid manifest; checkpoints not (yet) exported.
+        $staleBefore = CarbonImmutable::now('UTC')->subMinutes((int) $this->config->get('audit.anchor.stale_minutes'));
+        $anchors = $db->table('audit_anchors')->get()->keyBy(fn (object $anchor): int => (int) $anchor->checkpoint_id);
+        $supplemented = $db->table('audit_checkpoints')->whereNotNull('supplements_id')->pluck('supplements_id')->map(fn (mixed $id): int => (int) $id)->flip();
+        foreach ($db->table('audit_checkpoints')->where('generation', $generation)->orderBy('id')->cursor() as $checkpoint) {
+            $key = "{$checkpoint->from_audit_id}/{$checkpoint->revision}";
+            $anchor = $anchors->get((int) $checkpoint->id);
+            if (isset($signed[$key])) {
+                $entry = $signed[$key];
+                if (AuditAnchor::manifest($checkpoint, $entry['manifest']['key_id']) !== $entry['manifest']) {
+                    $issues[] = $this->issue('checkpoint_mismatch', 'critical', "checkpoint {$checkpoint->id} ($key) differs from its signed manifest");
+                }
+                if ($anchor === null || [$anchor->object_key, $anchor->key_id, $anchor->signature, $anchor->manifest_sha256] !== [$entry['key'], $entry['manifest']['key_id'], $entry['signature'], $entry['sha256']]) {
+                    $issues[] = $this->issue('anchor_record_mismatch', 'high', "checkpoint {$checkpoint->id} ($key): its export record is ".($anchor === null ? 'missing' : 'different from the manifest'));
+                }
+                unset($signed[$key]);
+            } elseif ($anchor !== null) {
+                $issues[] = $this->issue('manifest_missing', 'critical', "checkpoint {$checkpoint->id} ($key) was exported, but has no valid manifest");
+            } elseif ((int) $checkpoint->revision > 1) {
+                $issues[] = $this->issue('unsigned_supplement', 'critical', "supplementary checkpoint {$checkpoint->id} ($key) has no signed manifest");
+            } elseif (! $supplemented->has((int) $checkpoint->id) && CarbonImmutable::parse((string) $checkpoint->created_at, 'UTC')->lt($staleBefore)) {
+                $issues[] = $this->issue('unanchored', 'high', "checkpoint {$checkpoint->id} ($key) is not exported yet");
+            }
+        }
+        foreach ($signed as $key => $entry) {
+            $issues[] = $this->issue('checkpoint_missing', 'critical', "manifest $key ({$entry['manifest']['from']}-{$entry['manifest']['to']}) has no checkpoint row");
+        }
+
+        // Rows after the last signed range: their own hashes still have to match, and they must not wait too long.
+        $this->rows($expectedFrom, PHP_INT_MAX, $issues);
+        $dueBefore = $staleBefore->subMinutes((int) $this->config->get('audit.lag_minutes'))->format('Y-m-d H:i:s.u');
+        $overdue = $db->table('audit_events')->where('id', '>=', $expectedFrom)->where('occurred_at', '<', $dueBefore)->count();
+        if ($overdue > 0) {
+            $issues[] = $this->issue('anchor_stale', 'high', "$overdue audit rows from before $dueBefore are in no signed manifest");
+        }
 
         return $issues;
+    }
+
+    /**
+     * verify(), and on any issue a critical log entry and AuditVerificationFailed (docs/10 §5: alerting listens to it).
+     *
+     * @return list<array{type: string, severity: string, detail: string}>
+     */
+    public function verifyAndReport(): array
+    {
+        $issues = $this->verify();
+        if ($issues !== []) {
+            Log::critical('Audit trail verification failed', ['issues' => $issues]);
+            AuditVerificationFailed::dispatch($issues);
+        }
+
+        return $issues;
+    }
+
+    /**
+     * The highest valid signed revision of the range starting at $from, or null (for audit:reanchor).
+     *
+     * @return Signed|null
+     */
+    public function signedRange(int $generation, int $from): ?array
+    {
+        $this->requireKeys();
+        $issues = [];
+        $range = null;
+        foreach ($this->signedManifests($generation, $issues, sprintf('%020d-', $from)) as $entry) {
+            if ($range === null || $entry['manifest']['revision'] > $range['manifest']['revision']) {
+                $range = $entry;
+            }
+        }
+
+        return $range;
     }
 
     /**
@@ -72,7 +164,7 @@ class AuditVerifier
      * @param  list<array{type: string, severity: string, detail: string}>  $issues
      * @return list<array{id: int, row_hash: string}>
      */
-    private function checkRows(int $from, int $to, array &$issues): array
+    public function rows(int $from, int $to, array &$issues): array
     {
         $rows = [];
         $query = $this->db->connection()->table('audit_events')->where('id', '>=', $from)->where('id', '<=', $to)->orderBy('id');
@@ -85,6 +177,107 @@ class AuditVerifier
         }
 
         return $rows;
+    }
+
+    /**
+     * Reads and checks the manifests of the generation (those whose name starts with $prefix after the generation),
+     * reporting invalid ones. Returns the valid ones keyed "from/revision".
+     *
+     * @param  list<array{type: string, severity: string, detail: string}>  $issues
+     * @return array<string, Signed>
+     */
+    private function signedManifests(int $generation, array &$issues, string $prefix = ''): array
+    {
+        $disk = $this->disk();
+        $keys = array_filter($disk->files("g$generation"), fn (string $key): bool => str_starts_with($key, "g$generation/$prefix"));
+        sort($keys, SORT_STRING);
+
+        $signed = [];
+        foreach ($keys as $key) {
+            $body = (string) $disk->get($key);
+            $entry = $this->signedManifest($body);
+            if (is_string($entry)) {
+                $issues[] = $this->issue('manifest_invalid', 'critical', "$key: $entry");
+
+                continue;
+            }
+            $manifest = $entry['manifest'];
+            if ($manifest['generation'] !== $generation || AuditAnchor::objectKey($generation, $manifest['from'], $manifest['to'], $manifest['revision']) !== $key) {
+                $issues[] = $this->issue('manifest_invalid', 'critical', "$key: content does not match its name");
+
+                continue;
+            }
+            $signed["{$manifest['from']}/{$manifest['revision']}"] = $entry + ['key' => $key, 'sha256' => hash('sha256', $body)];
+        }
+
+        return $signed;
+    }
+
+    /**
+     * The highest revision of each range, by first ID.
+     *
+     * @param  array<string, Signed>  $signed
+     * @return list<Manifest>
+     */
+    private function authoritative(array $signed): array
+    {
+        $ranges = [];
+        foreach ($signed as $entry) {
+            $manifest = $entry['manifest'];
+            if (! isset($ranges[$manifest['from']]) || $manifest['revision'] > $ranges[$manifest['from']]['revision']) {
+                $ranges[$manifest['from']] = $manifest;
+            }
+        }
+        ksort($ranges);
+
+        return array_values($ranges);
+    }
+
+    /**
+     * The manifest and signature in an exported object if it is well formed and signed by a trusted key; otherwise why
+     * not. Values are checked before the signature (TASK-0096 #6), so a signed but malformed manifest is never used.
+     *
+     * @return array{manifest: Manifest, signature: string}|string
+     */
+    private function signedManifest(string $body): array|string
+    {
+        try {
+            $object = json_decode($body, true, 4, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return 'not JSON';
+        }
+        $manifest = is_array($object) ? ($object['manifest'] ?? null) : null;
+        $signature = is_array($object) ? ($object['signature'] ?? null) : null;
+        $types = ['v' => 'integer', 'generation' => 'integer', 'revision' => 'integer', 'from' => 'integer', 'to' => 'integer', 'count' => 'integer',
+            'root' => 'string', 'watermark_at' => 'string', 'closed_at' => 'string', 'key_id' => 'string'];
+        if (! is_array($manifest) || ! is_string($signature) || count($object) !== 2 || array_keys($manifest) !== array_keys($types)
+            || array_map(gettype(...), $manifest) !== $types || $manifest['v'] !== AuditAnchor::MANIFEST_VERSION) {
+            return 'not a manifest of this version';
+        }
+        /** @var Manifest $manifest */
+        if ($manifest['generation'] < 1 || $manifest['revision'] < 1 || $manifest['from'] < 1 || $manifest['to'] < $manifest['from']
+            || $manifest['count'] < 0 || $manifest['count'] > $manifest['to'] - $manifest['from'] + 1
+            || preg_match('/^[0-9a-f]{64}$/', $manifest['root']) !== 1 || preg_match('/^[0-9a-f]{16}$/', $manifest['key_id']) !== 1
+            || preg_match(self::TIME, $manifest['watermark_at']) !== 1 || preg_match(self::TIME, $manifest['closed_at']) !== 1) {
+            return 'values out of range';
+        }
+        if (! $this->signer->verify(AuditAnchor::encode($manifest), $manifest['key_id'], $signature)) {
+            return 'signature does not verify with a trusted key';
+        }
+
+        return ['manifest' => $manifest, 'signature' => $signature];
+    }
+
+    private function requireKeys(): void
+    {
+        if ($this->signer->trustedKeys() === []) {
+            throw new RuntimeException('No audit signing key or trusted public key here: audit manifests are signed and verified by the auditor service (docker compose exec auditor php artisan ...).');
+        }
+    }
+
+    private function disk(): Filesystem
+    {
+        return $this->storage->disk((string) $this->config->get('audit.anchor.disk'));
     }
 
     /**
