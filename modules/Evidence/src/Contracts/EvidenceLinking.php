@@ -73,7 +73,8 @@ interface EvidenceLinking
 
     /**
      * The ULIDs of the assets with these IDs, keyed by ID, whoever can see them (P1-48: a system consumer checks an
-     * outbox event's payload against its aggregate); nothing else about them.
+     * outbox event's payload against its aggregate); nothing else about them. System consumers only: it checks no
+     * viewer, so a user-facing path must use summaries() instead (TASK-0095).
      *
      * @param  list<int>  $ids
      * @return array<int, string>
