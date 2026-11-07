@@ -12,7 +12,8 @@ val() { grep -m1 "^$2=" "$1" | cut -d= -f2-; }
 
 # 1. Fresh: all files created, secrets filled, modes 600/700.
 d=$(fresh); run "$d"
-for f in .env .secrets/migrator.env .secrets/services.env .secrets/s3.env .secrets/anchor.env .secrets/signing.env; do
+for f in .env .secrets/migrator.env .secrets/services.env .secrets/s3.env .secrets/anchor.env .secrets/signing.env \
+         .secrets/readonly.env .secrets/backup.env .secrets/restore.env; do
   [ -f "$d/$f" ] && [ "$(stat -c %a "$d/$f")" = 600 ] || bad "fresh: $f missing or not 600"
 done
 [ "$(stat -c %a "$d/.secrets")" = 700 ] || bad "fresh: .secrets not 700"
@@ -56,5 +57,17 @@ run "$d"
   && [[ $(val "$d/.secrets/signing.env" AUDIT_SIGNING_SEED) =~ ^[0-9a-f]{64}$ ]] \
   && [ -z "$(val "$d/.secrets/signing.env" AUDIT_TRUSTED_KEYS)" ] \
   && pass "anchor key moved to anchor.env; signing seed is 64 hex" || bad "anchor key move or signing seed"
+
+# 7. P1-51: the read-only password moves from services.env to readonly.env with its value; the backup object-store
+#    key is filled; the age keys are left to scripts/ops/backup-keys.sh.
+d=$(fresh); run "$d"; keep=$(val "$d/.secrets/readonly.env" DB_READONLY_PASSWORD)
+sed -i '/^DB_READONLY_PASSWORD=/d' "$d/.secrets/readonly.env"; printf 'DB_READONLY_PASSWORD=\n' >> "$d/.secrets/readonly.env"
+printf 'DB_READONLY_PASSWORD=%s\n' "$keep" >> "$d/.secrets/services.env"
+run "$d"
+[ -n "$keep" ] && [ "$(val "$d/.secrets/readonly.env" DB_READONLY_PASSWORD)" = "$keep" ] \
+  && ! grep -q '^DB_READONLY_PASSWORD' "$d/.secrets/services.env" \
+  && [[ $(val "$d/.secrets/backup.env" S3_BACKUP_ACCESS_KEY) =~ ^[0-9a-f]{48}$ ]] \
+  && [ -z "$(val "$d/.secrets/backup.env" BACKUP_AGE_RECIPIENT)" ] && [ -z "$(val "$d/.secrets/restore.env" BACKUP_AGE_IDENTITY)" ] \
+  && pass "read-only password moved to readonly.env; backup key filled" || bad "read-only password move or backup key"
 
 [ $fail -eq 0 ] && echo "init-env tests passed." || exit 1

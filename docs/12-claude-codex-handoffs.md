@@ -8,6 +8,12 @@
 
 ## 1. Operating model (decision D4: manual handoff)
 
+**From 2026-11-08 (PO decision, after a process review): a leaner loop per story.**
+- **Tests:** locally, Claude Code runs Pint, Larastan and the changed module's tests only. The full suite runs in CI, where it takes 17 minutes against about 90 locally.
+- **Codex:** one review, then fixes, then one verification of those fixes, and the loop stops there. Codex's output is still recorded verbatim in `handoffs/TASK-####-review.md`. There are no separate brief or prompt files and no session-history rows. Under §2, Codex is skipped for UI-only and docs-only changes.
+- **Scope:** each story starts with a stated size and time box. A story larger than its roadmap size is sliced. Claude Code decides routine design questions; trade-offs go to the PO.
+- **Docs and pushes:** each story gets one PR description and one short roadmap line, and the design docs change only when the design does. Branches are pushed early, so CI overlaps the review. The next independent story starts while a PR waits for merge.
+
 **From 2026-11-04 (PO decision): roles switched back. Claude Code implements and Codex reviews read-only, as until 2026-11-02 (below).**
 
 **What happened during Codex's turn as implementer:**
@@ -145,6 +151,8 @@ AI approval never replaces human approval.
 | TASK-0096 | Review of P1-50 (signed audit anchor) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/audit-anchor` @ `6c7e795` | **Reviewed: "no"; 2 high (a forged supplement could be signed; deleted export records undetected), 3 medium, 1 low; all fixed with tests.** | `handoffs/TASK-0096-review.md` |
 | TASK-0097 | Verification of the TASK-0096 fixes (P1-50) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/audit-anchor` @ `13b89f7` | **"Yes after fixes": #1, #3–#6 resolved; #2 not fully (re-recording blocked after later ranges; `manifest_sha256` not compared); both fixed with tests.** | `handoffs/TASK-0097-review.md` |
 | TASK-0098 | Verification of the TASK-0097 fixes (P1-50) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/audit-anchor` @ `cab5e2f` (pushed as `1f50837`, see below) | **Verified: both resolved, no new finding, "yes".** | `handoffs/TASK-0098-review.md` |
+| TASK-0099 | Review of P1-51 (encrypted backup and restore drill), diff `60468a3..ce1d5af` | Claude Code | Reviewer (read-only; lean loop) | `feature/restore-drill` @ `ce1d5af` | **Reviewed: 3 high, 3 medium, 1 low; "no". All seven fixed with tests.** Verified in TASK-0100 | `handoffs/TASK-0099-review.md` |
+| TASK-0100 | Verification of the TASK-0099 fixes (P1-51) | Claude Code | Verifier (read-only; lean loop, single round) | `feature/restore-drill` @ `613b1b7` | **Verified: 6 of 7 resolved; #2 partly (containers and networks), 1 new medium (equal bucket names); "no". Both fixed (a unique project per run, no `--remove-orphans`, distinct buckets) and checked by CI; no further round (docs/12 §1).** | `handoffs/TASK-0100-review.md` |
 
 **P1-50 commit hashes.** Before the first push, the secrets scan flagged two synthetic test values in `scripts/ci/init-env-test.sh` (scenario 6). With the PO's approval, the four unpushed commits were rewritten so that those values never enter history. The only change is that the values became `aaaa…`/`bbbb…`. The reviewed hashes map to the pushed ones as follows: `6c7e795` → `1f5ab6d`, `13b89f7` → `87ba990`, `cab5e2f` → `1f50837`, `2842c93` → `cad6dc3`. Codex's records keep the hashes it reviewed.
 

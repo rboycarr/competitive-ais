@@ -39,7 +39,7 @@ if out=$(php php artisan migrate:status 2>&1); then
 fi
 grep -q 'only available in the migrator service' <<<"$out" || { echo "Unexpected failure: $out" >&2; exit 1; }
 CURRENT="runtime secrets: files and variables in the php service"
-leaks=$(php sh -c 'ls -A /var/www/html/.secrets; env | cut -d= -f1 | grep -E "^(DB_MIGRATOR_|S3_ADMIN_|S3_ANCHOR_|AUDIT_SIGNING_|MYSQL_ROOT|DB_READONLY)" || true')
+leaks=$(php sh -c 'ls -A /var/www/html/.secrets; env | cut -d= -f1 | grep -E "^(DB_MIGRATOR_|S3_ADMIN_|S3_ANCHOR_|S3_BACKUP_|AUDIT_SIGNING_|BACKUP_AGE_|MYSQL_ROOT|DB_READONLY)" || true')
 [ -z "$leaks" ] || { echo "Secrets visible in the php service: $leaks" >&2; exit 1; }
 # P1-50 (PO decision O43): across all services, only the auditor gets the signing seed, and only it and SeaweedFS
 # the audit-anchor key. `compose config` resolves env_file into environment; only service names are printed.
@@ -48,6 +48,11 @@ holders() { docker compose --profile tools config --format json | jq -r --arg v 
 [ "$(holders AUDIT_SIGNING_SEED)" = "auditor" ] || { echo "AUDIT_SIGNING_SEED is given to: $(holders AUDIT_SIGNING_SEED)" >&2; exit 1; }
 [ "$(holders S3_ANCHOR_ACCESS_KEY)" = "auditor seaweedfs" ] || { echo "S3_ANCHOR_ACCESS_KEY is given to: $(holders S3_ANCHOR_ACCESS_KEY)" >&2; exit 1; }
 [ "$(holders S3_ADMIN_ACCESS_KEY)" = "seaweedfs seaweedfs-init" ] || { echo "S3_ADMIN_ACCESS_KEY is given to: $(holders S3_ADMIN_ACCESS_KEY)" >&2; exit 1; }
+# P1-51: the backup key and the read-only password only to the backup service (and SeaweedFS / MySQL to verify them);
+# the decryption key to no service of the development project (only the drill project's restore service has it).
+[ "$(holders S3_BACKUP_ACCESS_KEY)" = "backup seaweedfs" ] || { echo "S3_BACKUP_ACCESS_KEY is given to: $(holders S3_BACKUP_ACCESS_KEY)" >&2; exit 1; }
+[ "$(holders DB_READONLY_PASSWORD)" = "backup mysql" ] || { echo "DB_READONLY_PASSWORD is given to: $(holders DB_READONLY_PASSWORD)" >&2; exit 1; }
+[ -z "$(holders BACKUP_AGE_IDENTITY)" ] || { echo "BACKUP_AGE_IDENTITY is given to: $(holders BACKUP_AGE_IDENTITY)" >&2; exit 1; }
 # Every service that bind-mounts the repository must hide .secrets with a tmpfs.
 CURRENT="runtime secrets: compose config (every repo mount hides .secrets)"
 unhidden=$(docker compose --profile tools config --format json | jq -r --arg root "$PWD" '

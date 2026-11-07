@@ -11,7 +11,8 @@ command -v docker >/dev/null || { echo "Docker is not available in this shell (d
 bash scripts/dev/init-env.sh
 
 echo "Building images"
-DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose build
+DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --profile tools build
+bash scripts/ops/backup-keys.sh   # the backup encryption key pair, if there is none (P1-51)
 
 echo "Installing PHP and Node dependencies (lock files)"
 docker compose run --rm --no-deps php composer install --no-interaction
@@ -39,6 +40,7 @@ Ready:
   Mailpit    http://localhost:8025
   Horizon    http://localhost:8080/horizon (local only)
 Check the object-store key policy:  bash scripts/dev/verify-object-store.sh
+Backup and restore drill:  docker compose run --rm backup && bash scripts/ops/restore-drill.sh
 Migrations and tests (migrator account):  docker compose run --rm migrator php artisan migrate | test
 Daily start:  docker compose up -d --wait     Stop:  docker compose stop
 EOF
