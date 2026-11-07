@@ -8,6 +8,8 @@ type Asset = {
     ulid: string; title: string; description: string | null; status: string; scanStatus: string; originalFilename: string; sizeBytes: number;
     sourceUrl: string | null; capturedAt: string; uploadedBy: string | null; uploadedAt: string | null; classification: string; legalHold: boolean;
     competitors: string[]; markets: string[]; source: CaptureSource | null; sha256?: string | null;
+    // P1-48: the stored bytes' integrity ('mismatch' after a failed re-hash) and when the asset was withdrawn.
+    integrity?: string | null; withdrawnAt?: string | null;
 };
 // P1-45: the intelligence citing this evidence; items the viewer cannot see are only counted.
 type Citations = { items: { ulid: string; title: string; status: string; relations: string[] }[]; hidden: number };
@@ -15,7 +17,16 @@ type Citations = { items: { ulid: string; title: string; status: string; relatio
 type CaptureSource = { visible: false } | { visible: true; ulid: string; name: string; status: string; policyVersion: number | null; policyDecidedAt: string | null };
 type CustodyEvent = { event: string; actor: string | null; occurredAt: string; reason: string | null };
 
-const props = defineProps<{ asset: Asset; canDownload: boolean; canHold: boolean; custody: CustodyEvent[]; citations?: Citations | null }>();
+const props = defineProps<{ asset: Asset; canDownload: boolean; canHold: boolean; canWithdraw?: boolean; custody: CustodyEvent[]; citations?: Citations | null }>();
+
+// P1-48: withdrawal is final and needs a reason; the server checks again and flags the intelligence citing it.
+const withdrawForm = useForm<{ reason: string }>({ reason: '' });
+function withdraw(): void {
+    if (!window.confirm('Withdraw this evidence? It stays on record but no longer supports anything, and this cannot be undone.')) {
+        return;
+    }
+    withdrawForm.post(`/evidence/${props.asset.ulid}/withdraw`, { preserveScroll: true, onSuccess: () => (withdrawForm.reason = '') });
+}
 
 // P1-35: a reason is required both to place and to release a hold (PO decision O35); the server checks again.
 const holdForm = useForm<{ hold: boolean; reason: string }>({ hold: true, reason: '' });
@@ -47,6 +58,14 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
         <p class="mb-4 text-sm"><Link href="/evidence" class="underline">All evidence</Link></p>
         <p v-if="props.asset.status === 'quarantined'" class="mb-4 max-w-2xl rounded border border-amber-300 bg-amber-50 p-3 text-sm" role="status">
             In quarantine: the file has not been scanned yet, so nobody can open it, and only its uploader and directors see this record.
+        </p>
+        <p v-if="props.asset.status === 'withdrawn'" class="mb-4 max-w-2xl rounded border border-red-300 bg-red-50 p-3 text-sm" role="note">
+            Withdrawn{{ props.asset.withdrawnAt ? ` on ${when(props.asset.withdrawnAt)}` : '' }}: kept on record for provenance, but it no longer supports
+            any intelligence and cannot be downloaded. Intelligence citing it is flagged for re-review.
+        </p>
+        <p v-if="props.asset.integrity === 'mismatch'" class="mb-4 max-w-2xl rounded border border-red-300 bg-red-50 p-3 text-sm" role="note">
+            Integrity check failed: the stored file no longer matches its SHA-256, or is missing. It cannot be downloaded or cited, and intelligence
+            citing it is flagged for re-review.
         </p>
         <p v-if="props.asset.legalHold" class="mb-4 max-w-2xl rounded border border-red-300 bg-red-50 p-3 text-sm" role="note">
             On legal hold: the stored file cannot be deleted, whatever its retention date, until a director releases the hold.
@@ -96,6 +115,16 @@ const when = (iso: string | null): string => (iso === null ? '—' : new Date(is
             </button>
             <ul v-if="Object.keys(holdForm.errors).length > 0" class="text-sm text-red-700" role="alert">
                 <li v-for="(message, field) in holdForm.errors" :key="field">{{ message }}</li>
+            </ul>
+        </form>
+        <form v-if="props.canWithdraw" class="mb-6 max-w-2xl space-y-2" @submit.prevent="withdraw">
+            <label for="withdraw-reason" class="block text-sm font-medium">Reason for withdrawing this evidence</label>
+            <textarea id="withdraw-reason" v-model="withdrawForm.reason" required maxlength="1000" rows="2" :aria-invalid="withdrawForm.errors.reason ? 'true' : undefined" class="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+            <button type="submit" class="rounded border border-red-700 px-4 py-2 text-sm font-medium text-red-800 disabled:opacity-50" :disabled="withdrawForm.processing">
+                Withdraw evidence
+            </button>
+            <ul v-if="Object.keys(withdrawForm.errors).length > 0" class="text-sm text-red-700" role="alert">
+                <li v-for="(message, field) in withdrawForm.errors" :key="field">{{ message }}</li>
             </ul>
         </form>
         <section v-if="props.citations" aria-labelledby="citations-heading" class="mb-6 max-w-2xl">

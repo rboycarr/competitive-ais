@@ -215,7 +215,8 @@ final class EvidenceScanService
     }
 
     /**
-     * Under a lock on the asset: records the result, only if the asset still waits for it.
+     * Under a lock on the asset: records the result, only if the asset still waits for it. A clean result whose blob
+     * is marked `mismatch` (P1-48) is a rejection, `stored_copy_failed`: the bytes on record for that hash are known bad.
      *
      * @param  'clean'|'infected'|'type_mismatch'  $result
      */
@@ -229,6 +230,10 @@ final class EvidenceScanService
             // Asset, then blob: the order EvidenceHoldService locks them in. The link and the blob's retention change
             // under the blob's lock, as every change to what a blob must keep does (EvidenceBlobReconciler).
             $blob = $blobId === null ? null : EvidenceBlob::query()->lockForUpdate()->findOrFail($blobId);
+            // P1-48 (TASK-0094 #2): never made available on a stored copy a re-hash found changed or missing.
+            if ($blob !== null && $blob->integrity_status !== 'ok') {
+                [$result, $blob, $blobId] = ['stored_copy_failed', null, null];
+            }
             $now = CarbonImmutable::now('UTC');
             $asset->forceFill([
                 'status' => $result === 'clean' ? 'available' : 'rejected',

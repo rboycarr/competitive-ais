@@ -23,12 +23,15 @@ const RELATIONS: Record<string, string> = { supports: 'Supports', contradicts: '
 // P1-43: verification decisions, as a review history row reads.
 const DECISIONS: Record<string, string> = {
     assign: 'Assigned', reassign: 'Reassigned', approve: 'Approved', request_changes: 'Changes requested', reject: 'Rejected',
-    publish: 'Published', flag_for_rereview: 'Flagged for re-review',
+    publish: 'Published', flag_for_rereview: 'Flagged for re-review', clear_rereview: 'Re-review cleared',
 };
 // The choices a reviewer makes.
 const DECISION_CHOICES: Record<string, string> = { approve: 'Approve', request_changes: 'Request changes', reject: 'Reject' };
+// P1-48: why an item was flagged for re-review.
+const REREVIEW_CAUSES: Record<string, string> = { evidence_withdrawn: 'Evidence withdrawn', evidence_integrity_failed: 'Evidence failed an integrity check' };
 
 export const decisionLabel = (decision: string): string => DECISIONS[decision] ?? decision;
+export const rereviewCauseLabel = (cause: string): string => REREVIEW_CAUSES[cause] ?? cause;
 export const decisionChoiceLabel = (decision: string): string => DECISION_CHOICES[decision] ?? decision;
 // How long an item has waited since it was submitted, in whole minutes, hours or days (the queue's age).
 export function ageLabel(iso: string | null, now: Date = new Date()): string {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Link } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
-import { claimTypeLabel, decisionLabel, ratingTitle, relationLabel, statusLabel } from './labels';
+import { claimTypeLabel, decisionLabel, ratingTitle, relationLabel, rereviewCauseLabel, statusLabel } from './labels';
 
 type Linked = { ulid: string; title: string; status: string } | null;
 type Source = { visible: false } | { visible: true; ulid: string; name: string; policyVersion: number | null; policyDecidedAt: string | null } | null;
@@ -25,6 +25,8 @@ const props = defineProps<{
     reviews: { ulid: string; decision: string; by: string | null; assignee: string | null; rationale: string | null; version: number; contentHash: string; decidedAt: string }[];
     retraction: { reason: string; by: string | null; at: string; replacement: Linked } | null;
     supersedes: Linked; supersededBy: Linked;
+    // P1-48: flags for re-review, open or cleared; the evidence is named only when the viewer can see it.
+    flags?: { ulid: string; cause: string; raisedAt: string; version: number; evidence: { ulid: string; title: string } | null; open: boolean }[];
     audit: { events: { ulid: string; action: string; actor: string; occurredAt: string; context: Record<string, unknown> }[]; more: boolean } | null;
 }>();
 
@@ -116,6 +118,18 @@ const short = (hash: string): string => `${hash.slice(0, 12)}…`;
                     version {{ r.version }}, content <span class="font-mono" :title="r.contentHash">{{ short(r.contentHash) }}</span>
                     <span v-if="r.contentHash === props.content.hash" class="text-slate-600"> (as now)</span>
                     <p v-if="r.rationale" class="whitespace-pre-line pl-4 text-slate-700">{{ r.rationale }}</p>
+                </li>
+            </ol>
+        </section>
+
+        <section v-if="props.flags && props.flags.length > 0" aria-labelledby="flags-heading" class="mb-8 max-w-4xl">
+            <h2 id="flags-heading" class="mb-2 text-lg font-semibold">Flags for re-review</h2>
+            <ol class="space-y-1 text-sm">
+                <li v-for="f in props.flags" :key="f.ulid">
+                    {{ when(f.raisedAt) }}: {{ rereviewCauseLabel(f.cause) }},
+                    <Link v-if="f.evidence" :href="`/evidence/${f.evidence.ulid}`" class="underline">{{ f.evidence.title }}</Link>
+                    <template v-else>evidence you cannot see</template>; version {{ f.version }}
+                    <span :class="f.open ? 'font-medium text-amber-900' : 'text-slate-600'">({{ f.open ? 'open' : 'cleared' }})</span>
                 </li>
             </ol>
         </section>

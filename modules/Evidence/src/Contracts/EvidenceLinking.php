@@ -7,8 +7,9 @@ use Illuminate\Contracts\Auth\Authenticatable;
 /**
  * Evidence for claims (P1-41, docs/03 Evidence): which assets a viewer may cite, and the custody trail of each link.
  * Assets are seen as on the evidence pages (evidence.view, then EvidenceAsset::seenBy); one the viewer cannot see is left out, like one
- * that does not exist. Only `available` evidence (scanned clean, stored) can be cited. Returns summaries, never the
- * model.
+ * that does not exist. Only `available` evidence (scanned clean, stored) can be cited. Since P1-48, "available" below
+ * also means that its stored bytes passed their integrity checks: evidence whose blob is marked `mismatch` is neither
+ * citable nor support. Returns summaries, never the model.
  */
 interface EvidenceLinking
 {
@@ -69,6 +70,16 @@ interface EvidenceLinking
      * @return list<int>
      */
     public function availableSeen(Authenticatable $viewer, array $ids): array;
+
+    /**
+     * The ULIDs of the assets with these IDs, keyed by ID, whoever can see them (P1-48: a system consumer checks an
+     * outbox event's payload against its aggregate); nothing else about them. System consumers only: it checks no
+     * viewer, so a user-facing path must use summaries() instead (TASK-0095).
+     *
+     * @param  list<int>  $ids
+     * @return array<int, string>
+     */
+    public function ulids(array $ids): array;
 
     /**
      * The assets with these IDs that the viewer can see, keyed by ID, in any status the viewer may see.

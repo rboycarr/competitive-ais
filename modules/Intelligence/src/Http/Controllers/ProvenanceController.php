@@ -14,6 +14,7 @@ use Modules\Identity\Contracts\UserDirectory;
 use Modules\Intelligence\Models\ClaimEvidenceLink;
 use Modules\Intelligence\Models\IntelligenceClaim;
 use Modules\Intelligence\Models\IntelligenceItem;
+use Modules\Intelligence\Models\RereviewFlag;
 use Modules\Intelligence\Models\VerificationReview;
 use Modules\Intelligence\Support\IntelligenceContent;
 use Modules\Platform\Access\AccessScope;
@@ -62,6 +63,8 @@ class ProvenanceController
             fn (IntelligenceClaim $c) => $c->evidenceLinks->pluck('evidence_asset_id'))->map(fn ($id): int => (int) $id)->all())));
         $reviews = $item->reviews()->orderBy('decided_at')->orderBy('id')->get();
         $retraction = $item->retraction()->first();
+        // P1-48: every flag for re-review, open or cleared (the clearing is a review row).
+        $flags = $item->rereviewFlags()->orderBy('raised_at')->orderBy('id')->get();
         $trail = $this->gate->forUser($viewer)->allows('audit.view')
             ? AuditEvent::query()->visibleTo($viewer)->where('subject_ulid', $item->ulid)->orderBy('id')->limit(self::AUDIT_LIMIT + 1)->get()
             : null;
@@ -88,7 +91,7 @@ class ProvenanceController
             return $found === null ? null : ['ulid' => $found->ulid, 'title' => $found->title, 'status' => $found->status];
         };
         // ULIDs an audit context may show: what this page shows the viewer (TASK-0092 #1).
-        $shown = array_flip(array_merge([$item->ulid], $claims->pluck('ulid')->all(), $reviews->pluck('ulid')->all(),
+        $shown = array_flip(array_merge([$item->ulid], $claims->pluck('ulid')->all(), $reviews->pluck('ulid')->all(), $flags->pluck('ulid')->all(),
             array_map(fn (EvidenceTrace $t): string => $t->ulid, array_values($traces)), $linked->pluck('ulid')->all()));
 
         if ($trail !== null) {
@@ -145,6 +148,16 @@ class ProvenanceController
             ],
             'supersedes' => $link($item->supersedes_id),
             'supersededBy' => $link($supersededBy === null ? null : (int) $supersededBy),
+            // P1-48: the evidence is named only when the viewer sees it (it is then among the traces); open while the
+            // item is flagged and it was raised since.
+            'flags' => $flags->map(fn (RereviewFlag $f): array => [
+                'ulid' => $f->ulid,
+                'cause' => $f->cause,
+                'raisedAt' => $f->raised_at->toIso8601ZuluString(),
+                'version' => $f->item_version,
+                'evidence' => isset($traces[$f->evidence_asset_id]) ? ['ulid' => $traces[$f->evidence_asset_id]->ulid, 'title' => $traces[$f->evidence_asset_id]->title] : null,
+                'open' => $item->rereview_since !== null && $f->raised_at->greaterThanOrEqualTo($item->rereview_since),
+            ])->values()->all(),
             'audit' => $trail === null ? null : [
                 'events' => $trail->take(self::AUDIT_LIMIT)->map(fn (AuditEvent $e): array => [
                     'ulid' => $e->ulid,

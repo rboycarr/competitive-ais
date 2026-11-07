@@ -14,6 +14,8 @@ Route::middleware('auth')->group(function () {
             ->middleware(['can:evidence.download', 'throttle:evidence-downloads'])->name('evidence.download');
         // P1-35: evidence.hold too; EvidenceHoldService checks again.
         Route::post('/evidence/{asset}/hold', [EvidenceController::class, 'hold'])->middleware('can:evidence.hold')->name('evidence.hold');
+        // P1-48: withdrawal, by the same directors; EvidenceWithdrawalService checks again.
+        Route::post('/evidence/{asset}/withdraw', [EvidenceController::class, 'withdraw'])->middleware('can:evidence.hold')->name('evidence.withdraw');
     });
     Route::post('/evidence', [EvidenceController::class, 'store'])->middleware('can:evidence.upload')->name('evidence.store');
 });

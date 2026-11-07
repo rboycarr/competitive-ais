@@ -23,7 +23,11 @@ use Illuminate\Database\Eloquent\Model;
  */
 class VerificationReview extends Model
 {
-    /** The decisions written by P1-43; `publish` and `flag_for_rereview` come with P1-44 and P1-48. */
+    /**
+     * The decisions written by P1-43; `publish` came with P1-44, `clear_rereview` (a director confirms a flagged item
+     * still stands, with a reason) with P1-48. `flag_for_rereview` is allowed by the table but not written: the system
+     * raises flags as `rereview_flags` rows, and a director flagging by hand is not built yet.
+     */
     public const ASSIGNMENTS = ['assign', 'reassign'];
 
     public const DECISIONS = ['approve', 'request_changes', 'reject'];

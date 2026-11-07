@@ -125,6 +125,37 @@ final class LockedObjects
         ];
     }
 
+    /**
+     * The bytes of one stored version, as a stream the caller closes (P1-48: the integrity re-hash), or null when the
+     * store has no such object or version. Any other error is raised, so an unreachable store is never taken for a
+     * missing object. Any other disk reads the key, in tests only: the fakes keep no versions (TASK-0094 #3), so
+     * version fidelity is tested against the S3 adapter with the SDK's mock handler.
+     *
+     * @return resource|null
+     */
+    public static function readVersion(Filesystem $disk, string $key, ?string $versionId)
+    {
+        if (! $disk instanceof AwsS3V3Adapter) {
+            if (! app()->environment('testing')) {
+                throw new RuntimeException('Stored versions are read from the S3 object store.');
+            }
+
+            return $disk->exists($key) ? $disk->readStream($key) : null;
+        }
+
+        try {
+            $result = $disk->getClient()->getObject(self::version($disk, $key, $versionId));
+        } catch (AwsException $e) {
+            if (in_array($e->getAwsErrorCode(), ['NoSuchKey', 'NoSuchVersion'], true)) {
+                return null;
+            }
+
+            throw $e;
+        }
+
+        return $result['Body']->detach();
+    }
+
     /** @return array{Bucket: string, Key: string, VersionId: string} */
     private static function version(AwsS3V3Adapter $disk, string $key, ?string $versionId): array
     {

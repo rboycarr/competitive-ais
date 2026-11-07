@@ -4,7 +4,7 @@ import { Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import MarkdownView, { type MarkdownNode } from '@/Components/MarkdownView';
 import ItemForm, { type ItemFields } from '../../Components/ItemForm.vue';
-import { claimTypeLabel, credibilityLabel, decisionChoiceLabel, decisionLabel, ratingTitle, relationLabel, reliabilityLabel, statusLabel, typeLabel } from './labels';
+import { claimTypeLabel, credibilityLabel, decisionChoiceLabel, decisionLabel, ratingTitle, relationLabel, reliabilityLabel, rereviewCauseLabel, statusLabel, typeLabel } from './labels';
 
 type Option = { ulid: string; name: string };
 type Citation = {
@@ -27,6 +27,12 @@ type Publication = {
     retraction: { reason: string; by: string | null; at: string; replacement: Linked } | null;
     canPublish: boolean; publishProblems: string[]; canRetract: boolean; replacementOptions: { ulid: string; title: string }[]; canReplace: boolean;
 };
+// P1-48: open flags for re-review; the evidence is named only when the viewer can see it.
+type Rereview = {
+    since: string;
+    flags: { cause: string; raisedAt: string; evidence: { ulid: string; title: string } | null }[];
+    canClear: boolean; clearProblems: string[];
+};
 
 const props = defineProps<{
     item: {
@@ -42,6 +48,7 @@ const props = defineProps<{
     submission: { problems: string[] } | null;
     review: Review;
     publication: Publication;
+    rereview?: Rereview | null;
     relations: string[]; evidenceOptions: { ulid: string; title: string; capturedAt: string }[]; evidenceSearch: string | null;
     types?: string[]; classifications?: string[]; competitorOptions?: Option[]; productOptions?: Option[]; marketOptions?: Option[];
 }>();
@@ -142,6 +149,11 @@ const retraction = useForm({ reason: '', replacement: '' });
 function retract(): void {
     retraction.post(`${base.value}/retract`, { preserveScroll: true, onSuccess: () => retraction.reset() });
 }
+// P1-48: a director confirms the flagged item still stands, with the reason; the server checks again.
+const clearing = useForm({ rationale: '' });
+function clearRereview(): void {
+    clearing.transform((data) => ({ ...data, version: props.item.version })).post(`${base.value}/rereview/clear`, { preserveScroll: true, onSuccess: () => clearing.reset() });
+}
 function draftReplacement(): void {
     router.post(`${base.value}/replacement`);
 }
@@ -168,6 +180,33 @@ function uncite(c: Claim, e: Citation): void {
             <p class="font-semibold text-red-800">Retracted {{ when(props.publication.retraction.at) }}<template v-if="props.publication.retraction.by"> by {{ props.publication.retraction.by }}</template>. Do not rely on it.</p>
             <p class="whitespace-pre-line">{{ props.publication.retraction.reason }}</p>
             <p v-if="props.publication.retraction.replacement">Replaced by <Link :href="`/intelligence/${props.publication.retraction.replacement.ulid}`" class="underline">{{ props.publication.retraction.replacement.title }}</Link></p>
+        </div>
+        <div v-if="props.rereview" role="note" class="mb-4 max-w-3xl rounded border border-amber-700 bg-amber-50 p-3 text-sm">
+            <p class="font-semibold text-amber-900">Under re-review since {{ when(props.rereview.since) }}: evidence it cites was withdrawn or failed an integrity check. Check its claims before relying on it.</p>
+            <ul class="mt-1 list-disc pl-5">
+                <li v-for="(flag, index) in props.rereview.flags" :key="`${flag.raisedAt}-${index}`">
+                    {{ rereviewCauseLabel(flag.cause) }}:
+                    <Link v-if="flag.evidence" :href="`/evidence/${flag.evidence.ulid}`" class="underline">{{ flag.evidence.title }}</Link>
+                    <template v-else>evidence you cannot see</template>
+                    ({{ when(flag.raisedAt) }})
+                </li>
+            </ul>
+            <form v-if="props.rereview.canClear" class="mt-3 space-y-2" novalidate @submit.prevent="clearRereview">
+                <template v-if="props.rereview.clearProblems.length > 0">
+                    <p>It cannot be cleared: retract it or draft a replacement, or fix what follows.</p>
+                    <ul class="list-disc pl-5">
+                        <li v-for="problem in props.rereview.clearProblems" :key="problem">{{ problem }}</li>
+                    </ul>
+                </template>
+                <template v-else>
+                    <label for="clear-rationale" class="block font-medium">Why it still stands</label>
+                    <textarea id="clear-rationale" v-model="clearing.rationale" required maxlength="5000" rows="2" :aria-invalid="clearing.errors.rationale ? 'true' : undefined" aria-describedby="clear-errors" class="w-full rounded border border-slate-300 bg-white px-3 py-2" />
+                    <ul id="clear-errors" class="text-red-700" role="alert">
+                        <li v-for="message in Object.values(clearing.errors)" :key="message">{{ message }}</li>
+                    </ul>
+                    <button type="submit" :disabled="clearing.processing" class="rounded border border-amber-800 bg-white px-4 py-2 font-medium disabled:opacity-50">Clear the re-review</button>
+                </template>
+            </form>
         </div>
         <p v-if="props.publication.supersededBy" role="note" class="mb-4 max-w-3xl rounded border border-amber-700 bg-amber-50 p-3 text-sm">
             Superseded by <Link :href="`/intelligence/${props.publication.supersededBy.ulid}`" class="underline">{{ props.publication.supersededBy.title }}</Link>.

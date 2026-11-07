@@ -13,6 +13,7 @@ use Modules\Evidence\Contracts\EvidenceSummary;
 use Modules\Evidence\Models\EvidenceAsset;
 use Modules\Evidence\Models\EvidenceAssetCompetitor;
 use Modules\Evidence\Models\EvidenceAssetMarket;
+use Modules\Evidence\Models\EvidenceBlob;
 use Modules\Evidence\Models\EvidenceCustodyEvent;
 use Modules\Platform\Access\AccessScope;
 use Modules\Platform\Audit\Actor;
@@ -30,7 +31,7 @@ class EloquentEvidenceLinking implements EvidenceLinking
 
     public function linkable(Authenticatable $viewer, ?string $search, int $limit): array
     {
-        $query = $this->seen($viewer)->where('status', 'available');
+        $query = $this->seen($viewer)->where('status', 'available')->whereHas('blob', fn (Builder $q) => $q->where('integrity_status', 'ok'));
         if ($search !== null && trim($search) !== '') {
             $query->where('title', 'like', '%'.addcslashes(trim($search), '\\%_').'%');
         }
@@ -46,7 +47,7 @@ class EloquentEvidenceLinking implements EvidenceLinking
         // would see its earlier snapshot, missing scopes another link committed while this one waited for the lock.
         $asset = EvidenceAsset::query()->where('ulid', strtoupper($ulid))->lockForUpdate()->first();
 
-        return $asset === null || $asset->status !== 'available' || ! $this->seesNow($viewer, $asset) ? null : $this->summary($asset);
+        return $asset === null || $this->intact([$asset], false) === [] || ! $this->seesNow($viewer, $asset) ? null : $this->summary($asset);
     }
 
     public function lockSeen(Authenticatable $viewer, array $ids): array
@@ -69,9 +70,8 @@ class EloquentEvidenceLinking implements EvidenceLinking
             return [];
         }
         $query = EvidenceAsset::query()->whereIn('id', $ids)->orderBy('id');
-        $assets = ($lock ? $query->sharedLock() : $query)->get(['id', 'status']);
 
-        return array_values($assets->where('status', 'available')->pluck('id')->map(fn ($id): int => (int) $id)->all());
+        return $this->intact(($lock ? $query->sharedLock() : $query)->get(['id', 'status', 'evidence_blob_id'])->all(), $lock);
     }
 
     public function availableSeen(Authenticatable $viewer, array $ids): array
@@ -81,9 +81,36 @@ class EloquentEvidenceLinking implements EvidenceLinking
             return [];
         }
 
-        return array_values(EvidenceAsset::query()->whereIn('id', $ids)->orderBy('id')->sharedLock()->get()
-            ->filter(fn (EvidenceAsset $a): bool => $a->status === 'available' && $this->seesNow($viewer, $a))
-            ->pluck('id')->map(fn ($id): int => (int) $id)->all());
+        $seen = EvidenceAsset::query()->whereIn('id', $ids)->orderBy('id')->sharedLock()->get()
+            ->filter(fn (EvidenceAsset $a): bool => $this->seesNow($viewer, $a));
+
+        return $this->intact($seen->values()->all(), true);
+    }
+
+    /**
+     * The IDs of those assets that are available and whose stored bytes passed their integrity checks (P1-48: a blob
+     * marked `mismatch` supports nothing). With $lock, the blobs are read in share mode (after the assets: the order of
+     * the re-hash, EvidenceIntegrityService), so the latest committed mark is seen and none is set meanwhile.
+     *
+     * @param  array<int, EvidenceAsset>  $assets
+     * @return list<int>
+     */
+    private function intact(array $assets, bool $lock): array
+    {
+        $available = array_filter($assets, fn (EvidenceAsset $a): bool => $a->status === 'available' && $a->evidence_blob_id !== null);
+        if ($available === []) {
+            return [];
+        }
+        $query = EvidenceBlob::query()->whereIn('id', array_values(array_unique(array_map(fn (EvidenceAsset $a): int => (int) $a->evidence_blob_id, $available))))->orderBy('id');
+        $ok = array_map('intval', ($lock ? $query->sharedLock() : $query)->where('integrity_status', 'ok')->pluck('id')->all());
+
+        return array_values(array_map(fn (EvidenceAsset $a): int => (int) $a->id,
+            array_filter($available, fn (EvidenceAsset $a): bool => in_array((int) $a->evidence_blob_id, $ok, true))));
+    }
+
+    public function ulids(array $ids): array
+    {
+        return $ids === [] ? [] : array_map('strval', EvidenceAsset::query()->whereIn('id', $ids)->pluck('ulid', 'id')->all());
     }
 
     public function inherit(Authenticatable $actor, int $assetId, string $itemUlid, array $competitorIds, array $marketIds): bool

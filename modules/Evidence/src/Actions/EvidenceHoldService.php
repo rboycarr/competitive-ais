@@ -51,7 +51,7 @@ class EvidenceHoldService
         if (! EvidenceAsset::seenBy(EvidenceAsset::query(), $actor, $this->gate)->whereKey($asset->id)->exists()) {
             throw (new ModelNotFoundException)->setModel(EvidenceAsset::class, [$asset->ulid]);
         }
-        $reason = $this->reason($reason);
+        $reason = self::reason($reason);
         $userId = (int) $actor->getAuthIdentifier();
 
         $released = $this->db->transaction(function () use ($actor, $asset, $hold, $reason, $userId): ?int {
@@ -111,8 +111,11 @@ class EvidenceHoldService
         });
     }
 
-    /** Required, at most MAX_REASON characters, valid UTF-8, no control characters other than line breaks and tabs. */
-    private function reason(mixed $value): string
+    /**
+     * Required, at most MAX_REASON characters, valid UTF-8, no control characters other than line breaks and tabs (also
+     * the rule for a withdrawal's reason, P1-48).
+     */
+    public static function reason(mixed $value): string
     {
         $reason = is_string($value) ? trim($value) : '';
         if ($reason === '') {

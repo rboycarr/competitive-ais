@@ -2,17 +2,20 @@
 
 namespace Modules\Intelligence;
 
+use Modules\Evidence\Events\EvidenceEvents;
 use Modules\Intelligence\Contracts\IntelligenceCitations;
 use Modules\Intelligence\Contracts\IntelligenceReferences;
 use Modules\Intelligence\Lookup\EloquentIntelligenceCitations;
 use Modules\Intelligence\Lookup\EloquentIntelligenceReferences;
+use Modules\Intelligence\Outbox\FlagCitingItems;
 use Modules\Platform\Audit\AuditActions;
+use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Support\ModuleServiceProvider;
 
 /**
  * Intelligence (M10, docs/03): items, their subjects and their typed, rated claims (P1-40), and the evidence the claims
- * cite (P1-41), submission (P1-42) and the verification queue (P1-43). Publication (P1-44) and the provenance view
- * (P1-45) follow.
+ * cite (P1-41), submission (P1-42) and the verification queue (P1-43). Publication (P1-44), the provenance view
+ * (P1-45) and flags for re-review when cited evidence fails (P1-48) follow.
  * Items are classified records scoped by their competitor and market subjects (all-of); unreleased items are seen only
  * per statusVisible (docs/07 §3).
  */
@@ -58,6 +61,14 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
         $audit->define('intelligence.replacement_drafted', ['replaces_ulid' => 'ulid']);
         // P1-45: showing an item's audit trail is itself audited (as an audit search is), with how many rows were shown.
         $audit->define('intelligence.provenance_viewed', ['events' => 'int']);
+        // P1-48: flags for re-review (raised by the system) and their clearing (the rationale is on the review row).
+        $audit->define('intelligence.rereview_flagged', ['cause' => 'code', 'evidence_ulid' => 'ulid', 'flag_ulid' => 'ulid', 'version' => 'int']);
+        $audit->define('intelligence.rereview_cleared', ['review_ulid' => 'ulid', 'flags' => 'int', 'version' => 'int']);
         // Domain events (docs/03: IntelligenceSubmitted, …) are defined with their first consumer.
+
+        // P1-48: evidence withdrawn or found corrupted flags the items citing it (Evidence defines these events).
+        $events = $this->app->make(OutboxEvents::class);
+        $events->subscribe(EvidenceEvents::WITHDRAWN, FlagCitingItems::class);
+        $events->subscribe(EvidenceEvents::INTEGRITY_FAILED, FlagCitingItems::class);
     }
 }

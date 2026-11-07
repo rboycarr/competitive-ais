@@ -9,17 +9,21 @@ use Illuminate\Support\Facades\RateLimiter;
 use Modules\Evidence\Console\DispatchPendingScans;
 use Modules\Evidence\Console\ReconcileBlobs;
 use Modules\Evidence\Console\SweepQuarantine;
+use Modules\Evidence\Console\VerifyIntegrity;
 use Modules\Evidence\Contracts\EvidenceLinking;
 use Modules\Evidence\Contracts\EvidenceProvenance;
+use Modules\Evidence\Events\EvidenceEvents;
 use Modules\Evidence\Lookup\EloquentEvidenceLinking;
 use Modules\Evidence\Lookup\EloquentEvidenceProvenance;
 use Modules\Platform\Audit\AuditActions;
+use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Support\ModuleServiceProvider;
 
 /**
  * Evidence (M09, docs/03): uploads, quarantine, scanning, content-addressed storage, custody. P1-32a stores uploads
  * in quarantine with their custody trail; P1-32b scans them and promotes clean bytes to content-addressed storage, or
- * rejects them. P1-34 serves downloads through short-lived links, P1-35 adds legal hold; scopes in P1-36, the source policy at capture in P1-37.
+ * rejects them. P1-34 serves downloads through short-lived links, P1-35 adds legal hold; scopes in P1-36, the source policy at capture in P1-37; withdrawal and the
+ * integrity re-hash in P1-48.
  * Uploads are untrusted (docs/07 T7).
  */
 class EvidenceServiceProvider extends ModuleServiceProvider
@@ -39,7 +43,7 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         parent::boot();
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DispatchPendingScans::class, SweepQuarantine::class, ReconcileBlobs::class]);
+            $this->commands([DispatchPendingScans::class, SweepQuarantine::class, ReconcileBlobs::class, VerifyIntegrity::class]);
         }
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
             // A lost dispatch or a dead worker must not leave an upload in quarantine for good (TASK-0070 #1).
@@ -47,6 +51,8 @@ class EvidenceServiceProvider extends ModuleServiceProvider
             // P1-38: quarantine objects no asset waits for (TASK-0064 #2); blob holds and retention against the store (TASK-0074).
             $schedule->command('evidence:sweep-quarantine')->hourly();
             $schedule->command('evidence:reconcile-blobs')->dailyAt('02:30');
+            // P1-48: a daily sample re-hash of stored evidence.
+            $schedule->command('evidence:verify-integrity')->dailyAt('03:15');
         });
 
         // Codes only: never the title, file name, URL or description (audit context holds no user input).
@@ -61,6 +67,14 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         $actions->define('evidence.scope_inherited', ['item_ulid' => 'ulid', 'competitors' => 'int', 'markets' => 'int']);
         // P1-38: what reconciliation changed or found on a blob (each key optional; EvidenceBlobReconciler).
         $actions->define('evidence.blob_reconciled', ['record_hold' => 'code', 'retention' => 'code', 'object_hold' => 'code', 'object_retention' => 'code']);
+        // P1-48: withdrawal (the reason is in the custody trail) and a failed re-hash (result: mismatch or missing).
+        $actions->define('evidence.withdrawn', ['sha256' => 'sha256']);
+        $actions->define('evidence.integrity_failed', ['result' => 'code', 'sha256' => 'sha256']);
+
+        // P1-48: outbox events about one asset (EvidenceEvents); Intelligence subscribes to flag the items citing it.
+        $events = $this->app->make(OutboxEvents::class);
+        $events->define(EvidenceEvents::WITHDRAWN, ['evidence_ulid' => 'ulid']);
+        $events->define(EvidenceEvents::INTEGRITY_FAILED, ['evidence_ulid' => 'ulid']);
 
         // P1-34: downloads per user, so a stolen session cannot pull the store in bulk unnoticed.
         RateLimiter::for('evidence-downloads', fn (Request $request) => Limit::perMinute(30)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));
