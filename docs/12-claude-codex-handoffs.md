@@ -144,7 +144,9 @@ AI approval never replaces human approval.
 | TASK-0095 | Verification of the TASK-0094 fixes (P1-48) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/rereview-flags` @ `02d5d04` | **Verified: #2 and #4 resolved, #1 and #3 correctly dispositioned, no new finding, "yes".** | `handoffs/TASK-0095-review.md` |
 | TASK-0096 | Review of P1-50 (signed audit anchor) | Claude Code | Reviewer (read-only; PO-approved working model) | `feature/audit-anchor` @ `6c7e795` | **Reviewed: "no"; 2 high (a forged supplement could be signed; deleted export records undetected), 3 medium, 1 low; all fixed with tests.** | `handoffs/TASK-0096-review.md` |
 | TASK-0097 | Verification of the TASK-0096 fixes (P1-50) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/audit-anchor` @ `13b89f7` | **"Yes after fixes": #1, #3–#6 resolved; #2 not fully (re-recording blocked after later ranges; `manifest_sha256` not compared); both fixed with tests.** | `handoffs/TASK-0097-review.md` |
-| TASK-0098 | Verification of the TASK-0097 fixes (P1-50) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/audit-anchor` @ `cab5e2f` | **Verified: both resolved, no new finding, "yes".** | `handoffs/TASK-0098-review.md` |
+| TASK-0098 | Verification of the TASK-0097 fixes (P1-50) | Claude Code | Verifier (read-only; PO-approved working model) | `feature/audit-anchor` @ `cab5e2f` (pushed as `1f50837`, see below) | **Verified: both resolved, no new finding, "yes".** | `handoffs/TASK-0098-review.md` |
+
+**P1-50 commit hashes.** Before the first push, the secrets scan flagged two synthetic test values in `scripts/ci/init-env-test.sh` (scenario 6). With the PO's approval, the four unpushed commits were rewritten so that those values never enter history. The only change is that the values became `aaaa…`/`bbbb…`. The reviewed hashes map to the pushed ones as follows: `6c7e795` → `1f5ab6d`, `13b89f7` → `87ba990`, `cab5e2f` → `1f50837`, `2842c93` → `cad6dc3`. Codex's records keep the hashes it reviewed.
 
 ## 4. Decision and disagreement log
 
