@@ -39,7 +39,9 @@ for bucket in "${BUCKETS[@]}"; do
   s3 list-object-versions --bucket "$bucket" --output text \
     --query '[Versions[].[`v`,Key,VersionId,IsLatest,LastModified], DeleteMarkers[].[`d`,Key,VersionId,IsLatest,LastModified]][]' \
     > /work/listing.tsv
-  listing=$({ grep -v '^None$' /work/listing.tsv || true; } | sort -t$'\t' -k2,2 -k5,5)
+  # Per key: the latest entry last (False sorts before True), then by time. Versions written within the same second
+  # would otherwise come out in any order, and a restore would rebuild the wrong latest entry (CI #217).
+  listing=$({ grep -v '^None$' /work/listing.tsv || true; } | sort -t$'\t' -k2,2 -k4,4 -k5,5)
   rm -f /work/listing.tsv
   while IFS=$'\t' read -r kind key version latest modified; do
     [ -n "$kind" ] || continue

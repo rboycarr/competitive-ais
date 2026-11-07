@@ -81,15 +81,17 @@ expect_drill_fail() {   # backup name, expected failed step, label
 }
 
 echo "=== Damaged backups must fail"
-total=$(grep '^object_versions=' "backups/$name/backup.info" | cut -d= -f2)
-damaged 20000101T000001Z rm objects/1.age
+# Object files are numbered by manifest line; delete markers have none. The first is evidence, the last an audit
+# manifest: valid age files with different bytes.
+first=$(find "backups/$name/objects" -name '*.age' -printf '%f\n' | sort -n | head -1)
+last=$(find "backups/$name/objects" -name '*.age' -printf '%f\n' | sort -n | tail -1)
+damaged 20000101T000001Z rm "objects/$first"
 expect_drill_fail 20000101T000001Z "Restore (dump, object versions, evidence version IDs)" "a missing object version"
-# Object 1 is evidence, the last one an audit manifest: valid age files with different bytes.
-damaged 20000101T000002Z cp "objects/$total.age" objects/1.age
+damaged 20000101T000002Z cp "objects/$last" "objects/$first"
 expect_drill_fail 20000101T000002Z "Restore (dump, object versions, evidence version IDs)" "swapped object bytes"
 damaged 20000101T000003Z sh -c 'head -c 200 mysql.sql.age > t && mv t mysql.sql.age'
 expect_drill_fail 20000101T000003Z "Restore (dump, object versions, evidence version IDs)" "a truncated database dump"
-damaged 20000101T000004Z cp objects/1.age objects/999.age
+damaged 20000101T000004Z cp "objects/$first" objects/999.age
 expect_drill_fail 20000101T000004Z "Restore (dump, object versions, evidence version IDs)" "an extra object file"
 
 echo "=== A failed object listing leaves no complete backup (TASK-0099 #1)"
