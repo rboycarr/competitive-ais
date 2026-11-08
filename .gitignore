@@ -13,6 +13,10 @@
 /.secrets/
 # Encrypted backups and the restore-drill log (P1-51)
 /backups/
+# Playwright sessions and failure output (P1-47)
+/e2e/.auth/
+/test-results/
+/playwright-report/
 *.pem
 *.key
 auth.json
