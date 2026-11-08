@@ -55,8 +55,7 @@ const canSearch = computed(() => Boolean(can.value.competitorView || can.value.p
             </nav>
             <form v-if="canSearch" role="search" action="/search" method="get" class="ml-auto">
                 <label for="quick-search" class="sr-only">Search competitors and products</label>
-                <input id="quick-search" name="q" type="search" maxlength="100" placeholder="Search…"
-                    class="rounded border border-slate-300 px-2 py-1 text-sm" />
+                <input id="quick-search" name="q" type="search" maxlength="100" placeholder="Search…" class="rounded border border-slate-300 px-2 py-1 text-sm">
             </form>
         </div>
     </header>
