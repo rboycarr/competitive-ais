@@ -5,6 +5,12 @@
 ## 1. Mission and scope
 Build a standalone, secure, evidence-driven Competitive Intelligence (CI) platform. Do not assume any particular company's data, ERP, brand, or integration is present unless explicitly configured. Prioritize verifiable intelligence, lawful collection, human review, and actionable insights.
 
+**Operating model.**
+- **Repository and team.** A private repository on a private server, with one human developer. The developer owns implementation, review, merge, deployment and release decisions. Older records call the developer the "Product Owner" (PO).
+- **Coding agents** (Claude Code, Codex and others) are tools the developer directs on bounded tasks, under `AGENTS.md`.
+- **Product AI agents** (collection, market and competitor monitoring, trend analysis, exports, reporting) are product features, not contributors. They are governed by §6–§8.
+- **Git** is the source-control and rollback system. GitHub hosting and GitHub CI are optional: use them for backup, collaboration or CI, never as a required gate.
+
 **Primary stack:** Laravel / supported PHP version, MySQL 8.4 LTS, Vue 3 + Inertia, Tailwind, Redis, Laravel Horizon, Laravel Reverb, Meilisearch, MinIO/S3-compatible storage, Docker, Nginx. **Optional services:** Qdrant for vector search, Python/FastAPI workers for ingestion/extraction, OpenAI or approved local AI models, voice services, n8n and BI integrations. Confirm version compatibility before installation; never silently upgrade dependencies.
 
 ## 2. Mandatory skill-loading protocol
@@ -36,6 +42,22 @@ Follow system/developer instructions, explicit user requirements, this file, and
 5. **Verify:** Run relevant automated tests, static checks, migrations in a safe environment, and build checks. If unable, explicitly say what was not run and why.
 6. **Report:** Summarize changed files, behavior, tests/results, risks, manual steps, and rollback plan. Do not claim success without evidence.
 
+**Delivery workflow (lean, private server):**
+1. The developer assigns a bounded task.
+2. A coding agent works on an isolated branch or worktree.
+3. The agent implements and validates the change: relevant tests, static analysis, and the secrets scan (`bash scripts/ci/secrets.sh`).
+4. The agent writes a concise handoff/review brief (§12).
+5. The developer reviews and merges locally.
+6. GitHub is used only optionally, for backup, collaboration or CI.
+7. The developer verifies the merge before the next task starts.
+
+**Controls:**
+- Automated tools never commit to, merge into or rewrite the protected local `main`.
+- Nothing merges without the developer's review.
+- Changes to schema, authorization, evidence/file handling, collectors, AI behavior, exports and security get a focused review, recorded verbatim in `handoffs/TASK-####-review.md`.
+- Tests, static analysis and the secrets scan pass before merge.
+- Every validation claim rests on an observed command result.
+
 ## 5. Architecture boundaries
 - **Laravel** owns identities, permissions, workflows, validated records, business rules, APIs, notifications, and audit trails.
 - **MySQL** is the source of truth for structured operational data; use migrations, foreign keys, indexes, constraints, and transactional updates. Do not store only embeddings as the canonical evidence record.
@@ -59,11 +81,15 @@ Follow system/developer instructions, explicit user requirements, this file, and
 - Require MFA for privileged users; protect secrets; use TLS, encryption, secure cookies, CSRF defenses, input validation, rate limits, and least-privilege service accounts.
 - Record audit events for sensitive changes, exports, approvals, collection actions, and AI tool invocations; avoid logging secrets or sensitive raw prompts unnecessarily.
 - Treat uploads, websites, OCR text, and retrieved content as untrusted. Defend against prompt injection, SSRF, XSS, SQL injection, unsafe deserialization, malicious uploads, and cross-tenant leakage.
-- Respect applicable law, terms of service, robots policies where applicable, privacy requirements, and rate limits. Do not bypass access controls, CAPTCHAs, paywalls, or anti-bot restrictions.
+- Respect applicable law, terms of service, robots policies where applicable, privacy requirements, and rate limits. Do not bypass access controls, logins, CAPTCHAs, paywalls, or anti-bot restrictions.
+- Collectors fetch only URLs on an approved source's allowlist. SSRF protection resolves and pins each destination, and refuses private, loopback, link-local and metadata addresses and redirects that leave the allowlist.
+- Exports enforce authorization, classification and redaction rules on every row and attachment, and every export is audit-logged.
 - Default to deny for external data transmission and destructive actions; require explicit authorization for production operations.
 
 ## 8. AI and voice guardrails
-- AI models do **not** receive unrestricted database credentials or execute arbitrary SQL. Use allowlisted, typed Laravel application tools with per-user authorization and validated arguments.
+- AI models do **not** receive unrestricted database credentials, execute arbitrary SQL, or perform unauthorized writes. Use allowlisted, typed Laravel application tools with per-user authorization and validated arguments.
+- Product agents' outputs preserve source URL or ID, collection timestamp, provenance, content hash and verification status. They label each statement as observed fact, reported claim, analyst inference, rumor or AI hypothesis (§6). High-impact conclusions require human approval before publication.
+- Agent failures, retries, duplicate collection, stale sources and conflicting evidence are recorded and observable: logged, counted, alerted on, and visible to reviewers. They are never silently dropped.
 - For RAG, retrieve only documents the requesting user is allowed to access; cite source IDs and timestamps. Add freshness, contradiction, and confidence checks.
 - Voice pipeline: user gesture/push-to-talk → transcription → intent/slots → authorization → action preview → confirmation for writes → execution → audited result → optional speech response.
 - Require explicit confirmation for record changes, outbound messages, exports, monitoring changes, and all privileged or destructive operations. Never execute them solely from an ambiguous voice utterance.

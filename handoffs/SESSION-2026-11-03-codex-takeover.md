@@ -1,5 +1,9 @@
 # Session handoff for a Codex takeover — 2026-11-03
 
+> **Historical record; superseded 2026-11-04 (roles) and 2026-11-08 (operating model).**
+> - **Now:** a private repository with one human developer, who assigns tasks to coding agents and alone reviews and merges, locally. GitHub pull requests, compare links and CI are optional (`CLAUDE.md` §1 and §4, `AGENTS.md`, `docs/12` §1).
+> - **§5 "Public repository" no longer describes the hosting.** Its rules (no secrets, synthetic data only in tracked files, a secrets scan before merge) still apply.
+
 | Field | Value |
 |---|---|
 | Written by | Claude Code (Opus 5.5), the implementer until now |

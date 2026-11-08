@@ -3,16 +3,26 @@
 | Field | Value |
 |---|---|
 | Status | Active from 2026-10-31 |
-| Owner | Claude Code (maintains); Product Owner (runs Codex, approves) |
+| Owner | The human developer (assigns tasks, reviews, merges); coding agents keep this ledger up to date |
 | Protocol | ADR-0009; operating guide in `handoffs/README.md` |
 
 ## 1. Operating model (decision D4: manual handoff)
 
-**From 2026-11-08 (PO decision, after a process review): a leaner loop per story.**
-- **Tests:** locally, Claude Code runs Pint, Larastan and the changed module's tests only. The full suite runs in CI, where it takes 17 minutes against about 90 locally.
-- **Codex:** one review, then fixes, then one verification of those fixes, and the loop stops there. Codex's output is still recorded verbatim in `handoffs/TASK-####-review.md`. There are no separate brief or prompt files and no session-history rows. Under §2, Codex is skipped for UI-only and docs-only changes.
-- **Scope:** each story starts with a stated size and time box. A story larger than its roadmap size is sliced. Claude Code decides routine design questions; trade-offs go to the PO.
-- **Docs and pushes:** each story gets one PR description and one short roadmap line, and the design docs change only when the design does. Branches are pushed early, so CI overlaps the review. The next independent story starts while a PR waits for merge.
+**From 2026-11-08 (developer decision): private-server operating model.** This supersedes the role arrangements below, which remain as history.
+- **Repository and team.** A private repository on a private server, with one human developer, who owns implementation, review, merge, deployment and release decisions. The "Product Owner" (PO) in older entries is that developer.
+- **Agents.** Coding agents (Claude Code, Codex and others) are tools the developer assigns bounded tasks to: implementer on an isolated branch or worktree, or read-only reviewer (`AGENTS.md`). Product AI agents are features, not contributors (`CLAUDE.md` §6–§8).
+- **Workflow** (`CLAUDE.md` §4):
+  1. The developer assigns a task.
+  2. An agent implements on an isolated branch or worktree.
+  3. The agent validates the change: relevant tests, static analysis, and the secrets scan.
+  4. The agent writes a concise handoff/review brief.
+  5. The developer reviews and merges locally.
+  6. The developer verifies the merge before the next task.
+- **GitHub.** Git is the source of history and rollback. GitHub hosting, pull requests and CI are optional (backup, collaboration, CI) and never a required gate. Where CI is not used, the agent runs the same checks locally (`scripts/ci/backend.sh`, `restore-drill-test.sh`, `secrets.sh`) and reports the observed results.
+- **Lean loop (from the same day).**
+  - One focused review per change in a §2 area, then fixes, then one verification of those fixes, recorded verbatim in `handoffs/TASK-####-review.md`.
+  - Each task starts with a size and a time box; anything larger is sliced.
+  - Each task gets one handoff brief and one short roadmap line. Design docs change only when the design does.
 
 **From 2026-11-04 (PO decision): roles switched back. Claude Code implements and Codex reviews read-only, as until 2026-11-02 (below).**
 
@@ -34,20 +44,24 @@
 
 **Environment fact (2026-10-31):** Codex CLI `0.164.0-alpha.11.1` is bundled with the VS Code ChatGPT extension (`%USERPROFILE%\.vscode\extensions\openai.chatgpt-*\bin\windows-x86_64\codex.exe`). It is not on PATH. It is logged in through ChatGPT. (2026-11-03: the project is now listed as trusted in Codex's configuration.) Originally, this project is not in Codex's trusted-project list.
 
-## 2. When Codex review is required
+## 2. When a focused review is required
 
-| Change type | Codex review | Human approval to merge |
+A focused review is a read-only review by an agent that did not write the change (Codex or another), recorded verbatim. The developer reviews every change before merging it.
+
+| Change type | Focused review | Developer approval to merge |
 |---|---|---|
 | Migrations / schema | **Mandatory** | **Required** |
 | Auth, policies, AccessScope, MFA, grants | **Mandatory** | **Required** |
-| Evidence and file handling | **Mandatory** | Required |
-| Collectors, SSRF, worker contracts [P3] | **Mandatory** | **Required** (new collection) |
-| AI tools, prompts, retrieval [P4]; voice actions [P5] | **Mandatory** | Required |
+| Evidence and file handling | **Mandatory** | **Required** |
+| Collectors, SSRF, URL allowlists, worker contracts [P3] | **Mandatory** | **Required** (new collection) |
+| AI behavior: tools, prompts, retrieval, agent outputs [P4]; voice actions [P5] | **Mandatory** | **Required** |
+| Exports and reports leaving the system | **Mandatory** | **Required** |
+| Security configuration, secrets, backups | **Mandatory** | **Required** |
 | Dependencies added or upgraded | Recommended | **Required** |
-| UI-only, docs-only | Optional | Normal review |
+| UI-only, docs-only | Optional | **Required** |
 | Production release | Summary review recommended | **Required** |
 
-AI approval never replaces human approval.
+AI approval never replaces the developer's approval.
 
 ## 3. Task ledger
 
@@ -173,6 +187,6 @@ AI approval never replaces human approval.
 - [x] Codex review of Phase 0 recorded (TASK-0001, 2026-10-31)
 - [ ] Codex follow-up review of the amendments (TASK-0002)
 - [ ] PO answers to O10–O16
-- [x] O1 answered (GitHub + Actions, 2026-10-31)
+- [x] O1 answered (GitHub + Actions, 2026-10-31); since 2026-11-08 GitHub and its CI are optional (§1)
 - [ ] O2 answered before Sprint 1.2
 - [x] O17 answered (SeaweedFS, 2026-10-31)

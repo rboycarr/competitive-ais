@@ -2,12 +2,17 @@
 
 Protocol: ADR-0009. Ledger: `docs/12-claude-codex-handoffs.md`.
 
+**From 2026-11-08: private-server operating model** (`CLAUDE.md` §1 and §4, `docs/12` §1).
+- **Roles.** One human developer assigns each task to a coding agent, as implementer on an isolated branch or worktree or as read-only reviewer. The developer alone reviews and merges, locally. "Product Owner"/"PO" below means that developer.
+- **GitHub.** Pull requests, compare links and GitHub CI are optional.
+- **What stays below.** The role history ("Codex from 2026-11-03", "Claude Code only reviews") is kept as record. The commands are still valid.
+
 ## Files per task
 | File | Written by | Content |
 |---|---|---|
-| `TASK-####.md` | The implementer (Codex from 2026-11-03; Claude Code before) | Brief: objective, context, branch, affected files, constraints, acceptance tests, definition of done, review focus, commands run with results |
-| `TASK-####.prompt.md` | The implementer | The exact prompt to give the agent (plain text, no secrets) |
-| `TASK-####-review.md` | The reviewer's output verbatim (Claude Code from 2026-11-03; Codex before), then the implementer's disposition table | Findings, and the accept/reject/defer decision per finding, with evidence and commit references |
+| `TASK-####.md` | The implementing agent (optional since 2026-11-08: a short handoff brief may stand in) | Brief: objective, context, branch, affected files, constraints, acceptance tests, definition of done, review focus, commands run with results |
+| `TASK-####.prompt.md` | The implementing agent (optional since 2026-11-08) | The exact prompt to give the agent (plain text, no secrets) |
+| `TASK-####-review.md` | The reviewing agent's output verbatim, then the implementer's disposition table | Findings, and the accept/reject/defer decision per finding, with evidence and commit references |
 
 Task numbers are sequential and never reused.
 
@@ -53,10 +58,10 @@ Get-Content "$repo\handoffs\$task.prompt.md" -Raw |
 - If you ask Claude to run the review for you, Claude uses this same read-only command, writes the raw output to a temporary file, and wraps it unedited between `BEGIN/END CODEX OUTPUT` markers with a header (date, version, model, session ID, SHA-256 of the raw output). TASK-0001 was run this way.
 
 ## Rules
-- One implementer per task. The reviewer never edits the implementer's branch. From 2026-11-03 Codex implements on `feature/<story>` (or `fix/` and `docs/`) branches in this working copy, and Claude Code only reviews.
-- Never put secrets, `.env` contents, credentials, real evidence, or personal data into a brief or prompt. Codex is a cloud service; the repo is synthetic-data-only.
+- One implementer per task, on its own branch or worktree. The reviewer never edits the implementer's branch. No agent commits to, merges into or rewrites `main`; the developer merges.
+- Never put secrets, `.env` contents, credentials, real evidence, or personal data into a brief or prompt. Coding agents are cloud services; tracked files are synthetic-data-only.
 - A commit may carry the trailer `Codex-Review: handoffs/TASK-####-review.md` **only** if that file exists with real Codex output.
-- Disagreements are decided on evidence (tests, reproduction). High-risk disagreements are escalated to the Product Owner and logged in `docs/12` §4.
+- Disagreements are decided on evidence (tests, reproduction). High-risk disagreements are escalated to the developer and logged in `docs/12` §4.
 
 ## Disposition table format (appended by Claude)
 ```markdown
