@@ -36,10 +36,20 @@ export async function signIn(browser: Browser, user: E2eUser, baseURL: string): 
     await page.getByLabel('Email').fill(`e2e.${user}@example.test`);
     await page.getByLabel('Password').fill(env('E2E_PASSWORD'));
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.waitForURL('**/two-factor-challenge');
+    await reach(page, (url) => url.pathname === '/two-factor-challenge', `${user}: password step`);
     await page.getByLabel('Code from your authenticator app').fill(totp(env('E2E_TOTP_SECRET')));
     await page.getByRole('button', { name: 'Continue' }).click();
-    await page.waitForURL((url) => !url.pathname.startsWith('/two-factor-challenge') && !url.pathname.startsWith('/login'));
+    await reach(page, (url) => !url.pathname.startsWith('/two-factor-challenge') && !url.pathname.startsWith('/login'), `${user}: TOTP step`);
 
     return page;
+}
+
+/** Waits for the URL; on timeout, fails with what the page says (errors are shown in the page), not just "timeout". */
+async function reach(page: Page, test: (url: URL) => boolean, step: string): Promise<void> {
+    try {
+        await page.waitForURL(test, { timeout: 15_000 });
+    } catch {
+        const text = (await page.locator('main').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+        throw new Error(`Sign-in failed at the ${step}, still on ${page.url()}; the page says: ${text}`);
+    }
 }
