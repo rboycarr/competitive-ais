@@ -1,7 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
+use Modules\Platform\Http\Controllers\DashboardController;
 
-// Placeholder start page until the dashboard (P1-46) replaces it.
-Route::get('/', fn () => Inertia::render('Platform/Home'))->name('home');
+// The start page: the dashboard for signed-in users (P1-46), the sign-in link for guests.
+Route::get('/', DashboardController::class)->name('home');

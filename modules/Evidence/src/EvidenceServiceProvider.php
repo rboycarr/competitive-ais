@@ -12,10 +12,12 @@ use Modules\Evidence\Console\SweepQuarantine;
 use Modules\Evidence\Console\VerifyIntegrity;
 use Modules\Evidence\Contracts\EvidenceLinking;
 use Modules\Evidence\Contracts\EvidenceProvenance;
+use Modules\Evidence\Dashboard\EvidenceDashboardTiles;
 use Modules\Evidence\Events\EvidenceEvents;
 use Modules\Evidence\Lookup\EloquentEvidenceLinking;
 use Modules\Evidence\Lookup\EloquentEvidenceProvenance;
 use Modules\Platform\Audit\AuditActions;
+use Modules\Platform\Dashboard\DashboardTiles;
 use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Support\ModuleServiceProvider;
 
@@ -36,6 +38,8 @@ class EvidenceServiceProvider extends ModuleServiceProvider
         $this->app->bind(EvidenceLinking::class, EloquentEvidenceLinking::class);
         // P1-45: the provenance view.
         $this->app->bind(EvidenceProvenance::class, EloquentEvidenceProvenance::class);
+        // P1-46: the dashboard.
+        $this->app->tag([EvidenceDashboardTiles::class], DashboardTiles::TAG);
     }
 
     public function boot(): void

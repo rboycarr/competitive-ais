@@ -3,8 +3,10 @@
 namespace Modules\Sources;
 
 use Modules\Platform\Audit\AuditActions;
+use Modules\Platform\Dashboard\DashboardTiles;
 use Modules\Platform\Support\ModuleServiceProvider;
 use Modules\Sources\Contracts\SourceLookup;
+use Modules\Sources\Dashboard\SourcesDashboardTiles;
 use Modules\Sources\Lookup\EloquentSourceLookup;
 
 /**
@@ -20,6 +22,8 @@ class SourcesServiceProvider extends ModuleServiceProvider
 
         // P1-37: evidence capture records the policy in force through this contract.
         $this->app->bind(SourceLookup::class, EloquentSourceLookup::class);
+        // P1-46: the dashboard.
+        $this->app->tag([SourcesDashboardTiles::class], DashboardTiles::TAG);
     }
 
     public function boot(): void
