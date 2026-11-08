@@ -49,7 +49,8 @@ async function reach(page: Page, test: (url: URL) => boolean, step: string): Pro
     try {
         await page.waitForURL(test, { timeout: 15_000 });
     } catch {
-        const text = (await page.locator('main').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
-        throw new Error(`Sign-in failed at the ${step}, still on ${page.url()}; the page says: ${text}`);
+        // No " at " in the message: the CI annotation drops such lines as stack frames (scripts/ci/lib.sh).
+        const text = (await page.locator('main').innerText().catch(() => '')).replace(/\s+/g, ' ').replace(/\bat\b/g, '@').slice(0, 300);
+        throw new Error(`Sign-in failed in the ${step}; URL ${page.url()}; page text: ${text}`);
     }
 }
