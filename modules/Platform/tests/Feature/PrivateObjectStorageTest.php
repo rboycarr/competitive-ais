@@ -153,8 +153,10 @@ class PrivateObjectStorageTest extends TestCase
         $parts = parse_url($url);
         parse_str($parts['query'] ?? '', $query);
         $this->assertSame(['https', 'files.example.test', '/evidence/sha256/ab/cd/abcdef'], [$parts['scheme'] ?? null, $parts['host'] ?? null, $parts['path'] ?? null]);
-        $this->assertSame(['60', 'synthetic-version-1', 'application/octet-stream', 'attachment; filename=report.pdf'], [
-            $query['X-Amz-Expires'] ?? null, $query['versionId'] ?? null, $query['response-content-type'] ?? null, $query['response-content-disposition'] ?? null,
+        // The SDK counts the lifetime from its own clock, so a second may pass between the two (CI #231): 59 or 60.
+        $this->assertContains($query['X-Amz-Expires'] ?? null, ['59', '60']);
+        $this->assertSame(['synthetic-version-1', 'application/octet-stream', 'attachment; filename=report.pdf'], [
+            $query['versionId'] ?? null, $query['response-content-type'] ?? null, $query['response-content-disposition'] ?? null,
         ]);
         $this->assertArrayHasKey('X-Amz-Signature', $query);
     }

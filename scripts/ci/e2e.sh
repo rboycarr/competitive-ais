@@ -11,6 +11,17 @@ cd "$ROOT"
 . scripts/ci/lib.sh
 mask_secrets .env .secrets/*.env
 
+# In GitHub Actions, a failure becomes a public annotation with the redacted tail of the output (as in backend.sh).
+LOG=$(mktemp)
+exec > >(tee "$LOG") 2>&1
+annotate() {
+  local rc=$?
+  if [ $rc -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::error title=e2e::failed (exit $rc)%0A$(annotation_body "$LOG" .env .secrets/*.env)"
+  fi
+}
+trap annotate EXIT
+
 [ ! -f public/hot ] || { echo "public/hot exists (Vite dev server running): docker compose stop node, then run this again." >&2; exit 1; }
 
 # Throwaway credentials for this run only, never stored; a re-run against an already seeded database needs the same
