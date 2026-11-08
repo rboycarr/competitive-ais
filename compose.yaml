@@ -140,6 +140,24 @@ services:
       mysql: { condition: service_healthy }
       seaweedfs-init: { condition: service_completed_successfully }
 
+  # End-to-end exit journey and accessibility (P1-47): Playwright's browser image, the same version as @playwright/test,
+  # driving the app through nginx. Not started by `up` (profile "tools"). Run with: bash scripts/ci/e2e.sh
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+    profiles: [tools]
+    user: "${DEV_UID:-1000}:${DEV_GID:-1000}"
+    working_dir: /app
+    environment:
+      HOME: /tmp
+      E2E_BASE_URL: http://nginx
+    command: ["npx", "playwright", "test", "-c", "e2e/playwright.config.ts"]
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+      - { type: tmpfs, target: /app/.secrets, read_only: true, tmpfs: { mode: 0555 } }
+    networks: [edge]
+    restart: "no"
+
   node:
     build:
       context: .
