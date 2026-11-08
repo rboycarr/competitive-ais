@@ -40,5 +40,33 @@ describe('Platform/Home', () => {
         expect(wrapper.text()).toContain('Signed in as Ana Lyst');
         expect(wrapper.find('a[href="/user/security"]').exists()).toBe(true);
         expect(wrapper.find('a[href="/login"]').exists()).toBe(false);
+        expect(wrapper.text()).toContain('no dashboard tiles');
+    });
+
+    it('shows each tile with its definition, counts and items (P1-46)', () => {
+        page.props.auth.user = { name: 'Ana Lyst' };
+        const wrapper = mount(Home, {
+            props: {
+                tiles: [
+                    {
+                        key: 'sources_by_status', title: 'Sources by status', definition: 'Sources you can see.', href: '/sources',
+                        counts: [{ label: 'approved', value: 3 }, { label: 'proposed', value: 0 }],
+                    },
+                    {
+                        key: 'recently_published', title: 'Recently published', definition: 'Latest published.', href: '/intelligence',
+                        items: [{ label: 'Acme cuts prices', href: '/intelligence/01J', at: '2026-11-08T06:00:00Z' }],
+                    },
+                    { key: 'my_assignments', title: 'My assignments', definition: 'Assigned to you.', href: '/verification', items: [] },
+                ],
+            },
+        });
+
+        const sources = wrapper.get('[data-tile="sources_by_status"]');
+        expect(sources.get('h3 a').attributes('href')).toBe('/sources');
+        expect(sources.get('details').text()).toContain('Sources you can see.');
+        expect(sources.findAll('dt').map((d) => d.text())).toEqual(['approved', 'proposed']);
+        expect(sources.findAll('dd').map((d) => d.text())).toEqual(['3', '0']);
+        expect(wrapper.get('[data-tile="recently_published"] li a').attributes('href')).toBe('/intelligence/01J');
+        expect(wrapper.get('[data-tile="my_assignments"]').text()).toContain('Nothing yet.');
     });
 });
