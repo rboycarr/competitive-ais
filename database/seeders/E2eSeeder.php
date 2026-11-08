@@ -95,7 +95,7 @@ class E2eSeeder extends Seeder
     public static function totpSecret(string $secret, string $user): string
     {
         $bits = '';
-        foreach (str_split(sha1("$secret:$user", true)) as $byte) {
+        foreach (str_split(hash('sha1', "$secret:$user", true)) as $byte) {
             $bits .= str_pad(decbin(ord($byte)), 8, '0', STR_PAD_LEFT);
         }
 
