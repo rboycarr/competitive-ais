@@ -109,6 +109,8 @@
 
 ### Sprint 1.5 — Operational hardening and acceptance
 
+**Deferred 2026-11-08 (developer decision: work faster):** P1-52, P1-53 and P1-55 move to a later hardening sprint, scheduled with the developer. Next up are P1-46 (dashboard), then P1-24 and P1-47, then P1-54.
+
 | ID | Story | Acceptance criteria | Size |
 |---|---|---|---|
 | P1-50 | As an auditor, audit tampering is detectable even by someone with DB access | Lag-windowed checkpoints; Ed25519-signed manifests exported to the audit-anchor bucket; verification against exported manifests; `late_commit` handling (supplementary checkpoints); business-transaction duration capped below the lag window and monitored, with an alert (TASK-0010 #4); key-rotation runbook | M — **done** 2026-11-08 (pull request #47), implemented 2026-11-07 on `feature/audit-anchor` (O43–O45: an `auditor` service alone holds the Ed25519 seed and the audit-anchor key and runs `audit:work`; every checkpoint, including those closed before, is checked against its rows, signed and exported under object lock, recorded in append-only `audit_anchors`; verification trusts the bucket's signed manifests (T21); late commits re-anchored only by `audit:reanchor` with a reason, as a supplementary revision; long transactions alerted at commit (300 s) and web requests cut at 120 s; rotation and incident runbooks in docs/10 §6; Codex TASK-0096 "no": a forged supplement could be signed, now only `audit:reanchor` signs supplements, with the late IDs proved against the bucket's manifest; export records checked; contiguity; public-key verification; `audit:freshness` watches the auditor; TASK-0097 "yes after fixes" (re-recording after later ranges, `manifest_sha256`), fixed; TASK-0098 "yes") |
