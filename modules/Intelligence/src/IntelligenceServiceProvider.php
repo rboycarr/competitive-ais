@@ -5,10 +5,12 @@ namespace Modules\Intelligence;
 use Modules\Evidence\Events\EvidenceEvents;
 use Modules\Intelligence\Contracts\IntelligenceCitations;
 use Modules\Intelligence\Contracts\IntelligenceReferences;
+use Modules\Intelligence\Dashboard\IntelligenceDashboardTiles;
 use Modules\Intelligence\Lookup\EloquentIntelligenceCitations;
 use Modules\Intelligence\Lookup\EloquentIntelligenceReferences;
 use Modules\Intelligence\Outbox\FlagCitingItems;
 use Modules\Platform\Audit\AuditActions;
+use Modules\Platform\Dashboard\DashboardTiles;
 use Modules\Platform\Outbox\OutboxEvents;
 use Modules\Platform\Support\ModuleServiceProvider;
 
@@ -29,6 +31,8 @@ class IntelligenceServiceProvider extends ModuleServiceProvider
         $this->app->bind(IntelligenceReferences::class, EloquentIntelligenceReferences::class);
         // The evidence page lists the intelligence citing an asset through this one (P1-45).
         $this->app->bind(IntelligenceCitations::class, EloquentIntelligenceCitations::class);
+        // P1-46: the dashboard.
+        $this->app->tag([IntelligenceDashboardTiles::class], DashboardTiles::TAG);
     }
 
     public function boot(): void
