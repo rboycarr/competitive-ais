@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type { Browser, Page } from '@playwright/test';
 
 // The users database/seeders/E2eSeeder.php creates; their password and TOTP secret come from the environment.
@@ -14,6 +14,14 @@ function env(name: string): string {
     }
 
     return value;
+}
+
+/** Each user's own TOTP secret: base32 of SHA-1("<E2E_TOTP_SECRET>:<user>"), as E2eSeeder::totpSecret derives it. */
+export function totpSecret(user: E2eUser): string {
+    const digest = createHash('sha1').update(`${env('E2E_TOTP_SECRET')}:${user}`).digest();
+    const bits = [...digest].map((b) => b.toString(2).padStart(8, '0')).join('');
+
+    return (bits.match(/.{5}/g) ?? []).map((chunk) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[parseInt(chunk, 2)]).join('');
 }
 
 /** RFC 6238 TOTP (SHA-1, 6 digits, 30 s), as an authenticator app computes it. */
@@ -37,7 +45,7 @@ export async function signIn(browser: Browser, user: E2eUser, baseURL: string): 
     await page.getByLabel('Password').fill(env('E2E_PASSWORD'));
     await page.getByRole('button', { name: 'Sign in' }).click();
     await reach(page, (url) => url.pathname === '/two-factor-challenge', `${user}: password step`);
-    await page.getByLabel('Code from your authenticator app').fill(totp(env('E2E_TOTP_SECRET')));
+    await page.getByLabel('Code from your authenticator app').fill(totp(totpSecret(user)));
     await page.getByRole('button', { name: 'Continue' }).click();
     await reach(page, (url) => !url.pathname.startsWith('/two-factor-challenge') && !url.pathname.startsWith('/login'), `${user}: TOTP step`);
 

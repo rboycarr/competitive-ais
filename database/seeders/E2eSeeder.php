@@ -52,7 +52,7 @@ class E2eSeeder extends Seeder
             $user->forceFill([
                 'ulid' => (string) Str::ulid(), 'name' => 'E2E '.ucfirst($name), 'email' => "e2e.$name@example.test", 'password' => $password,
                 'clearance' => Classification::Confidential, 'status' => 'active', 'email_verified_at' => now(),
-                'two_factor_secret' => encrypt($secret), 'two_factor_confirmed_at' => now(),
+                'two_factor_secret' => encrypt(self::totpSecret($secret, $name)), 'two_factor_confirmed_at' => now(),
                 'two_factor_recovery_codes' => encrypt((string) json_encode(array_map(fn () => Str::random(10).'-'.Str::random(10), range(1, 8)))),
             ])->save();
             $user->assignRole($role);
@@ -86,6 +86,21 @@ class E2eSeeder extends Seeder
 
         $this->item($analyst, $acme, 'Acme opens a new plant', $source->id, $policy->id);
         $this->command?->info('E2E data seeded.');
+    }
+
+    /**
+     * Each user's own TOTP secret, derived from E2E_TOTP_SECRET: base32 of SHA-1("<secret>:<user>"). Fortify refuses a
+     * code that was just used, by any user (CI #234), so the users must not share one. e2e/support.ts derives the same.
+     */
+    public static function totpSecret(string $secret, string $user): string
+    {
+        $bits = '';
+        foreach (str_split(sha1("$secret:$user", true)) as $byte) {
+            $bits .= str_pad(decbin(ord($byte)), 8, '0', STR_PAD_LEFT);
+        }
+
+        // 160 bits: exactly 32 five-bit groups, each 0..31.
+        return implode('', array_map(fn (string $chunk): string => substr('ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', (int) bindec($chunk), 1), str_split($bits, 5)));
     }
 
     /** A draft with one claim supported by evidence captured from the source, submitted for review. */
