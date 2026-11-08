@@ -45,7 +45,7 @@ Follow system/developer instructions, explicit user requirements, this file, and
 **Delivery workflow (lean, private server):**
 1. The developer assigns a bounded task.
 2. A coding agent works on an isolated branch or worktree.
-3. The agent implements and validates the change: relevant tests, static analysis, and the secrets scan (`bash scripts/ci/secrets.sh`).
+3. The agent implements and validates the change: the changed module's tests and static analysis, then the full suite and the secrets scan (`bash scripts/ci/secrets.sh`) once before merge.
 4. The agent writes a concise handoff/review brief (§12).
 5. The developer reviews and merges locally.
 6. GitHub is used only optionally, for backup, collaboration or CI.
@@ -54,8 +54,10 @@ Follow system/developer instructions, explicit user requirements, this file, and
 **Controls:**
 - Automated tools never commit to, merge into or rewrite the protected local `main`.
 - Nothing merges without the developer's review.
-- Changes to schema, authorization, evidence/file handling, collectors, AI behavior, exports and security get a focused review, recorded verbatim in `handoffs/TASK-####-review.md`.
-- Tests, static analysis and the secrets scan pass before merge.
+- Changes to schema and authorization get one focused review round, recorded verbatim in `handoffs/TASK-####-review.md`. The review is advice, not a blocker: the developer decides.
+- Other areas (evidence/file handling, collectors, AI behavior, exports, security) may get a review when the developer asks for one.
+- While a task is in progress, run the changed module's tests and static analysis. Before merge, run the full suite and the secrets scan once, whether locally or in CI.
+- Designs meet the story's acceptance criteria. Defense in depth beyond them is added only when a review or the developer asks for it (developer decision, 2026-11-08).
 - Every validation claim rests on an observed command result.
 
 ## 5. Architecture boundaries

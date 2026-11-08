@@ -31,7 +31,7 @@ Without an assignment, read only. The workflow is in `CLAUDE.md` §4.
 - **Destructive or outward-facing actions** need the developer's explicit authorization for that action. This covers dropping or wiping databases, removing volumes, force pushes, history rewrites, bulk exports, live data collection, deployment, paid API calls, and installing or upgrading dependencies.
 
 ## Before handing back (implementer)
-Run and report: Pint, Larastan and the tests relevant to the change (the full suite when the change is cross-cutting), and the secrets scan (`bash scripts/ci/secrets.sh`). Then write a concise handoff brief: what changed and why, files, schema and security implications, the commands you ran and their results, risks, and the rollback.
+Run and report: Pint, Larastan and the changed module's tests. Before merge, the full suite and the secrets scan (`bash scripts/ci/secrets.sh`) run once, locally or in CI. Then write a concise handoff brief: what changed and why, files, schema and security implications, the commands you ran and their results, risks, and the rollback.
 
 ## Review output format
 1. **Findings:** each with severity (critical/high/medium/low), file path and line(s), the problem, a reproducible scenario, and a suggested fix.
@@ -39,4 +39,4 @@ Run and report: Pint, Larastan and the tests relevant to the change (the full su
 3. **Unresolved assumptions / questions** for the developer.
 4. **What you did not check**, and why.
 
-Reviews of schema, authorization, evidence/file handling, collectors, AI behavior, exports and security are recorded verbatim in `handoffs/TASK-####-review.md`, with the disposition of each finding.
+Reviews (always for schema and authorization; for other areas when the developer asks) are recorded verbatim in `handoffs/TASK-####-review.md`, with the disposition of each finding. A review is one round and advisory; the developer decides.

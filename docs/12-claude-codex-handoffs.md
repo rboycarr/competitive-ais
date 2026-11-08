@@ -46,17 +46,19 @@
 
 ## 2. When a focused review is required
 
-A focused review is a read-only review by an agent that did not write the change (Codex or another), recorded verbatim. The developer reviews every change before merging it.
+A focused review is a read-only review by an agent that did not write the change (Codex or another), recorded verbatim. It runs one round and is advice: the developer decides, and reviews every change before merging it.
+
+**From 2026-11-08 (developer decision: "work faster, loosen up security"):** only schema and authorization changes always get a review. Other areas get one when the developer asks. The hardening stories P1-52, P1-53 and P1-55 move to a later hardening sprint (`docs/11`).
 
 | Change type | Focused review | Developer approval to merge |
 |---|---|---|
-| Migrations / schema | **Mandatory** | **Required** |
-| Auth, policies, AccessScope, MFA, grants | **Mandatory** | **Required** |
-| Evidence and file handling | **Mandatory** | **Required** |
-| Collectors, SSRF, URL allowlists, worker contracts [P3] | **Mandatory** | **Required** (new collection) |
-| AI behavior: tools, prompts, retrieval, agent outputs [P4]; voice actions [P5] | **Mandatory** | **Required** |
-| Exports and reports leaving the system | **Mandatory** | **Required** |
-| Security configuration, secrets, backups | **Mandatory** | **Required** |
+| Migrations / schema | **Mandatory** (one round, advisory) | **Required** |
+| Auth, policies, AccessScope, MFA, grants | **Mandatory** (one round, advisory) | **Required** |
+| Evidence and file handling | On request | **Required** |
+| Collectors, SSRF, URL allowlists, worker contracts [P3] | On request | **Required** (new collection) |
+| AI behavior: tools, prompts, retrieval, agent outputs [P4]; voice actions [P5] | On request | **Required** |
+| Exports and reports leaving the system | On request | **Required** |
+| Security configuration, secrets, backups | On request | **Required** |
 | Dependencies added or upgraded | Recommended | **Required** |
 | UI-only, docs-only | Optional | **Required** |
 | Production release | Summary review recommended | **Required** |
