@@ -35,6 +35,8 @@ const adminLinks = computed(() => [
     can.value.taxonomyManage ? { href: '/admin/tags', label: 'Tags' } : null,
     can.value.auditView ? { href: '/admin/audit', label: 'Audit log' } : null,
 ].filter((link): link is { href: string; label: string } => link !== null));
+// Quick search (P1-24): for anyone who can view competitors or products. A plain GET form, so it works without script.
+const canSearch = computed(() => Boolean(can.value.competitorView || can.value.productView));
 </script>
 
 <template>
@@ -51,6 +53,10 @@ const adminLinks = computed(() => [
             <nav v-if="adminLinks.length > 0" aria-label="Administration" class="flex gap-4 text-sm">
                 <Link v-for="link in adminLinks" :key="link.href" :href="link.href" class="underline">{{ link.label }}</Link>
             </nav>
+            <form v-if="canSearch" role="search" action="/search" method="get" class="ml-auto">
+                <label for="quick-search" class="sr-only">Search competitors and products</label>
+                <input id="quick-search" name="q" type="search" maxlength="100" placeholder="Search…" class="rounded border border-slate-300 px-2 py-1 text-sm">
+            </form>
         </div>
     </header>
     <main id="main" class="mx-auto max-w-5xl px-4 py-8">

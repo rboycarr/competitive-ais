@@ -12,12 +12,15 @@ use Modules\Registry\Http\Controllers\CurrencyController;
 use Modules\Registry\Http\Controllers\MarketController;
 use Modules\Registry\Http\Controllers\ProductController;
 use Modules\Registry\Http\Controllers\RetailerController;
+use Modules\Registry\Http\Controllers\SearchController;
 use Modules\Registry\Http\Controllers\TagController;
 use Modules\Registry\Http\Controllers\VariantController;
 
 // Competitors (P1-20). Reading needs competitor.view, changes competitor.manage; the service and AccessScope check
 // again (hidden entries are 404). No delete route for competitors: they are archived.
 Route::middleware('auth')->group(function () {
+    // Quick search (P1-24): competitor.view and/or product.view, checked in the controller.
+    Route::get('/search', SearchController::class)->name('search');
     Route::middleware('can:competitor.view')->group(function () {
         Route::get('/competitors', [CompetitorController::class, 'index'])->name('competitors.index');
         Route::get('/competitors/{competitor}', [CompetitorController::class, 'show'])->name('competitors.show');
